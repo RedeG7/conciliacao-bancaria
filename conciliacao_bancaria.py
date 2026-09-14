@@ -1,0 +1,1109 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Conciliacao Bancaria - RedeG7 Solucoes em TI
+=============================================
+
+Confere item a item o extrato/fluxo de caixa (OFX/CSV/PDF) contra o razao
+contabil de uma conta banco, usa o balancete para mapear os codigos internos
+das contas (sistema Domino - Thomson Reuters) e gera:
+
+  1. Espelho de conciliacao (Markdown)
+  2. Memoria de conferencia (CSV)
+  3. Arquivo de importacao Dominio - leiaute "Lancamentos Contabeis
+     (Partida Simples/Multiplas) (3.1)" - 10 colunas, separador ';',
+     decimal ',', sem cabecalho, latin-1, CRLF.
+
+Uso basico
+----------
+    python conciliacao_bancaria.py \
+        --extrato extrato_jan.ofx \
+        --razao razao_banco.csv \
+        --balancete balancete.csv \
+        --conta-contabil "BANCO INTER 36267404-3" \
+        --competencia 01-2026 \
+        --saldo-inicial-razao 15234.50 \
+        --saldo-inicial-extrato 15234.50 \
+        --out-dir ./saida
+
+Competencia e sempre relativa ao balancete: se --competencia for omitido, o
+script tenta detectar automaticamente (formato MM-AAAA) a partir do proprio
+texto do balancete informado. Use --listar-contas-balancete <arquivo> para
+ver todas as contas mapeadas (e quais parecem ser conta banco/caixa) antes
+de decidir o valor de --conta-contabil.
+
+Modo demonstracao (sem arquivos reais, gera dados sinteticos e roda o
+pipeline inteiro de ponta a ponta para voce ver o resultado):
+
+    python conciliacao_bancaria.py --demo --out-dir ./saida_demo
+
+Formatos aceitos
+-----------------
+- Extrato: .ofx (padrao bancario), .csv (colunas data/valor/descricao,
+  nomes flexiveis - veja `_AUTO_HEADERS` abaixo), .pdf (texto extraido via
+  pdfplumber, heuristica generica - ajuste `parse_pdf_generic` por banco
+  se necessario).
+- Razao contabil: mesmos formatos do extrato (csv/pdf) - representa os
+  lancamentos ja escriturados na conta banco.
+- Balancete: .csv ou .pdf com colunas/celulas "codigo interno",
+  "classificacao" (ex. 1.1.1.02.00004) e "nome da conta".
+
+Nao ha dependencias obrigatorias fora da biblioteca padrao. pdfplumber e
+usado apenas se voce apontar um arquivo .pdf (import feito sob demanda).
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import datetime as dt
+import re
+import sys
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+
+# ---------------------------------------------------------------------------
+# Modelos de dados
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Movimento:
+    data: dt.date
+    valor: float  # positivo = entrada (credito no banco), negativo = saida
+    descricao: str
+    origem: str  # "extrato" ou "razao"
+    conta_debito: Optional[str] = None
+    conta_credito: Optional[str] = None
+    status: str = "pendente"  # "OK" | "pendente" | "conta_nao_identificada"
+    categoria: Optional[str] = None
+
+
+@dataclass
+class ContaBalancete:
+    codigo: str
+    classificacao: str
+    nome: str
+
+
+# ---------------------------------------------------------------------------
+# Parsers de extrato / razao
+# ---------------------------------------------------------------------------
+
+_AUTO_HEADERS = {
+    "data": ["data", "date", "dt", "data_lancamento", "data lancamento"],
+    "valor": ["valor", "value", "amount", "vl", "valor (r$)", "valor(r$)"],
+    "descricao": [
+        "descricao", "descrição", "historico", "histórico", "memo",
+        "complemento", "description", "detalhe",
+    ],
+}
+
+
+def _find_col(fieldnames: List[str], candidates: List[str]) -> Optional[str]:
+    norm = {f.strip().lower(): f for f in fieldnames}
+    for cand in candidates:
+        if cand in norm:
+            return norm[cand]
+    return None
+
+
+def _parse_valor_br(raw: str) -> float:
+    """Aceita '1.234,56', '1234.56', '-85,00', 'R$ 85,00' etc."""
+    s = raw.strip().replace("R$", "").replace(" ", "")
+    neg = s.startswith("(") and s.endswith(")")
+    s = s.strip("()")
+    if "," in s and "." in s:
+        # formato BR: milhar com ponto, decimal com virgula
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        v = float(s)
+    except ValueError:
+        raise ValueError(f"Nao consegui converter valor: {raw!r}")
+    return -v if neg else v
+
+
+def _parse_data_br(raw: str) -> dt.date:
+    raw = raw.strip()
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%Y%m%d", "%d/%m/%y"):
+        try:
+            return dt.datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"Nao consegui converter data: {raw!r}")
+
+
+def parse_csv_movimentos(
+    path: str,
+    origem: str,
+    col_data: Optional[str] = None,
+    col_valor: Optional[str] = None,
+    col_descricao: Optional[str] = None,
+    encoding: str = "utf-8-sig",
+    delimiter: Optional[str] = None,
+) -> List[Movimento]:
+    """Le um CSV de extrato ou razao com deteccao automatica de colunas."""
+    text = Path(path).read_text(encoding=encoding, errors="replace")
+    if delimiter is None:
+        delimiter = ";" if text.count(";") > text.count(",") else ","
+
+    reader = csv.DictReader(text.splitlines(), delimiter=delimiter)
+    if not reader.fieldnames:
+        raise ValueError(f"CSV sem cabecalho reconhecivel: {path}")
+
+    dcol = col_data or _find_col(reader.fieldnames, _AUTO_HEADERS["data"])
+    vcol = col_valor or _find_col(reader.fieldnames, _AUTO_HEADERS["valor"])
+    hcol = col_descricao or _find_col(reader.fieldnames, _AUTO_HEADERS["descricao"])
+
+    if not (dcol and vcol):
+        raise ValueError(
+            f"Nao identifiquei colunas de data/valor em {path}. "
+            f"Cabecalhos encontrados: {reader.fieldnames}. "
+            "Informe --col-data/--col-valor explicitamente."
+        )
+
+    movimentos = []
+    for row in reader:
+        raw_data, raw_valor = row.get(dcol), row.get(vcol)
+        if not raw_data or not raw_valor:
+            continue
+        try:
+            data = _parse_data_br(raw_data)
+            valor = _parse_valor_br(raw_valor)
+        except ValueError:
+            continue
+        desc = (row.get(hcol) or "").strip() if hcol else ""
+        movimentos.append(Movimento(data=data, valor=valor, descricao=desc, origem=origem))
+    return movimentos
+
+
+_OFX_TRN_RE = re.compile(r"<STMTTRN>(.*?)</STMTTRN>", re.DOTALL | re.IGNORECASE)
+_OFX_TAG_RE = re.compile(r"<(\w+)>([^<\r\n]*)")
+
+
+def parse_ofx(path: str, origem: str = "extrato", encoding: str = "latin-1") -> List[Movimento]:
+    """Parser OFX leve via regex (evita dependencia externa). Cobre o
+    subconjunto usado por extratos bancarios BR: DTPOSTED, TRNAMT, MEMO/NAME."""
+    raw = Path(path).read_text(encoding=encoding, errors="replace")
+    movimentos = []
+    for block in _OFX_TRN_RE.findall(raw):
+        fields = {m.group(1).upper(): m.group(2).strip() for m in _OFX_TAG_RE.finditer(block)}
+        dtposted = fields.get("DTPOSTED", "")
+        trnamt = fields.get("TRNAMT", "")
+        if not dtposted or not trnamt:
+            continue
+        data = dt.datetime.strptime(dtposted[:8], "%Y%m%d").date()
+        valor = float(trnamt)
+        desc = fields.get("MEMO") or fields.get("NAME") or ""
+        movimentos.append(Movimento(data=data, valor=valor, descricao=desc, origem=origem))
+    if not movimentos:
+        raise ValueError(f"Nenhuma <STMTTRN> encontrada em {path} - confirme que e um OFX valido.")
+    return movimentos
+
+
+_PDF_LINHA_DATA_VALOR_RE = re.compile(
+    r"(\d{2}/\d{2}/\d{4})\s+(.+?)\s+(-?\(?R?\$?\s?-?\d{1,3}(?:\.\d{3})*,\d{2}\)?)\s*$"
+)
+
+_PDF_DIA_EXTENSO_RE = re.compile(
+    r"^(?P<dia>\d{1,2})\s+de\s+(?P<mes>[A-Za-zçÇãÃéÉêÊ]+)\s+de\s+(?P<ano>\d{4})\b",
+    re.IGNORECASE,
+)
+
+_PDF_TRANSACAO_TIPO_RE = re.compile(
+    r'^(?P<tipo>[^":]+):\s*"(?P<desc>.*?)"\s+(?P<sinal>-)?R\$\s*(?P<valor>[\d.]+,\d{2})\s+-?R\$\s*[\d.,]+\s*$'
+)
+_PDF_TRANSACAO_SEM_TIPO_RE = re.compile(
+    r'^"(?P<desc>.*?)"\s+(?P<sinal>-)?R\$\s*(?P<valor>[\d.]+,\d{2})\s+-?R\$\s*[\d.,]+\s*$'
+)
+
+
+def _parse_pdf_linhas_data_valor(paginas_texto: List[str], origem: str) -> List[Movimento]:
+    """Layout 'DD/MM/AAAA  descricao....  valor' numa unica linha (comum em
+    relatorios/extratos tabulares simples)."""
+    movimentos = []
+    for texto in paginas_texto:
+        for line in texto.splitlines():
+            m = _PDF_LINHA_DATA_VALOR_RE.search(line.strip())
+            if not m:
+                continue
+            data = _parse_data_br(m.group(1))
+            desc = m.group(2).strip()
+            valor = _parse_valor_br(m.group(3))
+            movimentos.append(Movimento(data=data, valor=valor, descricao=desc, origem=origem))
+    return movimentos
+
+
+def _parse_pdf_extrato_dia_agrupado(paginas_texto: List[str], origem: str) -> List[Movimento]:
+    """Layout tipo Banco Inter: um cabecalho 'D de Mes de AAAA ... Saldo do
+    dia: ...' seguido de N linhas de transacao (sem data propria - a data e
+    a do cabecalho do dia vigente). Cada linha de transacao traz
+    'Tipo: "descricao" +/-R$ valor  R$ saldo_apos'; quando uma linha e
+    cortada entre paginas e perde o prefixo 'Tipo:', ainda e recuperada pelo
+    padrao alternativo (so a descricao entre aspas + valor)."""
+    movimentos = []
+    data_atual: Optional[dt.date] = None
+    for texto in paginas_texto:
+        for line in texto.splitlines():
+            line = line.strip()
+
+            m_dia = _PDF_DIA_EXTENSO_RE.match(line)
+            if m_dia:
+                mes = _MESES_PT.get(m_dia.group("mes").lower())
+                if mes:
+                    try:
+                        data_atual = dt.date(int(m_dia.group("ano")), mes, int(m_dia.group("dia")))
+                    except ValueError:
+                        pass
+                continue
+
+            m_trans = _PDF_TRANSACAO_TIPO_RE.match(line) or _PDF_TRANSACAO_SEM_TIPO_RE.match(line)
+            if m_trans and data_atual:
+                sinal = m_trans.group("sinal") or ""
+                valor = _parse_valor_br(f"{sinal}{m_trans.group('valor')}")
+                tipo = m_trans.groupdict().get("tipo")
+                desc = f"{tipo.strip()}: {m_trans.group('desc').strip()}" if tipo else m_trans.group("desc").strip()
+                movimentos.append(Movimento(data=data_atual, valor=valor, descricao=desc, origem=origem))
+    return movimentos
+
+
+def parse_pdf_generic(path: str, origem: str = "extrato") -> List[Movimento]:
+    """Tenta reconhecer o extrato em PDF por mais de um layout: primeiro o
+    padrao tabular 'DD/MM/AAAA descricao valor' numa linha so; se nao achar
+    nada, tenta o padrao de extrato agrupado por dia (Banco Inter e
+    similares). Ajuste/estenda estas funcoes para outros layouts de banco."""
+    try:
+        import pdfplumber  # type: ignore
+    except ImportError as exc:
+        raise ImportError(
+            "Leitura de PDF requer pdfplumber. Instale com: pip install pdfplumber"
+        ) from exc
+
+    with pdfplumber.open(path) as pdf:
+        paginas_texto = [page.extract_text() or "" for page in pdf.pages]
+
+    movimentos = _parse_pdf_linhas_data_valor(paginas_texto, origem)
+    if not movimentos:
+        movimentos = _parse_pdf_extrato_dia_agrupado(paginas_texto, origem)
+
+    if not movimentos:
+        raise ValueError(
+            f"Nenhuma linha reconhecida em {path}. O layout deste PDF nao bate com "
+            "nenhum dos padroes conhecidos - ajuste parse_pdf_generic()/"
+            "_parse_pdf_extrato_dia_agrupado() para este formato."
+        )
+    return movimentos
+
+
+def parse_movimentos(path: str, origem: str, **kwargs) -> List[Movimento]:
+    ext = Path(path).suffix.lower()
+    if ext == ".ofx":
+        return parse_ofx(path, origem=origem)
+    if ext == ".csv":
+        return parse_csv_movimentos(path, origem=origem, **kwargs)
+    if ext == ".pdf":
+        return parse_pdf_generic(path, origem=origem)
+    raise ValueError(f"Extensao nao suportada: {ext} ({path})")
+
+
+# ---------------------------------------------------------------------------
+# Parser do balancete (mapeamento de codigos internos)
+# ---------------------------------------------------------------------------
+
+_BAL_LINE_RE = re.compile(
+    r"^\s*(?P<codigo>\d+)\s+(?P<classif>\d+(?:\.\d+)+)\s+(?P<nome>.+?)\s*$"
+)
+
+_TOKEN_MONETARIO_RE = re.compile(r"^\(?-?\d{1,3}(?:\.\d{3})*,\d{2}\)?[DC]?$", re.IGNORECASE)
+
+
+def _limpar_nome_conta(nome: str) -> str:
+    """Balancetes reais em PDF trazem saldo anterior/debito/credito/saldo
+    atual na mesma linha do nome da conta. Remove esses tokens monetarios
+    do final, preservando o nome (inclusive numeros que fazem parte dele,
+    como numero de conta/agencia, que nao tem cara de valor monetario)."""
+    tokens = nome.split()
+    while len(tokens) > 1 and _TOKEN_MONETARIO_RE.match(tokens[-1]):
+        tokens.pop()
+    return " ".join(tokens).strip() or nome.strip()
+
+
+def parse_balancete(path: str) -> List[ContaBalancete]:
+    """Aceita CSV com colunas (codigo, classificacao, conta) ou texto/PDF
+    com linhas no padrao '<codigo> <classificacao> <nome da conta>'."""
+    ext = Path(path).suffix.lower()
+    contas: List[ContaBalancete] = []
+
+    if ext == ".csv":
+        text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+        delimiter = ";" if text.count(";") > text.count(",") else ","
+        linhas = text.splitlines()
+        # balancetes reais costumam ter 1+ linhas de titulo/competencia antes
+        # do cabecalho da tabela - procura a linha que parece ser o cabecalho
+        idx_header = 0
+        for i, linha in enumerate(linhas):
+            if re.search(r"\bcod", linha, re.IGNORECASE) and delimiter in linha:
+                idx_header = i
+                break
+        reader = csv.DictReader(linhas[idx_header:], delimiter=delimiter)
+        fieldnames = reader.fieldnames or []
+        ccod = _find_col(fieldnames, ["codigo", "código", "cod", "codigo interno"])
+        cclass = _find_col(fieldnames, ["classificacao", "classificação", "classif"])
+        cnome = _find_col(fieldnames, ["conta", "nome", "descricao", "descrição"])
+        if not (ccod and cnome):
+            raise ValueError(f"Balancete CSV sem colunas codigo/conta reconheciveis: {fieldnames}")
+        for row in reader:
+            codigo = (row.get(ccod) or "").strip()
+            if not codigo:
+                continue
+            contas.append(ContaBalancete(
+                codigo=codigo,
+                classificacao=(row.get(cclass) or "").strip(),
+                nome=(row.get(cnome) or "").strip(),
+            ))
+        return contas
+
+    if ext == ".pdf":
+        try:
+            import pdfplumber  # type: ignore
+        except ImportError as exc:
+            raise ImportError("Leitura de balancete PDF requer pdfplumber.") from exc
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                for line in text.splitlines():
+                    m = _BAL_LINE_RE.match(line)
+                    if m:
+                        contas.append(ContaBalancete(
+                            codigo=m.group("codigo"),
+                            classificacao=m.group("classif"),
+                            nome=_limpar_nome_conta(m.group("nome")),
+                        ))
+        if not contas:
+            raise ValueError(f"Nenhuma linha de balancete reconhecida em {path}.")
+        return contas
+
+    raise ValueError(f"Extensao de balancete nao suportada: {ext}")
+
+
+def localizar_conta(contas: List[ContaBalancete], termo: str) -> Optional[ContaBalancete]:
+    """Busca por substring (case-insensitive) no nome da conta. Nao inventa
+    codigo: retorna None se nao achar match claro (skill exige confirmacao)."""
+    termo_norm = termo.strip().lower()
+    achados = [c for c in contas if termo_norm in c.nome.lower()]
+    if len(achados) == 1:
+        return achados[0]
+    if len(achados) > 1:
+        # match exato de nome desempata
+        exatos = [c for c in achados if c.nome.lower() == termo_norm]
+        if len(exatos) == 1:
+            return exatos[0]
+    return None
+
+
+_TERMOS_CONTA_BANCO = ["banco", "caixa", "conta corrente", " cc ", "aplica", "poupan"]
+
+
+def contas_provaveis_banco(contas: List[ContaBalancete]) -> List[ContaBalancete]:
+    """Filtra do balancete as contas que provavelmente sao disponibilidades
+    (banco/caixa/aplicacao) por palavra-chave no nome. E apenas uma sugestao
+    para popular a lista de escolha - o usuario sempre confirma qual conta e
+    a conta banco correta, o balancete e sempre a fonte de verdade."""
+    return [c for c in contas if any(t in f" {c.nome.lower()} " for t in _TERMOS_CONTA_BANCO)]
+
+
+# ---------------------------------------------------------------------------
+# Identificacao automatica da conta banco: cruza o proprio extrato com o
+# balancete, para nao depender de o usuario escolher/lancar manualmente.
+# ---------------------------------------------------------------------------
+
+_BANCOS_CONHECIDOS = [
+    "banco do brasil", "bradesco", "itau", "itaú", "santander", "caixa economica federal",
+    "caixa econômica federal", "nubank", "inter", "sicoob", "sicredi", "safra", "original",
+    "banco pan", "banrisul", "pagseguro", "pagbank", "mercado pago", "stone", "c6 bank",
+    "btg pactual", "neon", "next", "modal", "will bank", "caixa",
+]
+
+
+def extrair_identificador_banco(path: str) -> Optional[str]:
+    """Tenta achar o nome do banco a partir do proprio extrato: campo ORG do
+    OFX, ou nome de banco conhecido no texto/nome do arquivo (PDF/CSV)."""
+    ext = Path(path).suffix.lower()
+    if ext == ".ofx":
+        raw = Path(path).read_text(encoding="latin-1", errors="replace")
+        m = re.search(r"<ORG>([^<\r\n]+)", raw, re.IGNORECASE)
+        if m:
+            org = m.group(1).strip().lower()
+            for nome in _BANCOS_CONHECIDOS:
+                if nome in org:
+                    return nome
+        texto = raw
+    else:
+        texto = extrair_texto_arquivo(path)
+
+    busca = f"{Path(path).stem} {texto}".lower()
+    for nome in _BANCOS_CONHECIDOS:
+        if nome in busca:
+            return nome
+    return None
+
+
+def detectar_conta_banco(extrato_path: str, contas: List[ContaBalancete]) -> Optional[ContaBalancete]:
+    """Cruza o banco identificado no extrato com as contas de disponibilidades
+    do balancete. So devolve resultado quando ha exatamente UM match
+    inequivoco - em caso de duvida, devolve None e o usuario confirma
+    (nunca inventa qual conta e a correta)."""
+    ident = extrair_identificador_banco(extrato_path)
+    if not ident:
+        return None
+    candidatas = contas_provaveis_banco(contas) or contas
+    achados = [c for c in candidatas if ident in c.nome.lower()]
+    if len(achados) == 1:
+        return achados[0]
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Deteccao de competencia a partir do proprio arquivo do balancete
+# ---------------------------------------------------------------------------
+
+_MESES_PT = {
+    "janeiro": 1, "fevereiro": 2, "marco": 3, "março": 3, "abril": 4, "maio": 5,
+    "junho": 6, "julho": 7, "agosto": 8, "setembro": 9, "outubro": 10,
+    "novembro": 11, "dezembro": 12,
+}
+
+_COMPETENCIA_EXPLICITA_RE = re.compile(
+    r"(?:compet[êe]ncia|per[íi]odo|referente\s+a|m[êe]s\s*/?\s*ano)\D{0,15}?"
+    r"(\d{1,2})\s*[/\-]\s*(\d{4})",
+    re.IGNORECASE,
+)
+_MES_NOME_RE = re.compile(
+    r"\b(janeiro|fevereiro|mar[cç]o|abril|maio|junho|julho|agosto|setembro|"
+    r"outubro|novembro|dezembro)\s*(?:/|de)?\s*(20\d{2})\b",
+    re.IGNORECASE,
+)
+_DATA_GENERICA_RE = re.compile(r"\b(0[1-9]|1[0-2])[/\-](20\d{2})\b")
+
+
+def extrair_texto_arquivo(path: str) -> str:
+    """Extrai texto bruto de um arquivo (CSV/texto direto, PDF via pdfplumber)
+    para uso em heuristicas como deteccao de competencia."""
+    ext = Path(path).suffix.lower()
+    if ext == ".pdf":
+        try:
+            import pdfplumber  # type: ignore
+        except ImportError:
+            return ""
+        partes = []
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                partes.append(page.extract_text() or "")
+        return "\n".join(partes)
+    return Path(path).read_text(encoding="utf-8-sig", errors="replace")
+
+
+def detectar_competencia(texto: str) -> Optional[str]:
+    """Tenta achar a competencia (MM-AAAA) no texto do balancete: primeiro
+    por mencao explicita ('Competencia 01/2026', 'Periodo 01/2026'), depois
+    por nome de mes + ano, depois por qualquer data MM/AAAA no documento."""
+    m = _COMPETENCIA_EXPLICITA_RE.search(texto)
+    if m:
+        mes, ano = int(m.group(1)), m.group(2)
+        if 1 <= mes <= 12:
+            return f"{mes:02d}-{ano}"
+
+    m = _MES_NOME_RE.search(texto)
+    if m:
+        mes_nome = m.group(1).lower().replace("ç", "c")
+        mes = _MESES_PT.get(mes_nome) or _MESES_PT.get(m.group(1).lower())
+        if mes:
+            return f"{mes:02d}-{m.group(2)}"
+
+    m = _DATA_GENERICA_RE.search(texto)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Classificacao heuristica de pendencias (NAO decide conta sozinha - so sugere
+# uma PALAVRA-CHAVE para buscar no balancete; a confirmacao final e humana)
+# ---------------------------------------------------------------------------
+
+_REGRAS_CATEGORIA = [
+    (re.compile(r"tarifa|manuten[cç][aã]o\s*cc|pacote\s*servi", re.I), "Tarifa bancaria", "Tarifas"),
+    (re.compile(r"\biof\b", re.I), "IOF", "IOF"),
+    (re.compile(r"juros.*aplic|rendiment|cdb|rdb", re.I), "Rendimento aplicacao", "Receita financeira"),
+    (re.compile(r"pix\b", re.I), "PIX", None),
+    (re.compile(r"cheque", re.I), "Cheque", None),
+    (re.compile(r"folha|sal[aá]rio|d[eé]cimo", re.I), "Folha de pagamento", "Salarios a pagar"),
+    (re.compile(r"darf|das\b|fgts|inss|imposto|tribut", re.I), "Tributo", "Impostos a recolher"),
+    (re.compile(r"empr[eé]stimo|financiamento|parcela", re.I), "Emprestimo/financiamento", "Emprestimos"),
+    (re.compile(r"estorno|devolu", re.I), "Estorno/devolucao", None),
+]
+
+
+def classificar(desc: str) -> Tuple[Optional[str], Optional[str]]:
+    for regex, categoria, termo_busca in _REGRAS_CATEGORIA:
+        if regex.search(desc):
+            return categoria, termo_busca
+    return None, None
+
+
+# ---------------------------------------------------------------------------
+# Motor de match (multiset por dia, com janela de tolerancia de dias)
+# ---------------------------------------------------------------------------
+
+def _centavos(v: float) -> int:
+    return round(v * 100)
+
+
+def conciliar(
+    extrato: List[Movimento],
+    razao: List[Movimento],
+    dias_tolerancia: int = 0,
+) -> Tuple[List[Tuple[Movimento, Movimento]], List[Movimento], List[Movimento]]:
+    """Casa movimentos do extrato com o razao por (data +/- tolerancia, valor).
+    Retorna (pares_casados, pendentes_lado_banco, pendentes_lado_razao)."""
+
+    razao_restante = list(razao)
+    pareados: List[Tuple[Movimento, Movimento]] = []
+    pendentes_banco: List[Movimento] = []
+
+    for mov_e in sorted(extrato, key=lambda m: m.data):
+        candidato_idx = None
+        for delta in range(0, dias_tolerancia + 1):
+            for sinal in ((0,) if delta == 0 else (delta, -delta)):
+                data_alvo = mov_e.data + dt.timedelta(days=sinal)
+                for i, mov_r in enumerate(razao_restante):
+                    if mov_r.data == data_alvo and _centavos(mov_r.valor) == _centavos(mov_e.valor):
+                        candidato_idx = i
+                        break
+                if candidato_idx is not None:
+                    break
+            if candidato_idx is not None:
+                break
+
+        if candidato_idx is not None:
+            mov_r = razao_restante.pop(candidato_idx)
+            mov_e.status = "OK"
+            mov_r.status = "OK"
+            pareados.append((mov_e, mov_r))
+        else:
+            pendentes_banco.append(mov_e)
+
+    return pareados, pendentes_banco, razao_restante
+
+
+# ---------------------------------------------------------------------------
+# Geracao dos entregaveis
+# ---------------------------------------------------------------------------
+
+def _fmt_money(v: float) -> str:
+    s = f"{abs(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"-R$ {s}" if v < 0 else f"R$ {s}"
+
+
+def gerar_espelho_md(
+    conta_nome: str,
+    competencia: str,
+    saldo_inicial_razao: float,
+    saldo_inicial_extrato: float,
+    pareados: List[Tuple[Movimento, Movimento]],
+    pendentes_banco: List[Movimento],
+    pendentes_razao: List[Movimento],
+    saldo_final_razao: float,
+    saldo_final_extrato: float,
+) -> str:
+    linhas = []
+    linhas.append(f"# Conciliacao Bancaria - {conta_nome}")
+    linhas.append(f"Periodo: {competencia}\n")
+    linhas.append(f"Saldo inicial razao: {_fmt_money(saldo_inicial_razao)}  ===  "
+                   f"Saldo inicial extrato: {_fmt_money(saldo_inicial_extrato)}  "
+                   f"{'(conferido)' if _centavos(saldo_inicial_razao) == _centavos(saldo_inicial_extrato) else '(!!! DIVERGENTE !!!)'}\n")
+
+    linhas.append("## Itens casados (extrato = razao)")
+    linhas.append("| Data | Descricao | Valor |")
+    linhas.append("|---|---|---:|")
+    for mov_e, _ in sorted(pareados, key=lambda p: p[0].data):
+        linhas.append(f"| {mov_e.data:%d/%m/%Y} | {mov_e.descricao} | {_fmt_money(mov_e.valor)} |")
+
+    linhas.append("\n## Pendencias lado banco (no extrato, falta lancar no razao)")
+    if pendentes_banco:
+        linhas.append("| Data | Descricao | Valor | Categoria sugerida | Debito | Credito |")
+        linhas.append("|---|---|---:|---|---|---|")
+        for mov in sorted(pendentes_banco, key=lambda m: m.data):
+            linhas.append(
+                f"| {mov.data:%d/%m/%Y} | {mov.descricao} | {_fmt_money(mov.valor)} | "
+                f"{mov.categoria or '-'} | {mov.conta_debito or '**A CONFIRMAR**'} | "
+                f"{mov.conta_credito or '**A CONFIRMAR**'} |"
+            )
+    else:
+        linhas.append("_Nenhuma._")
+
+    linhas.append("\n## Pendencias lado razao (cheques/depositos em transito - nao aparecem ainda no extrato)")
+    if pendentes_razao:
+        linhas.append("| Data | Descricao | Valor |")
+        linhas.append("|---|---|---:|")
+        for mov in sorted(pendentes_razao, key=lambda m: m.data):
+            linhas.append(f"| {mov.data:%d/%m/%Y} | {mov.descricao} | {_fmt_money(mov.valor)} |")
+    else:
+        linhas.append("_Nenhuma._")
+
+    cheques_pendentes = sum(m.valor for m in pendentes_razao if m.valor < 0)
+    depositos_transito = sum(m.valor for m in pendentes_razao if m.valor > 0)
+    saldo_conciliado = saldo_final_razao - cheques_pendentes + depositos_transito
+    diferenca = round(saldo_conciliado - saldo_final_extrato, 2)
+
+    linhas.append("\n## Fechamento de saldo")
+    linhas.append(f"- Saldo final razao: {_fmt_money(saldo_final_razao)}")
+    linhas.append(f"- (+) Cheques pendentes: {_fmt_money(-cheques_pendentes)}")
+    linhas.append(f"- (-) Depositos em transito: {_fmt_money(depositos_transito)}")
+    linhas.append(f"- = Saldo conciliado: {_fmt_money(saldo_conciliado)}")
+    linhas.append(f"- Saldo final extrato: {_fmt_money(saldo_final_extrato)}")
+    status = "OK - fechou com tolerancia ZERO" if diferenca == 0 else f"!!! DIFERENCA DE {_fmt_money(diferenca)} - INVESTIGAR !!!"
+    linhas.append(f"- **DIFERENCA: {_fmt_money(diferenca)} -> {status}**")
+
+    return "\n".join(linhas)
+
+
+def gerar_memoria_csv(path: str, todos: List[Movimento]) -> None:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["data", "origem", "descricao", "valor", "status", "categoria", "conta_debito", "conta_credito"])
+        for mov in sorted(todos, key=lambda m: (m.data, m.origem)):
+            w.writerow([
+                mov.data.strftime("%d/%m/%Y"), mov.origem, mov.descricao,
+                f"{mov.valor:.2f}".replace(".", ","), mov.status,
+                mov.categoria or "", mov.conta_debito or "", mov.conta_credito or "",
+            ])
+
+
+def gerar_importacao_dominio(
+    path: str,
+    lancamentos: List[Movimento],
+    cod_historico_padrao: str = "",
+) -> int:
+    """Gera o TXT no leiaute Dominio 'Lancamentos Contabeis (Partida
+    Simples/Multiplas) (3.1)': 10 colunas ';', decimal ',', sem cabecalho,
+    latin-1, CRLF. So inclui lancamentos com conta_debito E conta_credito
+    ja confirmadas contra o balancete (nunca inventa codigo).
+    Retorna a quantidade de linhas gravadas."""
+    prontos = [m for m in lancamentos if m.conta_debito and m.conta_credito]
+    linhas = []
+    for mov in sorted(prontos, key=lambda m: m.data):
+        valor = f"{abs(mov.valor):.2f}".replace(".", ",")
+        complemento = mov.descricao.replace(";", ",")
+        campos = [
+            mov.data.strftime("%d/%m/%Y"),
+            mov.conta_debito,
+            mov.conta_credito,
+            valor,
+            cod_historico_padrao,
+            complemento,
+            "1",  # Inicia Lote - partida simples: sempre 1
+            "",   # Codigo Matriz/Filial
+            "",   # Centro de Custo Debito
+            "",   # Centro de Custo Credito
+        ]
+        linhas.append(";".join(campos))
+
+    with open(path, "wb") as f:
+        conteudo = "\r\n".join(linhas)
+        if linhas:
+            conteudo += "\r\n"
+        f.write(conteudo.encode("latin-1", errors="replace"))
+    return len(prontos)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline principal
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ResultadoProcessamento:
+    """Estado intermediario da conciliacao, ANTES de gravar arquivos - permite
+    a interface aplicar uma correcao de contrapartida em massa (ex.: todo
+    pagamento sem fornecedor identificado -> conta X) e so entao gerar os
+    entregaveis, sem reprocessar extrato/razao/balancete do zero."""
+    competencia: str
+    contas: List[ContaBalancete]
+    conta_banco: Optional[ContaBalancete]
+    conta_contabil_nome: str
+    extrato: List[Movimento]
+    razao: List[Movimento]
+    pareados: List[Tuple[Movimento, Movimento]]
+    pendentes_banco: List[Movimento]
+    pendentes_razao: List[Movimento]
+    saldo_inicial_razao: float
+    saldo_inicial_extrato: float
+
+
+def processar(
+    extrato_path: str,
+    balancete_path: str,
+    conta_contabil_nome: str,
+    saldo_inicial_razao: float,
+    saldo_inicial_extrato: float,
+    razao_path: Optional[str] = None,
+    competencia: Optional[str] = None,
+    dias_tolerancia: int = 0,
+    col_data: Optional[str] = None,
+    col_valor: Optional[str] = None,
+    col_descricao: Optional[str] = None,
+) -> ResultadoProcessamento:
+    """Le extrato/razao/balancete, concilia item a item e classifica as
+    pendencias - sem gravar nada em disco ainda. Se `competencia` vier vazio/
+    None, tenta detectar automaticamente a partir do texto do proprio
+    balancete (que e sempre a referencia).
+
+    `razao_path` e opcional: sem razao previa (ex. cliente novo, nada ainda
+    escriturado no periodo), todo item do extrato vira pendencia de
+    lancamento - o balancete continua sendo a fonte para mapear as contas."""
+    print(f"[1/6] Lendo extrato: {extrato_path}")
+    extrato = parse_movimentos(extrato_path, origem="extrato",
+                                col_data=col_data, col_valor=col_valor, col_descricao=col_descricao)
+    print(f"      {len(extrato)} movimentos.")
+
+    if razao_path:
+        print(f"[2/6] Lendo razao: {razao_path}")
+        razao = parse_movimentos(razao_path, origem="razao",
+                                  col_data=col_data, col_valor=col_valor, col_descricao=col_descricao)
+        print(f"      {len(razao)} lancamentos.")
+    else:
+        print("[2/6] Razao nao informada - todos os itens do extrato serao tratados "
+              "como pendentes de lancamento (nada a comparar).")
+        razao = []
+
+    print(f"[3/6] Lendo balancete: {balancete_path}")
+    contas = parse_balancete(balancete_path)
+    print(f"      {len(contas)} contas mapeadas.")
+
+    if not competencia or not competencia.strip():
+        print("[4/6] Competencia nao informada - detectando a partir do balancete...")
+        competencia = detectar_competencia(extrair_texto_arquivo(balancete_path))
+        if not competencia:
+            raise ValueError(
+                "Nao foi possivel detectar a competencia a partir do balancete. "
+                "Informe manualmente no formato MM-AAAA."
+            )
+        print(f"      Competencia detectada: {competencia}")
+    else:
+        competencia = competencia.strip()
+        print(f"[4/6] Competencia informada: {competencia}")
+
+    conta_banco = localizar_conta(contas, conta_contabil_nome)
+    if conta_banco:
+        print(f"      Conta banco identificada: {conta_banco.codigo} - {conta_banco.nome}")
+    else:
+        print(f"      !!! ATENCAO: nao encontrei '{conta_contabil_nome}' no balancete de forma inequivoca. "
+              "Contrapartidas de banco ficarao em aberto para confirmacao manual.")
+
+    print("[5/6] Conciliando item a item...")
+    pareados, pendentes_banco, pendentes_razao = conciliar(extrato, razao, dias_tolerancia=dias_tolerancia)
+    print(f"      Casados: {len(pareados)} | Pendentes banco: {len(pendentes_banco)} | Pendentes razao: {len(pendentes_razao)}")
+
+    print("[6/6] Classificando pendencias e sugerindo contrapartidas...")
+    for mov in pendentes_banco:
+        categoria, termo_busca = classificar(mov.descricao)
+        mov.categoria = categoria
+        if conta_banco:
+            if mov.valor >= 0:
+                mov.conta_credito = conta_banco.codigo if mov.valor < 0 else None
+                mov.conta_debito = conta_banco.codigo if mov.valor >= 0 else None
+            else:
+                mov.conta_credito = conta_banco.codigo
+        contrapartida = localizar_conta(contas, termo_busca) if termo_busca else None
+        if contrapartida:
+            if mov.valor >= 0:
+                mov.conta_credito = contrapartida.codigo
+            else:
+                mov.conta_debito = contrapartida.codigo
+        else:
+            mov.status = "conta_nao_identificada"
+
+    return ResultadoProcessamento(
+        competencia=competencia,
+        contas=contas,
+        conta_banco=conta_banco,
+        conta_contabil_nome=conta_contabil_nome,
+        extrato=extrato,
+        razao=razao,
+        pareados=pareados,
+        pendentes_banco=pendentes_banco,
+        pendentes_razao=pendentes_razao,
+        saldo_inicial_razao=saldo_inicial_razao,
+        saldo_inicial_extrato=saldo_inicial_extrato,
+    )
+
+
+def aplicar_contrapartida_padrao(
+    pendentes_banco: List[Movimento],
+    conta_banco: Optional[ContaBalancete],
+    conta_saida_codigo: Optional[str] = None,
+    conta_entrada_codigo: Optional[str] = None,
+) -> int:
+    """Aplica, de uma vez so, um codigo de conta padrao escolhido pelo
+    usuario as pendencias que ainda estao sem contrapartida especifica
+    identificada (ex.: todo 'Pix enviado'/'Pagamento efetuado' para
+    fornecedor nao cadastrado -> debita Fornecedores; todo recebimento sem
+    identificacao -> credita Adiantamento de Clientes/Outras obrigacoes).
+    So mexe em quem ainda esta 'conta_nao_identificada' - nunca sobrescreve
+    uma contrapartida ja resolvida especificamente. Retorna quantos itens
+    foram resolvidos."""
+    if not conta_banco:
+        return 0
+    aplicados = 0
+    for mov in pendentes_banco:
+        if mov.status != "conta_nao_identificada":
+            continue
+        if mov.valor < 0 and conta_saida_codigo:
+            mov.conta_debito = conta_saida_codigo
+            mov.conta_credito = conta_banco.codigo
+            mov.categoria = mov.categoria or "Pagamento (conta padrao aplicada)"
+            mov.status = "pendente"
+            aplicados += 1
+        elif mov.valor >= 0 and conta_entrada_codigo:
+            mov.conta_credito = conta_entrada_codigo
+            mov.conta_debito = conta_banco.codigo
+            mov.categoria = mov.categoria or "Recebimento (conta padrao aplicada)"
+            mov.status = "pendente"
+            aplicados += 1
+    return aplicados
+
+
+def gerar_saidas(
+    out_dir: str,
+    resultado: ResultadoProcessamento,
+    empresa_codigo: str = "",
+    cod_historico: str = "",
+) -> Dict[str, object]:
+    """Grava os 3 entregaveis (espelho, memoria, importacao Dominio) a
+    partir de um ResultadoProcessamento (ja com eventuais correcoes de
+    contrapartida aplicadas). Retorna os caminhos e metricas do resultado."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    saldo_final_razao = resultado.saldo_inicial_razao + sum(m.valor for m in resultado.razao)
+    saldo_final_extrato = resultado.saldo_inicial_extrato + sum(m.valor for m in resultado.extrato)
+
+    espelho = gerar_espelho_md(
+        conta_nome=resultado.conta_contabil_nome,
+        competencia=resultado.competencia,
+        saldo_inicial_razao=resultado.saldo_inicial_razao,
+        saldo_inicial_extrato=resultado.saldo_inicial_extrato,
+        pareados=resultado.pareados,
+        pendentes_banco=resultado.pendentes_banco,
+        pendentes_razao=resultado.pendentes_razao,
+        saldo_final_razao=saldo_final_razao,
+        saldo_final_extrato=saldo_final_extrato,
+    )
+    espelho_path = out / f"espelho_{resultado.competencia}.md"
+    espelho_path.write_text(espelho, encoding="utf-8")
+
+    todos = resultado.extrato + resultado.razao
+    memoria_path = out / f"memoria_{resultado.competencia}.csv"
+    gerar_memoria_csv(str(memoria_path), todos)
+
+    import_path = out / f"importacao_dominio_{empresa_codigo or 'empresa'}_{resultado.competencia}.txt"
+    qtd_prontos = gerar_importacao_dominio(str(import_path), resultado.pendentes_banco, cod_historico_padrao=cod_historico)
+
+    sem_conta = [m for m in resultado.pendentes_banco if m.status == "conta_nao_identificada"]
+
+    print("\n===== RESUMO =====")
+    print(f"Espelho:              {espelho_path}")
+    print(f"Memoria CSV:          {memoria_path}")
+    print(f"Importacao Dominio:   {import_path} ({qtd_prontos} lancamentos prontos)")
+    if sem_conta:
+        print(f"\n!!! {len(sem_conta)} pendencia(s) SEM contrapartida identificada no balancete "
+              "- NAO foram incluidas no arquivo de importacao. Confirme manualmente:")
+        for mov in sem_conta:
+            print(f"    - {mov.data:%d/%m/%Y}  {mov.descricao}  {_fmt_money(mov.valor)}")
+    print("\nLembrete: confira o codigo de historico usado (\"{}\") contra a tabela "
+          "de historicos padrao do Dominio do escritorio antes de importar.".format(cod_historico or "<em branco>"))
+
+    return {
+        "espelho_path": espelho_path,
+        "memoria_path": memoria_path,
+        "import_path": import_path,
+        "qtd_prontos": qtd_prontos,
+        "sem_conta": sem_conta,
+        "saldo_final_razao": saldo_final_razao,
+        "saldo_final_extrato": saldo_final_extrato,
+    }
+
+
+def executar(
+    extrato_path: str,
+    balancete_path: str,
+    conta_contabil_nome: str,
+    saldo_inicial_razao: float,
+    saldo_inicial_extrato: float,
+    out_dir: str,
+    razao_path: Optional[str] = None,
+    competencia: Optional[str] = None,
+    empresa_codigo: str = "",
+    dias_tolerancia: int = 0,
+    cod_historico: str = "",
+    col_data: Optional[str] = None,
+    col_valor: Optional[str] = None,
+    col_descricao: Optional[str] = None,
+) -> str:
+    """Pipeline completo (CLI): processa e ja grava os entregaveis, sem
+    correcao de contrapartida em massa (isso e feito pela interface, que usa
+    `processar` + `aplicar_contrapartida_padrao` + `gerar_saidas` separados).
+    Retorna a competencia efetivamente usada."""
+    resultado = processar(
+        extrato_path=extrato_path,
+        balancete_path=balancete_path,
+        conta_contabil_nome=conta_contabil_nome,
+        saldo_inicial_razao=saldo_inicial_razao,
+        saldo_inicial_extrato=saldo_inicial_extrato,
+        razao_path=razao_path,
+        competencia=competencia,
+        dias_tolerancia=dias_tolerancia,
+        col_data=col_data,
+        col_valor=col_valor,
+        col_descricao=col_descricao,
+    )
+    gerar_saidas(out_dir, resultado, empresa_codigo=empresa_codigo, cod_historico=cod_historico)
+    return resultado.competencia
+
+
+# ---------------------------------------------------------------------------
+# Modo demo (dados sinteticos, sem depender de arquivos reais)
+# ---------------------------------------------------------------------------
+
+def _gerar_demo(tmpdir: Path) -> Dict[str, str]:
+    extrato_csv = tmpdir / "extrato_demo.csv"
+    razao_csv = tmpdir / "razao_demo.csv"
+    balancete_csv = tmpdir / "balancete_demo.csv"
+
+    extrato_csv.write_text(
+        "data;descricao;valor\n"
+        "02/01/2026;PIX RECEBIDO JOAO SILVA;5000,00\n"
+        "03/01/2026;TARIFA MANUTENCAO CONTA;-25,00\n"
+        "05/01/2026;IOF APLICACAO;-12,30\n"
+        "07/01/2026;JUROS APLICACAO CDB;85,40\n"
+        "10/01/2026;PAGAMENTO FORNECEDOR ABC LTDA;-1500,00\n"
+        "15/01/2026;PIX RECEBIDO SEM IDENTIFICACAO;800,00\n",
+        encoding="utf-8",
+    )
+
+    razao_csv.write_text(
+        "data;descricao;valor\n"
+        "02/01/2026;RECEBIMENTO CLIENTE JOAO SILVA;5000,00\n"
+        "10/01/2026;PAGTO FORNECEDOR ABC LTDA;-1500,00\n"
+        "28/01/2026;CHEQUE 12345 FORNECEDOR XYZ;-1200,00\n",
+        encoding="utf-8",
+    )
+
+    balancete_csv.write_text(
+        "Balancete de Verificacao - Empresa Demo LTDA - Competencia 01/2026\n"
+        "codigo;classificacao;conta\n"
+        "1270;1.1.1.02.00004;BANCO DEMO 12345-6\n"
+        "200;1.1.2.01.00001;CLIENTES A RECEBER\n"
+        "300;2.1.1.01.00001;FORNECEDORES\n"
+        "361;3.2.3.04.00008;TARIFAS BANCARIAS\n"
+        "362;3.2.3.04.00009;IOF\n"
+        "150;3.1.1.01.00001;RECEITA FINANCEIRA\n"
+        "555;2.1.5.01.00001;OUTRAS OBRIGACOES A REGULARIZAR\n",
+        encoding="utf-8",
+    )
+
+    return {
+        "extrato": str(extrato_csv),
+        "razao": str(razao_csv),
+        "balancete": str(balancete_csv),
+    }
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Conciliacao bancaria automatizada com geracao de arquivo Dominio.")
+    ap.add_argument("--extrato", help="Caminho do extrato/fluxo de caixa (.ofx/.csv/.pdf)")
+    ap.add_argument("--razao", default=None,
+                     help="Caminho do razao contabil da conta banco (.csv/.pdf). Opcional: sem razao, "
+                          "todo item do extrato vira pendencia de lancamento (basta ter o balancete).")
+    ap.add_argument("--balancete", help="Caminho do balancete (.csv/.pdf)")
+    ap.add_argument("--conta-contabil", default="", help="Nome/trecho da conta banco a localizar no balancete")
+    ap.add_argument("--competencia", default=None,
+                     help="Formato MM-AAAA (ex: 01-2026). Se omitido, tenta detectar automaticamente "
+                          "a partir do texto do proprio balancete.")
+    ap.add_argument("--listar-contas-balancete", default=None, metavar="PATH",
+                     help="So lista as contas encontradas em PATH (balancete) e sai - util para achar "
+                          "o nome exato a usar em --conta-contabil.")
+    ap.add_argument("--saldo-inicial-razao", type=float, default=0.0)
+    ap.add_argument("--saldo-inicial-extrato", type=float, default=0.0)
+    ap.add_argument("--empresa-codigo", default="", help="Codigo da empresa no Dominio (so para nome do arquivo)")
+    ap.add_argument("--out-dir", default="./saida_conciliacao")
+    ap.add_argument("--dias-tolerancia", type=int, default=0, help="Janela de dias para casar data (ex: cheques)")
+    ap.add_argument("--cod-historico", default="", help="Codigo de historico padrao do Dominio (confirme antes de usar)")
+    ap.add_argument("--col-data", default=None)
+    ap.add_argument("--col-valor", default=None)
+    ap.add_argument("--col-descricao", default=None)
+    ap.add_argument("--demo", action="store_true", help="Roda com dados sinteticos, ignora --extrato/--razao/--balancete")
+
+    args = ap.parse_args()
+
+    if args.listar_contas_balancete:
+        contas = parse_balancete(args.listar_contas_balancete)
+        provaveis = {c.codigo for c in contas_provaveis_banco(contas)}
+        print(f"{len(contas)} conta(s) no balancete ({args.listar_contas_balancete}):\n")
+        for c in contas:
+            marca = " <- provavel conta banco/caixa" if c.codigo in provaveis else ""
+            print(f"  {c.codigo:>8}  {c.classificacao:<18}  {c.nome}{marca}")
+        return
+
+    if args.demo:
+        tmpdir = Path(args.out_dir) / "_demo_input"
+        tmpdir.mkdir(parents=True, exist_ok=True)
+        paths = _gerar_demo(tmpdir)
+        executar(
+            extrato_path=paths["extrato"],
+            razao_path=paths["razao"],
+            balancete_path=paths["balancete"],
+            conta_contabil_nome="BANCO DEMO 12345-6",
+            competencia=args.competencia,
+            saldo_inicial_razao=10000.00,
+            saldo_inicial_extrato=10000.00,
+            out_dir=args.out_dir,
+            empresa_codigo=args.empresa_codigo or "demo",
+            dias_tolerancia=args.dias_tolerancia,
+            cod_historico=args.cod_historico,
+        )
+        return
+
+    faltando = [n for n in ("extrato", "balancete", "conta_contabil") if not getattr(args, n)]
+    if faltando:
+        ap.error(f"Argumentos obrigatorios ausentes: {', '.join(faltando)} (ou use --demo)")
+
+    executar(
+        extrato_path=args.extrato,
+        razao_path=args.razao,
+        balancete_path=args.balancete,
+        conta_contabil_nome=args.conta_contabil,
+        competencia=args.competencia,
+        saldo_inicial_razao=args.saldo_inicial_razao,
+        saldo_inicial_extrato=args.saldo_inicial_extrato,
+        out_dir=args.out_dir,
+        empresa_codigo=args.empresa_codigo,
+        dias_tolerancia=args.dias_tolerancia,
+        cod_historico=args.cod_historico,
+        col_data=args.col_data,
+        col_valor=args.col_valor,
+        col_descricao=args.col_descricao,
+    )
+
+
+if __name__ == "__main__":
+    main()
