@@ -6,7 +6,7 @@ Conciliacao Bancaria - RedeG7 Solucoes em TI
 
 Confere item a item o extrato/fluxo de caixa (OFX/CSV/PDF) contra o razao
 contabil de uma conta banco, usa o balancete para mapear os codigos internos
-das contas (sistema Domino - Thomson Reuters) e gera:
+das contas (sistema Dominio - Thomson Reuters) e gera:
 
   1. Espelho de conciliacao (Markdown)
   2. Memoria de conferencia (CSV)
