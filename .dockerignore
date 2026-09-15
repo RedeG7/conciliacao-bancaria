@@ -1,0 +1,12 @@
+.git
+.github
+.claude
+__pycache__
+*.pyc
+.venv
+venv
+usuarios.json
+escritorios.json
+saida_*/
+_demo_input/
+*.md

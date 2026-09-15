@@ -689,11 +689,19 @@ def gerar_importacao_dominio(
     path: str,
     lancamentos: List[Movimento],
     cod_historico_padrao: str = "",
+    empresa_codigo: str = "",
 ) -> int:
     """Gera o TXT no leiaute Dominio 'Lancamentos Contabeis (Partida
     Simples/Multiplas) (3.1)': 10 colunas ';', decimal ',', sem cabecalho,
     latin-1, CRLF. So inclui lancamentos com conta_debito E conta_credito
     ja confirmadas contra o balancete (nunca inventa codigo).
+
+    `empresa_codigo` (o "Codigo da empresa no Dominio" informado na tela) e
+    gravado na coluna "Codigo Matriz/Filial" - a unica coluna do leiaute
+    oficial que identifica a empresa/filial do lancamento. So preenche
+    quando o cliente NAO tem matriz/filiais cadastradas separadamente no
+    Dominio; se tiver, o codigo correto de cada filial deve prevalecer.
+
     Retorna a quantidade de linhas gravadas."""
     prontos = [m for m in lancamentos if m.conta_debito and m.conta_credito]
     linhas = []
@@ -708,7 +716,7 @@ def gerar_importacao_dominio(
             cod_historico_padrao,
             complemento,
             "1",  # Inicia Lote - partida simples: sempre 1
-            "",   # Codigo Matriz/Filial
+            empresa_codigo,  # Codigo Matriz/Filial = codigo da empresa no Dominio
             "",   # Centro de Custo Debito
             "",   # Centro de Custo Credito
         ]
@@ -912,7 +920,10 @@ def gerar_saidas(
     gerar_memoria_csv(str(memoria_path), todos)
 
     import_path = out / f"importacao_dominio_{empresa_codigo or 'empresa'}_{resultado.competencia}.txt"
-    qtd_prontos = gerar_importacao_dominio(str(import_path), resultado.pendentes_banco, cod_historico_padrao=cod_historico)
+    qtd_prontos = gerar_importacao_dominio(
+        str(import_path), resultado.pendentes_banco,
+        cod_historico_padrao=cod_historico, empresa_codigo=empresa_codigo,
+    )
 
     sem_conta = [m for m in resultado.pendentes_banco if m.status == "conta_nao_identificada"]
 
