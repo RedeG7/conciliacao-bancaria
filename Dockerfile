@@ -14,11 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# usuarios.json/escritorios.json nunca devem morar dentro da imagem - ficam
-# no volume montado em DADOS_DIR (ver docker-compose.yml).
-ENV DADOS_DIR=/app/data
-RUN mkdir -p /app/data
-VOLUME ["/app/data"]
+# usuarios/escritorios ficam no Postgres (DATABASE_URL, ver docker-compose.yml)
+# - nao ha estado persistente dentro do container da app.
 
 EXPOSE 8501
 

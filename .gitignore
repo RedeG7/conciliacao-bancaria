@@ -8,3 +8,5 @@ escritorios.json
 saida_*/
 _demo_input/
 .env
+.deploy_keys/
+.backups/
