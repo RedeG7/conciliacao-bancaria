@@ -17,7 +17,6 @@ Permite:
 
 from __future__ import annotations
 
-import os
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -29,14 +28,9 @@ import conciliacao_bancaria as cb
 
 st.set_page_config(page_title="Conciliacao Bancaria", page_icon="🏦", layout="wide")
 
-# DADOS_DIR aponta pra onde ficam usuarios.json/escritorios.json - por
-# padrao, ao lado do proprio script (uso local com `streamlit run`). Em
-# Docker, a env var aponta para um volume montado (ex: /app/data), assim
-# os cadastros sobrevivem a rebuilds/redeploys da imagem.
-_DADOS_DIR = Path(os.environ.get("DADOS_DIR", Path(__file__).resolve().parent))
-_DADOS_DIR.mkdir(parents=True, exist_ok=True)
-USUARIOS_PATH = _DADOS_DIR / "usuarios.json"
-ESCRITORIOS_PATH = _DADOS_DIR / "escritorios.json"
+# Usuarios/escritorios ficam no Postgres (DATABASE_URL) - ver auth.py.
+# Isso evita corrida de escrita entre admins de escritorios diferentes
+# mexendo ao mesmo tempo (cada operacao e uma transacao atomica no banco).
 
 # ---------------------------------------------------------------------------
 # Login / autenticacao multi-escritorio - nada do app roda sem sessao
@@ -70,15 +64,15 @@ def _tela_login() -> None:
             senha = st.text_input("Senha", type="password")
             entrar = st.form_submit_button("Entrar", type="primary", use_container_width=True)
         if entrar:
-            usuarios = auth.garantir_bootstrap(USUARIOS_PATH, ESCRITORIOS_PATH)
+            auth.garantir_bootstrap()
             usuario = usuario.strip()
-            if not auth.autenticar(usuarios, usuario, senha):
+            dados = auth.autenticar(usuario, senha)
+            if not dados:
                 st.error("Usuário ou senha inválidos.")
-            elif not auth.usuario_esta_ativo(usuarios[usuario]):
+            elif not auth.usuario_esta_ativo(dados):
                 st.error("Este usuário está inativo. Fale com o administrador do seu escritório.")
             else:
-                dados = usuarios[usuario]
-                escritorios = auth.carregar_escritorios(ESCRITORIOS_PATH)
+                escritorios = auth.carregar_escritorios()
                 eid = dados.get("escritorio_id", "")
                 st.session_state["usuario_logado"] = usuario
                 st.session_state["papel_usuario"] = dados.get("papel", auth.PAPEL_USUARIO)
@@ -100,16 +94,15 @@ def _tela_trocar_senha(obrigatoria: bool) -> None:
         confirmar = st.text_input("Confirmar nova senha", type="password")
         enviar = st.form_submit_button("Salvar nova senha", type="primary")
     if enviar:
-        usuarios = auth.carregar_usuarios(USUARIOS_PATH)
         usuario = st.session_state["usuario_logado"]
-        if not auth.autenticar(usuarios, usuario, senha_atual):
+        if not auth.autenticar(usuario, senha_atual):
             st.error("Senha atual incorreta.")
         elif len(nova) < 6:
             st.error("A nova senha precisa ter pelo menos 6 caracteres.")
         elif nova != confirmar:
             st.error("As senhas digitadas não coincidem.")
         else:
-            auth.redefinir_senha(USUARIOS_PATH, usuario, nova, forcar_troca=False)
+            auth.redefinir_senha(usuario, nova, forcar_troca=False)
             st.session_state["deve_trocar_senha"] = False
             st.session_state["mostrar_trocar_senha"] = False
             st.success("Senha atualizada.")
@@ -144,8 +137,8 @@ def _tela_gerenciar_escritorios() -> None:
     st.caption("Cada escritório é isolado: usuários de um não enxergam nem gerenciam os de outro.")
     st.divider()
 
-    escritorios = auth.carregar_escritorios(ESCRITORIOS_PATH)
-    usuarios = auth.carregar_usuarios(USUARIOS_PATH)
+    escritorios = auth.carregar_escritorios()
+    usuarios = auth.carregar_usuarios()
 
     st.subheader("Criar novo escritório")
     _flash("flash_novo_escritorio")
@@ -164,9 +157,9 @@ def _tela_gerenciar_escritorios() -> None:
         elif adm_usuario.strip() in usuarios:
             st.error("Esse nome de usuário já existe — escolha outro.")
         else:
-            novo_eid = auth.criar_escritorio(ESCRITORIOS_PATH, nome_escritorio.strip())
+            novo_eid = auth.criar_escritorio(nome_escritorio.strip())
             auth.criar_ou_atualizar_usuario(
-                USUARIOS_PATH, adm_usuario.strip(), adm_senha, escritorio_id=novo_eid,
+                adm_usuario.strip(), adm_senha, escritorio_id=novo_eid,
                 papel=auth.PAPEL_ADMIN_ESCRITORIO, nome=adm_nome.strip(), deve_trocar_senha=True,
             )
             _flash("flash_novo_escritorio",
@@ -202,7 +195,7 @@ def _tela_gerenciar_escritorios() -> None:
                 if not novo_nome.strip():
                     st.error("O nome não pode ficar em branco.")
                 else:
-                    auth.renomear_escritorio(ESCRITORIOS_PATH, eid, novo_nome.strip())
+                    auth.renomear_escritorio(eid, novo_nome.strip())
                     if st.session_state.get("escritorio_id") == eid:
                         st.session_state["escritorio_nome"] = novo_nome.strip()
                     _flash("flash_escritorio_renomeado", f"✅ Escritório renomeado para '{novo_nome.strip()}'.")
@@ -224,7 +217,7 @@ def _tela_gerenciar_escritorios() -> None:
                 )
             confirmar = st.checkbox(f"Confirmo que quero excluir \"{edados.get('nome', eid)}\"", key=f"confirmar_excluir_{eid}")
             if st.button("Excluir escritório", key=f"btn_excluir_{eid}", disabled=not confirmar):
-                ok, msg = auth.remover_escritorio(ESCRITORIOS_PATH, USUARIOS_PATH, eid, forcar=forcar)
+                ok, msg = auth.remover_escritorio(eid, forcar=forcar)
                 if ok:
                     _flash("flash_escritorio_removido", f"✅ {msg}")
                     st.rerun()
@@ -245,8 +238,8 @@ def _tela_gerenciar_usuarios() -> None:
     st.divider()
 
     eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
-    usuarios_todos = auth.carregar_usuarios(USUARIOS_PATH)
-    escritorios = auth.carregar_escritorios(ESCRITORIOS_PATH)
+    usuarios_todos = auth.carregar_usuarios()
+    escritorios = auth.carregar_escritorios()
 
     if eh_global:
         if not escritorios:
@@ -287,7 +280,7 @@ def _tela_gerenciar_usuarios() -> None:
             st.error("Esse usuário pertence a outro escritório — você só gerencia o seu.")
         else:
             auth.criar_ou_atualizar_usuario(
-                USUARIOS_PATH, alvo, nova_senha, escritorio_id=escritorio_visto, papel=papel,
+                alvo, nova_senha, escritorio_id=escritorio_visto, papel=papel,
                 nome=nome_completo.strip(), deve_trocar_senha=True,
             )
             _flash("flash_usuario_salvo",
@@ -320,7 +313,7 @@ def _tela_gerenciar_usuarios() -> None:
                     if voce:
                         st.caption("Você não pode inativar a própria conta.")
                     elif st.button("🔴 Inativar", key=f"inativar_{uname}"):
-                        ok, msg = auth.definir_status_usuario(USUARIOS_PATH, uname, ativo=False)
+                        ok, msg = auth.definir_status_usuario(uname, ativo=False)
                         if ok:
                             _flash("flash_usuario_status", f"✅ {msg}")
                             st.rerun()
@@ -328,7 +321,7 @@ def _tela_gerenciar_usuarios() -> None:
                             st.error(msg)
                 else:
                     if st.button("🟢 Ativar", key=f"ativar_{uname}", type="primary"):
-                        ok, msg = auth.definir_status_usuario(USUARIOS_PATH, uname, ativo=True)
+                        ok, msg = auth.definir_status_usuario(uname, ativo=True)
                         if ok:
                             _flash("flash_usuario_status", f"✅ {msg}")
                             st.rerun()
@@ -340,7 +333,7 @@ def _tela_gerenciar_usuarios() -> None:
                 else:
                     confirmar = st.checkbox("Confirmar remoção definitiva", key=f"confirmar_remover_{uname}")
                     if st.button("🗑️ Remover definitivamente", key=f"remover_{uname}", disabled=not confirmar):
-                        if auth.remover_usuario(USUARIOS_PATH, uname):
+                        if auth.remover_usuario(uname):
                             _flash("flash_usuario_removido", f"✅ Usuário '{uname}' removido definitivamente.")
                             st.rerun()
                         else:
