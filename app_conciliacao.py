@@ -55,8 +55,15 @@ def _fazer_logout() -> None:
 
 
 def _tela_login() -> None:
-    st.title("🏦 Conciliação Bancária Automatizada")
-    st.caption("Faça login para continuar — cada escritório vê só os próprios dados.")
+    st.markdown(
+        "<div style='display:flex;justify-content:center;align-items:center;"
+        "text-align:center;font-size:2.25rem;font-weight:700;line-height:1.2;"
+        "margin-bottom:0.5rem;'>🏦 Conciliação Bancária Automatizada</div>"
+        "<div style='display:flex;justify-content:center;align-items:center;"
+        "text-align:center;color:rgba(250,250,250,0.6);margin-bottom:1rem;'>"
+        "Faça login para continuar — cada escritório vê só os próprios dados.</div>",
+        unsafe_allow_html=True,
+    )
     _esq, meio, _dir = st.columns([1, 1.3, 1])
     with meio:
         with st.form("login_form"):
@@ -302,7 +309,10 @@ def _tela_gerenciar_usuarios() -> None:
         status_txt = "🟢 Ativo" if ativo else "🔴 Inativo"
         # mantem aberto entre reruns enquanto houver uma acao pendente
         # marcada neste usuario (mesmo motivo do fix nos escritorios).
-        aberto = bool(st.session_state.get(f"confirmar_remover_{uname}"))
+        aberto = bool(
+            st.session_state.get(f"confirmar_remover_{uname}")
+            or st.session_state.get(f"aberto_{uname}")
+        )
         rotulo = f"{dados.get('nome', uname)} (`{uname}`) · {dados.get('papel')} · {status_txt}"
         with st.expander(rotulo, expanded=aberto):
             st.caption(f"Papel: {dados.get('papel')}" + (" · (você)" if voce else ""))
@@ -338,6 +348,24 @@ def _tela_gerenciar_usuarios() -> None:
                             st.rerun()
                         else:
                             st.error("Não foi possível remover: precisa sobrar pelo menos 1 admin para este escritório.")
+
+            st.divider()
+            st.markdown("**Redefinir senha**")
+            with st.form(f"redefinir_senha_{uname}_form", clear_on_submit=True):
+                nova_senha_user = st.text_input(
+                    "Nova senha (mín. 6 caracteres)", type="password", key=f"nova_senha_{uname}"
+                )
+                redefinir = st.form_submit_button("🔑 Redefinir senha")
+            if redefinir:
+                if len(nova_senha_user) < 6:
+                    st.error("A senha precisa ter pelo menos 6 caracteres.")
+                    st.session_state[f"aberto_{uname}"] = True
+                else:
+                    auth.redefinir_senha(uname, nova_senha_user, forcar_troca=True)
+                    st.session_state[f"aberto_{uname}"] = False
+                    _flash("flash_usuario_status",
+                           f"✅ Senha de '{uname}' redefinida — vai precisar trocar no próximo login.")
+                    st.rerun()
 
 
 if "usuario_logado" not in st.session_state:
