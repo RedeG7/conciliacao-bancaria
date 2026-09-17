@@ -1,0 +1,32 @@
+services:
+  app:
+    image: ghcr.io/redeg7/conciliacao-bancaria:latest
+    container_name: conciliacao-bancaria
+    restart: unless-stopped
+    environment:
+      - DADOS_DIR=/app/data
+    volumes:
+      - dados:/app/data
+    expose:
+      - "8501"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: conciliacao-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMINIO=${DOMINIO}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  dados:
+  caddy_data:
+  caddy_config:

@@ -3,3 +3,8 @@ __pycache__/
 .venv/
 venv/
 .claude/scheduled_tasks.lock
+usuarios.json
+escritorios.json
+saida_*/
+_demo_input/
+.env
