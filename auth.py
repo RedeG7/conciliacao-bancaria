@@ -67,6 +67,13 @@ def _conectar() -> psycopg.Connection:
     return psycopg.connect(dsn, row_factory=dict_row)
 
 
+def conectar() -> psycopg.Connection:
+    """Wrapper publico de _conectar() para os demais modulos do app
+    (clientes.py, historico.py) reaproveitarem a mesma conexao/DSN sem
+    acessar o "privado" diretamente."""
+    return _conectar()
+
+
 def garantir_schema() -> None:
     with _conectar() as conn:
         conn.execute("""

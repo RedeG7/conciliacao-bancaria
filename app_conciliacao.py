@@ -24,13 +24,28 @@ from typing import Optional
 import streamlit as st
 
 import auth
+import clientes
+import historico
 import conciliacao_bancaria as cb
 
 st.set_page_config(page_title="Conciliacao Bancaria", page_icon="🏦", layout="wide")
 
-# Usuarios/escritorios ficam no Postgres (DATABASE_URL) - ver auth.py.
-# Isso evita corrida de escrita entre admins de escritorios diferentes
-# mexendo ao mesmo tempo (cada operacao e uma transacao atomica no banco).
+# Usuarios/escritorios/clientes/historico ficam no Postgres (DATABASE_URL) -
+# ver auth.py. Isso evita corrida de escrita entre admins de escritorios
+# diferentes mexendo ao mesmo tempo (cada operacao e uma transacao atomica
+# no banco).
+
+
+@st.cache_resource
+def _garantir_schema_extra() -> bool:
+    # auth primeiro: clientes/historico tem FK pra escritorios(id).
+    auth.garantir_schema()
+    clientes.garantir_schema()
+    historico.garantir_schema()
+    return True
+
+
+_garantir_schema_extra()
 
 # ---------------------------------------------------------------------------
 # Login / autenticacao multi-escritorio - nada do app roda sem sessao
@@ -368,6 +383,49 @@ def _tela_gerenciar_usuarios() -> None:
                     st.rerun()
 
 
+def _tela_historico() -> None:
+    """Tela de historico dos lancamentos (conciliacoes) rodados por cada
+    usuario - so super_admin_global (escolhendo o escritorio) e
+    admin_escritorio (so o proprio) enxergam; usuario comum nao ve o
+    historico dos colegas."""
+    st.title("📜 Histórico de Lançamentos")
+    if st.button("← Voltar à conciliação"):
+        st.session_state["tela"] = "conciliacao"
+        st.rerun()
+    st.divider()
+
+    eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
+    if eh_global:
+        escritorios = auth.carregar_escritorios()
+        if not escritorios:
+            st.info("Nenhum escritório cadastrado ainda.")
+            return
+        escritorio_visto = st.selectbox(
+            "Escritório",
+            list(escritorios.keys()),
+            format_func=lambda eid: escritorios.get(eid, {}).get("nome", eid),
+            index=list(escritorios.keys()).index(st.session_state.get("escritorio_id"))
+            if st.session_state.get("escritorio_id") in escritorios else 0,
+        )
+    else:
+        escritorio_visto = st.session_state.get("escritorio_id")
+        st.caption(f"Escritório: **{st.session_state.get('escritorio_nome')}**")
+
+    registros = historico.listar(escritorio_visto)
+    if not registros:
+        st.info("Nenhum lançamento registrado ainda neste escritório.")
+        return
+
+    st.caption(f"{len(registros)} lançamento(s) mais recente(s) primeiro:")
+    for r in registros:
+        dt = r["criado_em"]
+        empresa = r.get("empresa_nome") or r["empresa_codigo"]
+        st.write(
+            f"👤 **{r['usuario']}** — Lançamento {empresa} "
+            f"dia {dt.strftime('%d/%m/%Y')} hora {dt.strftime('%H:%M')}"
+        )
+
+
 if "usuario_logado" not in st.session_state:
     _tela_login()
     st.stop()
@@ -394,6 +452,13 @@ if st.session_state.get("tela") == "gerenciar_usuarios":
         _tela_gerenciar_usuarios()
         st.stop()
 
+if st.session_state.get("tela") == "historico":
+    if st.session_state.get("papel_usuario") not in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
+        st.session_state["tela"] = "conciliacao"
+    else:
+        _tela_historico()
+        st.stop()
+
 with st.sidebar:
     st.caption(f"👤 {st.session_state.get('nome_usuario')} · {st.session_state.get('papel_usuario')}")
     st.caption(f"🏢 {st.session_state.get('escritorio_nome')}")
@@ -412,6 +477,9 @@ with st.sidebar:
     if st.session_state.get("papel_usuario") in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
         if st.button("👥 Gerenciar Usuários", use_container_width=True):
             st.session_state["tela"] = "gerenciar_usuarios"
+            st.rerun()
+        if st.button("📜 Histórico de Lançamentos", use_container_width=True):
+            st.session_state["tela"] = "historico"
             st.rerun()
     st.divider()
 
@@ -452,7 +520,55 @@ def _identificar_arquivos_na_pasta(pasta: Path) -> dict:
 
 with st.sidebar:
     st.header("Parâmetros")
-    empresa_codigo = st.text_input("Código da empresa no Domínio *", placeholder="Ex: 123")
+
+    _escritorio_id_atual = st.session_state.get("escritorio_id")
+    _lista_clientes = clientes.listar_clientes(_escritorio_id_atual)
+    _flash("flash_cliente_salvo")
+
+    empresa_codigo: Optional[str] = None
+    empresa_nome_selecionado: Optional[str] = None
+    if _lista_clientes:
+        _opcoes_cliente = ["(selecione)"] + [f"{c['nome']} — {c['codigo_dominio']}" for c in _lista_clientes]
+        _escolha_cliente = st.selectbox("Empresa (cliente) *", _opcoes_cliente, key="sel_cliente_empresa")
+        if _escolha_cliente != "(selecione)":
+            _cliente_sel = _lista_clientes[_opcoes_cliente.index(_escolha_cliente) - 1]
+            empresa_codigo = _cliente_sel["codigo_dominio"]
+            empresa_nome_selecionado = _cliente_sel["nome"]
+    else:
+        st.info("Nenhum cliente cadastrado ainda — cadastre um abaixo.")
+
+    with st.expander("➕ Cadastrar novo cliente"):
+        with st.form("novo_cliente_form", clear_on_submit=True):
+            _cliente_nome_novo = st.text_input("Nome do cliente")
+            _cliente_codigo_novo = st.text_input("Código da empresa no Domínio")
+            _salvar_cliente = st.form_submit_button("Cadastrar cliente", type="primary")
+        if _salvar_cliente:
+            if not _cliente_nome_novo.strip() or not _cliente_codigo_novo.strip():
+                st.error("Informe nome e código da empresa.")
+            else:
+                _ok, _msg = clientes.criar_cliente(
+                    _escritorio_id_atual, _cliente_nome_novo.strip(), _cliente_codigo_novo.strip()
+                )
+                if _ok:
+                    _flash("flash_cliente_salvo", f"✅ {_msg}")
+                    st.rerun()
+                else:
+                    st.error(_msg)
+
+        if _lista_clientes and st.session_state.get("papel_usuario") in (
+            auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO,
+        ):
+            st.caption("Remover cliente cadastrado:")
+            for _c in _lista_clientes:
+                _cc1, _cc2 = st.columns([4, 1])
+                with _cc1:
+                    st.caption(f"{_c['nome']} — {_c['codigo_dominio']}")
+                with _cc2:
+                    if st.button("🗑️", key=f"remover_cliente_{_c['id']}"):
+                        clientes.remover_cliente(_c["id"], _escritorio_id_atual)
+                        _flash("flash_cliente_salvo", f"✅ Cliente '{_c['nome']}' removido.")
+                        st.rerun()
+
     competencia = st.text_input(
         "Competência (MM-AAAA)",
         value="",
@@ -511,11 +627,18 @@ if modo == "Upload de arquivos":
         balancete_path = _salvar_upload(up_balancete, f"balancete{Path(up_balancete.name).suffix}")
 
 else:
+    st.warning(
+        "⚠️ Esse caminho é lido no **servidor** onde o app está rodando (não no seu computador). "
+        "Como este sistema fica hospedado na nuvem (hub.redeg7.com), ele não enxerga pastas do seu "
+        "PC — use \"Upload de arquivos\" acima para enviar os arquivos diretamente daqui. Esta opção "
+        "só funciona quando o app roda localmente na própria máquina onde os arquivos estão."
+    )
     pasta_str = st.text_input("Caminho da pasta com os arquivos", placeholder=r"C:\Clientes\EmpresaX\2026-01")
     if pasta_str:
         pasta = Path(pasta_str)
         if not pasta.is_dir():
-            st.error(f"Pasta não encontrada: {pasta_str}")
+            st.error(f"Pasta não encontrada no servidor: {pasta_str} — lembre-se que este caminho "
+                     "precisa existir na máquina onde o app está rodando, não no seu computador.")
         else:
             candidatos = _identificar_arquivos_na_pasta(pasta)
             st.write("Arquivos identificados automaticamente (confira/ajuste antes de rodar):")
@@ -725,6 +848,22 @@ if pronto:
         info = cb.gerar_saidas(str(out_dir), resultado, empresa_codigo=empresa_codigo, cod_historico=cod_historico)
     finally:
         builtins.print = _print_original
+
+    # so grava no historico quando a combinacao de entradas mudar - sem
+    # isso, qualquer clique na tela (Streamlit reexecuta o script inteiro
+    # a cada interacao) duplicaria o lancamento no historico.
+    _assinatura_execucao = (
+        empresa_codigo, competencia, conta_contabil,
+        _mtime(extrato_path), _mtime(razao_path), _mtime(balancete_path),
+    )
+    if st.session_state.get("historico_ultima_assinatura") != _assinatura_execucao:
+        historico.registrar(
+            escritorio_id=st.session_state.get("escritorio_id"),
+            usuario=st.session_state.get("usuario_logado"),
+            empresa_codigo=empresa_codigo,
+            empresa_nome=empresa_nome_selecionado,
+        )
+        st.session_state["historico_ultima_assinatura"] = _assinatura_execucao
 
     st.success(f"Conciliação concluída automaticamente — competência: {resultado.competencia}.")
 
