@@ -54,6 +54,28 @@ def criar_cliente(escritorio_id: str, nome: str, codigo_dominio: str) -> "tuple[
     return True, f"Cliente '{nome}' cadastrado com sucesso."
 
 
+def atualizar_cliente(cliente_id: int, escritorio_id: str, nome: str, codigo_dominio: str) -> "tuple[bool, str]":
+    """Edita nome/codigo de um cliente ja cadastrado - exige o
+    escritorio_id tambem, pra um admin de um escritorio nao conseguir
+    editar (por id adivinhado) o cliente de outro."""
+    with auth.conectar() as conn:
+        existe = conn.execute(
+            "SELECT 1 FROM clientes WHERE escritorio_id = %s AND codigo_dominio = %s AND id <> %s",
+            (escritorio_id, codigo_dominio, cliente_id),
+        ).fetchone()
+        if existe:
+            return False, f"Já existe outro cliente com o código '{codigo_dominio}' cadastrado neste escritório."
+        cur = conn.execute(
+            "UPDATE clientes SET nome = %s, codigo_dominio = %s WHERE id = %s AND escritorio_id = %s",
+            (nome, codigo_dominio, cliente_id, escritorio_id),
+        )
+        ok = cur.rowcount > 0
+        conn.commit()
+    if not ok:
+        return False, "Cliente não encontrado."
+    return True, f"Cliente '{nome}' atualizado com sucesso."
+
+
 def remover_cliente(cliente_id: int, escritorio_id: str) -> bool:
     """Remove um cliente - exige o escritorio_id tambem, pra um admin de um
     escritorio nao conseguir apagar (por id adivinhado) o cliente de outro."""

@@ -875,6 +875,85 @@ def _limpar_nome_conta(nome: str) -> str:
     return " ".join(tokens).strip() or nome.strip()
 
 
+def _reparar_linhas_balancete_sobrepostas(page, linhas_texto: List[str]) -> List[str]:
+    """Alguns balancetes em PDF tem, em certas linhas (normalmente contas
+    com nome mais longo, ex. "BANCO C6 BANK"), DUAS cadeias de texto
+    desenhadas sobrepostas no mesmo trecho horizontal: uma com os digitos
+    do codigo/classificacao (fonte mais estreita) e outra com "BANCO
+    <nome>" (fonte mais larga). A extracao sequencial por posicao X
+    intercala os caracteres das duas cadeias, produzindo lixo tipo 'BAN13
+    C32O 1C.16.1 .B02A.0N0K008BANCO C6 BANK...' - o codigo some da lista
+    de contas do balancete sem aviso nenhum (a linha simplesmente nao
+    bate em _BAL_LINE_RE). Como as duas fontes tem largura de caractere
+    bem diferente (digitos ~3px, letras ~5px neste tipo de PDF), da pra
+    separar as duas cadeias por largura e reconstruir cada uma
+    corretamente. So repara quando acha, nos chars da pagina, um grupo
+    cuja reconstrucao NATURAL (sem separar por largura) bate exatamente
+    com a linha problematica - isso confirma que e o grupo certo antes de
+    tentar consertar (nunca inventa um codigo: se o resultado reparado
+    nao bater no padrao esperado, a linha original fica como estava e
+    simplesmente nao entra na lista de contas, do jeito que ja era)."""
+    def _juntar_com_espacos(chars: list, limiar: float = 1.5) -> str:
+        """Reconstroi o texto na ordem X, inserindo um espaco sempre que o
+        vao ate o proximo char for maior que `limiar` - os espacos LITERAIS
+        capturados (glifo ' ') sao ambiguos na zona de sobreposicao (podem
+        pertencer a qualquer uma das 2 cadeias por terem largura estreita,
+        misturando com os digitos), entao sao descartados e recalculados
+        aqui a partir do espacamento real entre os caracteres de CADA
+        cadeia separadamente."""
+        partes = []
+        anterior = None
+        for c in chars:
+            if c["text"] == " ":
+                continue
+            if anterior is not None and c["x0"] - anterior["x1"] > limiar:
+                partes.append(" ")
+            partes.append(c["text"])
+            anterior = c
+        return "".join(partes)
+
+    try:
+        chars_por_linha: Dict[int, list] = {}
+        for c in page.chars:
+            chave = round(c["top"])
+            chars_por_linha.setdefault(chave, []).append(c)
+    except Exception:
+        return linhas_texto
+
+    resultado = list(linhas_texto)
+    pendentes = {i for i, l in enumerate(linhas_texto) if l.strip() and not _BAL_LINE_RE.match(l)}
+    if not pendentes:
+        return resultado
+
+    for chars_linha in chars_por_linha.values():
+        chars_ordenados = sorted(chars_linha, key=lambda c: c["x0"])
+        texto_natural = "".join(c["text"] for c in chars_ordenados).strip()
+        if not texto_natural:
+            continue
+        # extract_text() insere espacos sinteticos entre grupos de
+        # caracteres com base no espacamento visual, que nao correspondem
+        # a nenhum char real - compara ignorando espacos dos dois lados
+        # pra achar o grupo certo de qualquer forma.
+        chave_natural = re.sub(r"\s+", "", texto_natural)
+        for i in list(pendentes):
+            if re.sub(r"\s+", "", linhas_texto[i]) != chave_natural:
+                continue
+            prefixo = [c for c in chars_ordenados if c["x0"] < 100]
+            resto = [c for c in chars_ordenados if c["x0"] >= 100]
+            if prefixo and resto:
+                estreitos = sorted((c for c in prefixo if c["text"] != " " and (c["x1"] - c["x0"]) < 4.5), key=lambda c: c["x0"])
+                largos = sorted((c for c in prefixo if c["text"] != " " and (c["x1"] - c["x0"]) >= 4.5), key=lambda c: c["x0"])
+                if estreitos and largos:
+                    texto_estreito = _juntar_com_espacos(estreitos)
+                    texto_resto = _juntar_com_espacos(sorted(resto, key=lambda c: c["x0"]))
+                    linha_reparada = f"{texto_estreito} {texto_resto}".strip()
+                    if _BAL_LINE_RE.match(linha_reparada):
+                        resultado[i] = linha_reparada
+            pendentes.discard(i)
+            break
+    return resultado
+
+
 def parse_balancete(path: str) -> List[ContaBalancete]:
     """Aceita CSV com colunas (codigo, classificacao, conta) ou texto/PDF
     com linhas no padrao '<codigo> <classificacao> <nome da conta>'."""
@@ -918,7 +997,8 @@ def parse_balancete(path: str) -> List[ContaBalancete]:
         with pdfplumber.open(path) as pdf:
             for page in pdf.pages:
                 text = page.extract_text() or ""
-                for line in text.splitlines():
+                linhas = _reparar_linhas_balancete_sobrepostas(page, text.splitlines())
+                for line in linhas:
                     m = _BAL_LINE_RE.match(line)
                     if m:
                         contas.append(ContaBalancete(
