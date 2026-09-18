@@ -658,8 +658,8 @@ def _parse_pdf_gerenciador_caixa(paginas_linhas: List[List[str]], origem: str) -
                     delta = round(saldo_atual - saldo_anterior, 2)
                     if abs(delta - valor) > 0.01:
                         alerta = (
-                            f"⚠️ OCR: valor lido ({_fmt_money(valor)}) nao bate com a variacao do "
-                            f"saldo impresso ({_fmt_money(delta)}) - confira este lancamento no "
+                            f"⚠️ OCR: valor lido ({fmt_money(valor)}) nao bate com a variacao do "
+                            f"saldo impresso ({fmt_money(delta)}) - confira este lancamento no "
                             "extrato original."
                         )
                 saldo_anterior = saldo_atual
@@ -1228,7 +1228,7 @@ def conciliar(
 # Geracao dos entregaveis
 # ---------------------------------------------------------------------------
 
-def _fmt_money(v: float) -> str:
+def fmt_money(v: float) -> str:
     s = f"{abs(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     return f"-R$ {s}" if v < 0 else f"R$ {s}"
 
@@ -1255,8 +1255,8 @@ def gerar_espelho_md(
             "cada valor abaixo contra o extrato original antes de confiar neles ou importar "
             "no Dominio.\n"
         )
-    linhas.append(f"Saldo inicial razao: {_fmt_money(saldo_inicial_razao)}  ===  "
-                   f"Saldo inicial extrato: {_fmt_money(saldo_inicial_extrato)}  "
+    linhas.append(f"Saldo inicial razao: {fmt_money(saldo_inicial_razao)}  ===  "
+                   f"Saldo inicial extrato: {fmt_money(saldo_inicial_extrato)}  "
                    f"{'(conferido)' if _centavos(saldo_inicial_razao) == _centavos(saldo_inicial_extrato) else '(!!! DIVERGENTE !!!)'}\n")
 
     linhas.append("## Itens casados (extrato = razao)")
@@ -1264,7 +1264,7 @@ def gerar_espelho_md(
     linhas.append("|---|---|---:|")
     for mov_e, _ in sorted(pareados, key=lambda p: p[0].data):
         marca = " ⚠️" if mov_e.alerta_valor else ""
-        linhas.append(f"| {mov_e.data:%d/%m/%Y} | {mov_e.descricao}{marca} | {_fmt_money(mov_e.valor)} |")
+        linhas.append(f"| {mov_e.data:%d/%m/%Y} | {mov_e.descricao}{marca} | {fmt_money(mov_e.valor)} |")
 
     linhas.append("\n## Pendencias lado banco (no extrato, falta lancar no razao)")
     if pendentes_banco:
@@ -1273,7 +1273,7 @@ def gerar_espelho_md(
         for mov in sorted(pendentes_banco, key=lambda m: m.data):
             marca = " ⚠️" if mov.alerta_valor else ""
             linhas.append(
-                f"| {mov.data:%d/%m/%Y} | {mov.descricao}{marca} | {_fmt_money(mov.valor)} | "
+                f"| {mov.data:%d/%m/%Y} | {mov.descricao}{marca} | {fmt_money(mov.valor)} | "
                 f"{mov.categoria or '-'} | {mov.conta_debito or '**A CONFIRMAR**'} | "
                 f"{mov.conta_credito or '**A CONFIRMAR**'} |"
             )
@@ -1291,14 +1291,14 @@ def gerar_espelho_md(
             "confira estes especificamente antes de importar:"
         )
         for mov in sorted(todos_com_alerta, key=lambda m: m.data):
-            linhas.append(f"- {mov.data:%d/%m/%Y} — {mov.descricao} — {_fmt_money(mov.valor)}")
+            linhas.append(f"- {mov.data:%d/%m/%Y} — {mov.descricao} — {fmt_money(mov.valor)}")
 
     linhas.append("\n## Pendencias lado razao (cheques/depositos em transito - nao aparecem ainda no extrato)")
     if pendentes_razao:
         linhas.append("| Data | Descricao | Valor |")
         linhas.append("|---|---|---:|")
         for mov in sorted(pendentes_razao, key=lambda m: m.data):
-            linhas.append(f"| {mov.data:%d/%m/%Y} | {mov.descricao} | {_fmt_money(mov.valor)} |")
+            linhas.append(f"| {mov.data:%d/%m/%Y} | {mov.descricao} | {fmt_money(mov.valor)} |")
     else:
         linhas.append("_Nenhuma._")
 
@@ -1308,13 +1308,13 @@ def gerar_espelho_md(
     diferenca = round(saldo_conciliado - saldo_final_extrato, 2)
 
     linhas.append("\n## Fechamento de saldo")
-    linhas.append(f"- Saldo final razao: {_fmt_money(saldo_final_razao)}")
-    linhas.append(f"- (+) Cheques pendentes: {_fmt_money(-cheques_pendentes)}")
-    linhas.append(f"- (-) Depositos em transito: {_fmt_money(depositos_transito)}")
-    linhas.append(f"- = Saldo conciliado: {_fmt_money(saldo_conciliado)}")
-    linhas.append(f"- Saldo final extrato: {_fmt_money(saldo_final_extrato)}")
-    status = "OK - fechou com tolerancia ZERO" if diferenca == 0 else f"!!! DIFERENCA DE {_fmt_money(diferenca)} - INVESTIGAR !!!"
-    linhas.append(f"- **DIFERENCA: {_fmt_money(diferenca)} -> {status}**")
+    linhas.append(f"- Saldo final razao: {fmt_money(saldo_final_razao)}")
+    linhas.append(f"- (+) Cheques pendentes: {fmt_money(-cheques_pendentes)}")
+    linhas.append(f"- (-) Depositos em transito: {fmt_money(depositos_transito)}")
+    linhas.append(f"- = Saldo conciliado: {fmt_money(saldo_conciliado)}")
+    linhas.append(f"- Saldo final extrato: {fmt_money(saldo_final_extrato)}")
+    status = "OK - fechou com tolerancia ZERO" if diferenca == 0 else f"!!! DIFERENCA DE {fmt_money(diferenca)} - INVESTIGAR !!!"
+    linhas.append(f"- **DIFERENCA: {fmt_money(diferenca)} -> {status}**")
 
     return "\n".join(linhas)
 
@@ -1585,7 +1585,7 @@ def gerar_saidas(
         print(f"\n!!! {len(sem_conta)} pendencia(s) SEM contrapartida identificada no balancete "
               "- NAO foram incluidas no arquivo de importacao. Confirme manualmente:")
         for mov in sem_conta:
-            print(f"    - {mov.data:%d/%m/%Y}  {mov.descricao}  {_fmt_money(mov.valor)}")
+            print(f"    - {mov.data:%d/%m/%Y}  {mov.descricao}  {fmt_money(mov.valor)}")
     print("\nLembrete: confira o codigo de historico usado (\"{}\") contra a tabela "
           "de historicos padrao do Dominio do escritorio antes de importar.".format(cod_historico or "<em branco>"))
 

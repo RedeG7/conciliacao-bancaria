@@ -95,6 +95,14 @@ def garantir_schema() -> None:
                 ativo BOOLEAN NOT NULL DEFAULT true
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessoes (
+                token TEXT PRIMARY KEY,
+                usuario TEXT NOT NULL REFERENCES usuarios(usuario) ON DELETE CASCADE,
+                criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+                expira_em TIMESTAMPTZ NOT NULL
+            )
+        """)
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +184,60 @@ def autenticar(usuario: str, senha: str) -> Optional[dict]:
 
 def usuario_esta_ativo(dados: dict) -> bool:
     return bool(dados.get("ativo", True))
+
+
+# ---------------------------------------------------------------------------
+# Sessao persistente (cookie) - so pra nao pedir login de novo quando o
+# usuario da F5/atualiza a pagina (que abre uma conexao/sessao Streamlit
+# nova, perdendo o st.session_state). O token fica num cookie no navegador
+# e, server-side, associado ao usuario com prazo de validade - nunca guarda
+# a senha nem nada alem do nome do usuario. Revogavel a qualquer momento
+# (logout apaga o registro; nao fica "logado pra sempre" sem controle).
+# ---------------------------------------------------------------------------
+
+DURACAO_SESSAO_DIAS = 30
+
+
+def criar_sessao(usuario: str) -> str:
+    """Cria uma sessao persistente nova pro usuario e devolve o token (pra
+    gravar no cookie do navegador). De quebra, limpa sessoes ja vencidas -
+    nao precisa de um job separado so pra isso num app de baixo trafego."""
+    token = secrets.token_urlsafe(32)
+    with _conectar() as conn:
+        conn.execute("DELETE FROM sessoes WHERE expira_em < now()")
+        conn.execute(
+            "INSERT INTO sessoes (token, usuario, expira_em) VALUES (%s, %s, now() + %s * interval '1 day')",
+            (token, usuario, DURACAO_SESSAO_DIAS),
+        )
+        conn.commit()
+    return token
+
+
+def validar_sessao(token: str) -> Optional[dict]:
+    """Devolve os dados do usuario dono do token, se a sessao existir, nao
+    tiver vencido, e o usuario continuar ativo - senao None (cookie invalido
+    ou vencido simplesmente nao autentica, sem erro pro usuario)."""
+    if not token:
+        return None
+    with _conectar() as conn:
+        dados = conn.execute(
+            """SELECT u.* FROM sessoes s JOIN usuarios u ON u.usuario = s.usuario
+               WHERE s.token = %s AND s.expira_em > now()""",
+            (token,),
+        ).fetchone()
+    if not dados or not usuario_esta_ativo(dados):
+        return None
+    return dados
+
+
+def remover_sessao(token: str) -> None:
+    """Revoga uma sessao persistente (logout) - o cookie no navegador
+    tambem precisa ser apagado separadamente pelo chamador."""
+    if not token:
+        return
+    with _conectar() as conn:
+        conn.execute("DELETE FROM sessoes WHERE token = %s", (token,))
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------
