@@ -729,7 +729,8 @@ def _resetar_lancamento() -> None:
     balancete, competencia, saldos) pra rodar a proxima competencia -
     mas MANTEM a empresa (cliente) e o modo de arquivo selecionados,
     ja que normalmente e a mesma empresa que vai lancar o mes seguinte
-    (diferente do botao "Nova empresa" do topo, que zera tudo)."""
+    (diferente do botao "Novo lançamento" do topo, que zera tudo,
+    inclusive a empresa, pra comecar outra do zero)."""
     _seq_atual = st.session_state.get("reset_seq", 0)
     _cliente_atual = st.session_state.get(f"sel_cliente_empresa_{_seq_atual}")
     _modo_atual = st.session_state.get(f"radio_modo_arquivos_{_seq_atual}")
@@ -749,8 +750,8 @@ with _titulo_col:
 with _reset_col:
     st.write("")
     if st.button(
-        "🆕 Nova empresa", use_container_width=True, key="btn_nova_empresa_topo",
-        help="Limpa os arquivos e parâmetros preenchidos, pra começar a conciliação de outra empresa do zero.",
+        "🆕 Novo lançamento", use_container_width=True, key="btn_nova_empresa_topo",
+        help="Limpa arquivos, parâmetros e cache, pra começar a conciliação de outra empresa do zero.",
     ):
         _resetar_empresa()
         st.rerun()
