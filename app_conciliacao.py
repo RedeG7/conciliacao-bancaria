@@ -696,6 +696,46 @@ with st.sidebar:
             st.rerun()
     st.divider()
 
+def _resetar_empresa() -> None:
+    """Limpa os arquivos e parametros preenchidos, pra comecar a
+    conciliacao de outra empresa do zero - chamada tanto pelo botao do
+    topo quanto pelo de baixo, perto dos downloads."""
+    _chaves_reset_empresa = [
+        "forcar_escolha_conta",
+        "sel_conta_saida_padrao", "sel_conta_entrada_padrao", "filtro_pendencias",
+        "sel_conta_grupo_filtrado", "historico_ultima_assinatura", "pend_contas_manuais",
+    ]
+    for _chave in _chaves_reset_empresa:
+        st.session_state.pop(_chave, None)
+    # selectboxes individuais de tratativa de pendencia (chave dinamica
+    # por lancamento) - limpa todas de uma vez, nao da pra listar antes.
+    for _chave in list(st.session_state.keys()):
+        if _chave.startswith("sel_ci_"):
+            del st.session_state[_chave]
+    # os 3 file_uploader tem uma peculiaridade do Streamlit: apagar a
+    # chave do session_state sozinho nao limpa visualmente o arquivo ja
+    # selecionado - precisa trocar a propria key do widget (por isso o
+    # contador "reset_seq" usado no key= deles mais abaixo).
+    st.session_state["reset_seq"] = st.session_state.get("reset_seq", 0) + 1
+
+
+def _resetar_lancamento() -> None:
+    """Limpa os arquivos e pendencias do lancamento atual (extrato,
+    balancete, competencia, saldos) pra rodar a proxima competencia -
+    mas MANTEM a empresa (cliente) e o modo de arquivo selecionados,
+    ja que normalmente e a mesma empresa que vai lancar o mes seguinte
+    (diferente do botao "Nova empresa" do topo, que zera tudo)."""
+    _seq_atual = st.session_state.get("reset_seq", 0)
+    _cliente_atual = st.session_state.get(f"sel_cliente_empresa_{_seq_atual}")
+    _modo_atual = st.session_state.get(f"radio_modo_arquivos_{_seq_atual}")
+    _resetar_empresa()
+    _seq_novo = st.session_state.get("reset_seq", 0)
+    if _cliente_atual:
+        st.session_state[f"sel_cliente_empresa_{_seq_novo}"] = _cliente_atual
+    if _modo_atual:
+        st.session_state[f"radio_modo_arquivos_{_seq_novo}"] = _modo_atual
+
+
 _titulo_col, _reset_col = st.columns([5, 1.4])
 with _titulo_col:
     st.title("🏦 Conciliação Bancária Automatizada")
@@ -704,28 +744,10 @@ with _titulo_col:
 with _reset_col:
     st.write("")
     if st.button(
-        "🆕 Nova empresa", use_container_width=True,
+        "🆕 Nova empresa", use_container_width=True, key="btn_nova_empresa_topo",
         help="Limpa os arquivos e parâmetros preenchidos, pra começar a conciliação de outra empresa do zero.",
     ):
-        _chaves_reset_empresa = [
-            "input_competencia", "input_saldo_razao", "input_saldo_extrato",
-            "input_dias_tolerancia", "input_cod_historico", "input_pasta_caminho",
-            "sel_extrato", "sel_razao", "sel_balancete", "sel_conta_banco", "forcar_escolha_conta",
-            "sel_conta_saida_padrao", "sel_conta_entrada_padrao", "filtro_pendencias",
-            "sel_conta_grupo_filtrado", "historico_ultima_assinatura", "pend_contas_manuais",
-        ]
-        for _chave in _chaves_reset_empresa:
-            st.session_state.pop(_chave, None)
-        # selectboxes individuais de tratativa de pendencia (chave dinamica
-        # por lancamento) - limpa todas de uma vez, nao da pra listar antes.
-        for _chave in list(st.session_state.keys()):
-            if _chave.startswith("sel_ci_"):
-                del st.session_state[_chave]
-        # os 3 file_uploader tem uma peculiaridade do Streamlit: apagar a
-        # chave do session_state sozinho nao limpa visualmente o arquivo ja
-        # selecionado - precisa trocar a propria key do widget (por isso o
-        # contador "reset_seq" usado no key= deles mais abaixo).
-        st.session_state["reset_seq"] = st.session_state.get("reset_seq", 0) + 1
+        _resetar_empresa()
         st.rerun()
 
 # Alem dos file_uploader, o selectbox de empresa e o radio de modo de
@@ -823,28 +845,30 @@ with st.sidebar:
         value="",
         placeholder="Ex: 01-2026 — deixe em branco p/ detectar do balancete",
         help="Se deixado em branco, a competência é detectada automaticamente a partir do texto do balancete informado.",
-        key="input_competencia",
+        key=f"input_competencia_{_reset_seq}",
     )
 
     col1, col2 = st.columns(2)
     with col1:
         saldo_inicial_razao = st.number_input(
-            "Saldo inicial razão (R$)", value=0.0, step=0.01, format="%.2f", key="input_saldo_razao",
+            "Saldo inicial razão (R$)", value=0.0, step=0.01, format="%.2f",
+            key=f"input_saldo_razao_{_reset_seq}",
         )
     with col2:
         saldo_inicial_extrato = st.number_input(
-            "Saldo inicial extrato (R$)", value=0.0, step=0.01, format="%.2f", key="input_saldo_extrato",
+            "Saldo inicial extrato (R$)", value=0.0, step=0.01, format="%.2f",
+            key=f"input_saldo_extrato_{_reset_seq}",
         )
 
     with st.expander("Avançado"):
         dias_tolerancia = st.number_input(
             "Dias de tolerância no match (cheques)", value=0, min_value=0, max_value=15,
-            key="input_dias_tolerancia",
+            key=f"input_dias_tolerancia_{_reset_seq}",
         )
         cod_historico = st.text_input(
             "Código de histórico padrão Domínio", value="",
             help="Confirme contra a tabela de históricos do escritório antes de importar.",
-            key="input_cod_historico",
+            key=f"input_cod_historico_{_reset_seq}",
         )
 
 st.divider()
@@ -905,7 +929,7 @@ else:
     )
     pasta_str = st.text_input(
         "Caminho da pasta com os arquivos", placeholder=r"C:\Clientes\EmpresaX\2026-01",
-        key="input_pasta_caminho",
+        key=f"input_pasta_caminho_{_reset_seq}",
     )
     if pasta_str:
         pasta = Path(pasta_str)
@@ -922,7 +946,7 @@ else:
                 opcoes_validas = [f for f in opcoes if f.is_file() and f.suffix.lower() in (".ofx", ".csv", ".pdf")]
                 nomes = ["(selecione)"] + [f.name for f in opcoes_validas]
                 with col:
-                    escolha = st.selectbox(label, nomes, key=f"sel_{categoria}")
+                    escolha = st.selectbox(label, nomes, key=f"sel_{categoria}_{_reset_seq}")
                 if escolha != "(selecione)":
                     return str(pasta / escolha)
                 return None
@@ -998,7 +1022,9 @@ if balancete_path:
             )
             opcoes = contas_balancete if (mostrar_todas or not provaveis) else provaveis
             rotulos = ["(selecione)"] + [f"{c.codigo} — {c.nome}" for c in opcoes]
-            escolha = st.selectbox("Conta banco a conciliar (lida do balancete) *", rotulos, key="sel_conta_banco")
+            escolha = st.selectbox(
+                "Conta banco a conciliar (lida do balancete) *", rotulos, key=f"sel_conta_banco_{_reset_seq}",
+            )
             if escolha != "(selecione)":
                 conta_contabil = opcoes[rotulos.index(escolha) - 1].nome
                 if st.session_state.get("forcar_escolha_conta"):
@@ -1290,7 +1316,7 @@ if pronto:
     st.markdown(espelho_texto)
 
     st.subheader("Downloads")
-    dl1, dl2, dl3 = st.columns(3)
+    dl1, dl2, dl3, dl4 = st.columns(4)
     with dl1:
         st.download_button("⬇ Espelho (.md)", espelho_path.read_bytes(),
                             file_name=espelho_path.name, mime="text/markdown")
@@ -1300,6 +1326,14 @@ if pronto:
     with dl3:
         st.download_button("⬇ Importação Domínio (.txt)", import_path.read_bytes(),
                             file_name=import_path.name, mime="text/plain")
+    with dl4:
+        if st.button(
+            "🆕 Novo lançamento", use_container_width=True, key="btn_novo_lancamento_downloads",
+            help="Limpa extrato, balancete, competência e pendências deste lançamento, pra rodar o "
+                 "próximo (mantém a empresa selecionada).",
+        ):
+            _resetar_lancamento()
+            st.rerun()
 
     st.caption("Antes de importar no Domínio: confira o código de histórico contra a tabela do escritório. "
                "O .txt de importação segue sempre o leiaute de 10 colunas separadas por ';' — pendências "
