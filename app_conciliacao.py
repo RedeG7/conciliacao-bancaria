@@ -94,9 +94,79 @@ _CHAVES_SESSAO_LOGIN = (
 )
 
 
+_COOKIE_SESSAO = "sessao_token"
+
+
+def _https_ativo() -> bool:
+    try:
+        return str(st.context.url or "").startswith("https://")
+    except Exception:
+        return False
+
+
+def _definir_cookie_sessao(token: str, dias: int) -> None:
+    """Grava o token de sessao persistente no cookie do navegador (via um
+    scriptzinho injetado - o Streamlit nao expoe um jeito nativo de setar
+    cookie a partir do Python). Nao e HttpOnly (o Streamlit nao da controle
+    sobre os headers HTTP de resposta pra isso) - fica no mesmo nivel de
+    protecao de localStorage, aceitavel aqui porque o app nao renderiza
+    HTML/JS vindo de outro usuario (sem superficie de XSS entre tenants)."""
+    seguro = "; Secure" if _https_ativo() else ""
+    st.components.v1.html(
+        f"<script>document.cookie = "
+        f"'{_COOKIE_SESSAO}={token}; path=/; max-age={dias * 86400}; SameSite=Lax{seguro}';</script>",
+        height=0,
+    )
+
+
+def _limpar_cookie_sessao() -> None:
+    st.components.v1.html(
+        f"<script>document.cookie = '{_COOKIE_SESSAO}=; path=/; max-age=0; SameSite=Lax';</script>",
+        height=0,
+    )
+
+
+def _agendar_cookie_sessao(acao: str, valor: str = "") -> None:
+    """`st.rerun()` interrompe a execucao do script na hora - se o
+    componente que grava/apaga o cookie fosse renderizado bem antes de um
+    rerun(), o navegador nunca chegaria a rodar aquele JS (a tela e trocada
+    antes). Por isso o pedido de gravar/apagar cookie fica "agendado" no
+    session_state e so e efetivamente renderizado no INICIO do proximo
+    script run (via `_renderizar_cookie_pendente`), depois que o rerun ja
+    aconteceu - mesmo motivo/padrao do `_flash()` pra mensagens de sucesso."""
+    st.session_state["_cookie_pendente"] = (acao, valor)
+
+
+def _renderizar_cookie_pendente() -> None:
+    pendente = st.session_state.pop("_cookie_pendente", None)
+    if not pendente:
+        return
+    acao, valor = pendente
+    if acao == "set":
+        _definir_cookie_sessao(valor, auth.DURACAO_SESSAO_DIAS)
+    elif acao == "clear":
+        _limpar_cookie_sessao()
+
+
+def _popular_sessao(dados: dict, token: Optional[str] = None) -> None:
+    escritorios = auth.carregar_escritorios()
+    eid = dados.get("escritorio_id", "")
+    st.session_state["usuario_logado"] = dados["usuario"]
+    st.session_state["papel_usuario"] = dados.get("papel", auth.PAPEL_USUARIO)
+    st.session_state["nome_usuario"] = dados.get("nome", dados["usuario"])
+    st.session_state["escritorio_id"] = eid
+    st.session_state["escritorio_nome"] = escritorios.get(eid, {}).get("nome", eid)
+    st.session_state["deve_trocar_senha"] = bool(dados.get("deve_trocar_senha"))
+    if token:
+        st.session_state[_COOKIE_SESSAO] = token
+
+
 def _fazer_logout() -> None:
+    auth.remover_sessao(st.session_state.get(_COOKIE_SESSAO, ""))
     for chave in _CHAVES_SESSAO_LOGIN:
         st.session_state.pop(chave, None)
+    st.session_state.pop(_COOKIE_SESSAO, None)
+    _agendar_cookie_sessao("clear")
     st.rerun()
 
 
@@ -125,14 +195,9 @@ def _tela_login() -> None:
             elif not auth.usuario_esta_ativo(dados):
                 st.error("Este usuário está inativo. Fale com o administrador do seu escritório.")
             else:
-                escritorios = auth.carregar_escritorios()
-                eid = dados.get("escritorio_id", "")
-                st.session_state["usuario_logado"] = usuario
-                st.session_state["papel_usuario"] = dados.get("papel", auth.PAPEL_USUARIO)
-                st.session_state["nome_usuario"] = dados.get("nome", usuario)
-                st.session_state["escritorio_id"] = eid
-                st.session_state["escritorio_nome"] = escritorios.get(eid, {}).get("nome", eid)
-                st.session_state["deve_trocar_senha"] = bool(dados.get("deve_trocar_senha"))
+                token = auth.criar_sessao(usuario)
+                _popular_sessao(dados, token=token)
+                _agendar_cookie_sessao("set", token)
                 st.rerun()
 
 
@@ -554,6 +619,19 @@ def _tela_gerenciar_clientes() -> None:
                     st.rerun()
 
 
+_renderizar_cookie_pendente()
+
+if "usuario_logado" not in st.session_state:
+    # antes de exigir login de novo: a pagina pode ter sido so atualizada
+    # (F5), que abre uma conexao Streamlit nova e zera o session_state -
+    # se o navegador ainda tiver um cookie de sessao valido, reloga sem
+    # pedir usuario/senha de novo.
+    _token_cookie = st.context.cookies.get(_COOKIE_SESSAO, "")
+    _dados_cookie = auth.validar_sessao(_token_cookie) if _token_cookie else None
+    if _dados_cookie:
+        _popular_sessao(_dados_cookie, token=_token_cookie)
+        st.rerun()
+
 if "usuario_logado" not in st.session_state:
     _tela_login()
     st.stop()
@@ -618,9 +696,43 @@ with st.sidebar:
             st.rerun()
     st.divider()
 
-st.title("🏦 Conciliação Bancária Automatizada")
-st.caption(f"{st.session_state.get('escritorio_nome')} · "
-           "Extrato/fluxo de caixa × razão contábil × balancete → espelho + arquivo de importação Domínio")
+_titulo_col, _reset_col = st.columns([5, 1.4])
+with _titulo_col:
+    st.title("🏦 Conciliação Bancária Automatizada")
+    st.caption(f"{st.session_state.get('escritorio_nome')} · "
+               "Extrato/fluxo de caixa × razão contábil × balancete → espelho + arquivo de importação Domínio")
+with _reset_col:
+    st.write("")
+    if st.button(
+        "🆕 Nova empresa", use_container_width=True,
+        help="Limpa os arquivos e parâmetros preenchidos, pra começar a conciliação de outra empresa do zero.",
+    ):
+        _chaves_reset_empresa = [
+            "input_competencia", "input_saldo_razao", "input_saldo_extrato",
+            "input_dias_tolerancia", "input_cod_historico", "input_pasta_caminho",
+            "sel_extrato", "sel_razao", "sel_balancete", "sel_conta_banco", "forcar_escolha_conta",
+            "sel_conta_saida_padrao", "sel_conta_entrada_padrao", "filtro_pendencias",
+            "sel_conta_grupo_filtrado", "historico_ultima_assinatura", "pend_contas_manuais",
+        ]
+        for _chave in _chaves_reset_empresa:
+            st.session_state.pop(_chave, None)
+        # selectboxes individuais de tratativa de pendencia (chave dinamica
+        # por lancamento) - limpa todas de uma vez, nao da pra listar antes.
+        for _chave in list(st.session_state.keys()):
+            if _chave.startswith("sel_ci_"):
+                del st.session_state[_chave]
+        # os 3 file_uploader tem uma peculiaridade do Streamlit: apagar a
+        # chave do session_state sozinho nao limpa visualmente o arquivo ja
+        # selecionado - precisa trocar a propria key do widget (por isso o
+        # contador "reset_seq" usado no key= deles mais abaixo).
+        st.session_state["reset_seq"] = st.session_state.get("reset_seq", 0) + 1
+        st.rerun()
+
+# Alem dos file_uploader, o selectbox de empresa e o radio de modo de
+# arquivo tambem sofrem da mesma peculiaridade do Streamlit (apagar a
+# chave do session_state sozinho nao reseta visualmente o valor ja
+# escolhido) - por isso usam o mesmo sufixo "reset_seq" no key= deles.
+_reset_seq = st.session_state.get("reset_seq", 0)
 
 # ---------------------------------------------------------------------------
 # Deteccao automatica de arquivos numa pasta
@@ -664,7 +776,9 @@ with st.sidebar:
     empresa_nome_selecionado: Optional[str] = None
     if _lista_clientes:
         _opcoes_cliente = ["(selecione)"] + [f"{c['nome']} — {c['codigo_dominio']}" for c in _lista_clientes]
-        _escolha_cliente = st.selectbox("Empresa (cliente) *", _opcoes_cliente, key="sel_cliente_empresa")
+        _escolha_cliente = st.selectbox(
+            "Empresa (cliente) *", _opcoes_cliente, key=f"sel_cliente_empresa_{_reset_seq}",
+        )
         if _escolha_cliente != "(selecione)":
             _cliente_sel = _lista_clientes[_opcoes_cliente.index(_escolha_cliente) - 1]
             empresa_codigo = _cliente_sel["codigo_dominio"]
@@ -709,18 +823,29 @@ with st.sidebar:
         value="",
         placeholder="Ex: 01-2026 — deixe em branco p/ detectar do balancete",
         help="Se deixado em branco, a competência é detectada automaticamente a partir do texto do balancete informado.",
+        key="input_competencia",
     )
 
     col1, col2 = st.columns(2)
     with col1:
-        saldo_inicial_razao = st.number_input("Saldo inicial razão (R$)", value=0.0, step=0.01, format="%.2f")
+        saldo_inicial_razao = st.number_input(
+            "Saldo inicial razão (R$)", value=0.0, step=0.01, format="%.2f", key="input_saldo_razao",
+        )
     with col2:
-        saldo_inicial_extrato = st.number_input("Saldo inicial extrato (R$)", value=0.0, step=0.01, format="%.2f")
+        saldo_inicial_extrato = st.number_input(
+            "Saldo inicial extrato (R$)", value=0.0, step=0.01, format="%.2f", key="input_saldo_extrato",
+        )
 
     with st.expander("Avançado"):
-        dias_tolerancia = st.number_input("Dias de tolerância no match (cheques)", value=0, min_value=0, max_value=15)
-        cod_historico = st.text_input("Código de histórico padrão Domínio", value="",
-                                       help="Confirme contra a tabela de históricos do escritório antes de importar.")
+        dias_tolerancia = st.number_input(
+            "Dias de tolerância no match (cheques)", value=0, min_value=0, max_value=15,
+            key="input_dias_tolerancia",
+        )
+        cod_historico = st.text_input(
+            "Código de histórico padrão Domínio", value="",
+            help="Confirme contra a tabela de históricos do escritório antes de importar.",
+            key="input_cod_historico",
+        )
 
 st.divider()
 
@@ -728,7 +853,10 @@ st.divider()
 # Escolha de origem dos arquivos: upload ou pasta
 # ---------------------------------------------------------------------------
 
-modo = st.radio("Como fornecer os arquivos?", ["Upload de arquivos", "Caminho de uma pasta"], horizontal=True)
+modo = st.radio(
+    "Como fornecer os arquivos?", ["Upload de arquivos", "Caminho de uma pasta"],
+    horizontal=True, key=f"radio_modo_arquivos_{_reset_seq}",
+)
 
 extrato_path: Optional[str] = None
 razao_path: Optional[str] = None
@@ -737,6 +865,7 @@ balancete_path: Optional[str] = None
 if "tmpdir" not in st.session_state:
     st.session_state.tmpdir = Path(tempfile.mkdtemp(prefix="conc_upload_"))
 _tmpdir = st.session_state.tmpdir
+_reset_seq = st.session_state.get("reset_seq", 0)
 
 
 def _salvar_upload(uploaded_file, destino_nome: str) -> str:
@@ -748,11 +877,17 @@ def _salvar_upload(uploaded_file, destino_nome: str) -> str:
 if modo == "Upload de arquivos":
     c1, c2, c3 = st.columns(3)
     with c1:
-        up_extrato = st.file_uploader("Extrato / fluxo de caixa", type=["ofx", "csv", "pdf"], key="up_extrato")
+        up_extrato = st.file_uploader(
+            "Extrato / fluxo de caixa", type=["ofx", "csv", "pdf"], key=f"up_extrato_{_reset_seq}",
+        )
     with c2:
-        up_razao = st.file_uploader("Razão contábil da conta (opcional)", type=["csv", "pdf"], key="up_razao")
+        up_razao = st.file_uploader(
+            "Razão contábil da conta (opcional)", type=["csv", "pdf"], key=f"up_razao_{_reset_seq}",
+        )
     with c3:
-        up_balancete = st.file_uploader("Balancete", type=["csv", "pdf"], key="up_balancete")
+        up_balancete = st.file_uploader(
+            "Balancete", type=["csv", "pdf"], key=f"up_balancete_{_reset_seq}",
+        )
 
     if up_extrato:
         extrato_path = _salvar_upload(up_extrato, f"extrato{Path(up_extrato.name).suffix}")
@@ -768,7 +903,10 @@ else:
         "PC — use \"Upload de arquivos\" acima para enviar os arquivos diretamente daqui. Esta opção "
         "só funciona quando o app roda localmente na própria máquina onde os arquivos estão."
     )
-    pasta_str = st.text_input("Caminho da pasta com os arquivos", placeholder=r"C:\Clientes\EmpresaX\2026-01")
+    pasta_str = st.text_input(
+        "Caminho da pasta com os arquivos", placeholder=r"C:\Clientes\EmpresaX\2026-01",
+        key="input_pasta_caminho",
+    )
     if pasta_str:
         pasta = Path(pasta_str)
         if not pasta.is_dir():
@@ -927,6 +1065,29 @@ if pronto:
                  "(sem uma razão prévia para comparar).")
 
     # -----------------------------------------------------------------
+    # `resultado` vem de @st.cache_data (uma COPIA nova a cada rerun) -
+    # entao as escolhas manuais (grupo filtrado / individual) de reruns
+    # anteriores precisam ser reaplicadas aqui, ANTES de contar quantas
+    # pendencias restam, senao o contador nunca desce e cada selecao
+    # dispara um st.rerun() que reaplica de novo -> loop infinito.
+    # -----------------------------------------------------------------
+    def _chave_estavel_mov(idx: int, mov) -> str:
+        return f"{idx}_{mov.data.isoformat()}_{round(mov.valor, 2)}_{hash(mov.descricao)}"
+
+    _idx_por_mov = {id(m): i for i, m in enumerate(resultado.pendentes_banco)}
+    _pend_manuais = st.session_state.setdefault("pend_contas_manuais", {})
+    if _pend_manuais:
+        for _idx_mov, _mov in enumerate(resultado.pendentes_banco):
+            if _mov.status != "conta_nao_identificada":
+                continue
+            _codigo_salvo = _pend_manuais.get(_chave_estavel_mov(_idx_mov, _mov))
+            if _codigo_salvo:
+                cb.aplicar_contrapartida_padrao(
+                    [_mov], resultado.conta_banco,
+                    conta_saida_codigo=_codigo_salvo, conta_entrada_codigo=_codigo_salvo,
+                )
+
+    # -----------------------------------------------------------------
     # Correcao em massa: pendencias sem contrapartida especifica podem
     # receber uma conta padrao (ex.: Fornecedores / Adiantamento de
     # Clientes) aplicada de uma vez a TODAS as saidas/entradas nessa
@@ -972,6 +1133,87 @@ if pronto:
             )
             st.success(f"{qtd_aplicados} pendência(s) resolvida(s) com a conta padrão escolhida — "
                        "já entram no arquivo de importação Domínio abaixo.")
+
+        # -------------------------------------------------------------
+        # Filtro + tratativa agrupada ou individual: a conta padrao acima
+        # so cobre "todas as saidas"/"todas as entradas" de uma vez - aqui
+        # da pra filtrar por descricao (ex.: nome de um fornecedor) e
+        # aplicar uma conta so aquele grupo filtrado, ou linha por linha.
+        # -------------------------------------------------------------
+        pendentes_restantes = [m for m in resultado.pendentes_banco if m.status == "conta_nao_identificada"]
+        if pendentes_restantes:
+            with st.expander(
+                f"🔍 Filtrar e tratar pendências agrupadas ou individualmente "
+                f"({len(pendentes_restantes)} restante(s))"
+            ):
+                filtro = st.text_input(
+                    "Filtrar por descrição (ex.: nome do fornecedor/cliente)",
+                    key="filtro_pendencias",
+                )
+                filtradas = (
+                    [m for m in pendentes_restantes if filtro.strip().lower() in m.descricao.lower()]
+                    if filtro.strip() else pendentes_restantes
+                )
+                st.caption(
+                    f"{len(filtradas)} pendência(s) encontrada(s)"
+                    + (" com esse filtro." if filtro.strip() else ".")
+                )
+
+                if filtradas:
+                    st.markdown("**Aplicar uma conta a todas as pendências filtradas de uma vez (agrupado):**")
+                    cg1, cg2 = st.columns([3, 1])
+                    with cg1:
+                        escolha_grupo = st.selectbox(
+                            "Conta para o grupo filtrado", rotulos_contas, key="sel_conta_grupo_filtrado",
+                        )
+                    with cg2:
+                        st.write("")
+                        aplicar_grupo = st.button("Aplicar ao grupo")
+                    if aplicar_grupo:
+                        if escolha_grupo == "(não atribuir)":
+                            st.error("Escolha uma conta antes de aplicar ao grupo.")
+                        else:
+                            codigo_grupo = escolha_grupo.split(" — ")[0]
+                            for _mov_grupo in filtradas:
+                                _chave = _chave_estavel_mov(_idx_por_mov[id(_mov_grupo)], _mov_grupo)
+                                _pend_manuais[_chave] = codigo_grupo
+                            qtd_grupo = cb.aplicar_contrapartida_padrao(
+                                filtradas, resultado.conta_banco,
+                                conta_saida_codigo=codigo_grupo, conta_entrada_codigo=codigo_grupo,
+                            )
+                            st.success(f"{qtd_grupo} pendência(s) do grupo filtrado resolvida(s).")
+                            st.rerun()
+
+                    st.markdown("**Ou tratar uma pendência por vez (individual):**")
+                    _LIMITE_INDIVIDUAL = 30
+                    if len(filtradas) > _LIMITE_INDIVIDUAL:
+                        st.caption(
+                            f"{len(filtradas)} pendência(s) é demais para tratar uma a uma na tela — "
+                            f"use o filtro acima para reduzir a lista a {_LIMITE_INDIVIDUAL} ou menos "
+                            "(ou aplique ao grupo filtrado acima)."
+                        )
+                    else:
+                        for _idx_ind, mov in enumerate(filtradas):
+                            chave_ind = f"sel_ci_{_idx_ind}_{hash((mov.data, round(mov.valor, 2), mov.descricao))}"
+                            ci1, ci2, ci3 = st.columns([2, 3, 3])
+                            with ci1:
+                                st.caption(f"{mov.data:%d/%m/%Y} · {cb.fmt_money(mov.valor)}")
+                            with ci2:
+                                st.caption(mov.descricao[:70])
+                            with ci3:
+                                escolha_ind = st.selectbox(
+                                    "Conta", rotulos_contas, key=chave_ind, label_visibility="collapsed",
+                                )
+                            if escolha_ind != "(não atribuir)":
+                                codigo_ind = escolha_ind.split(" — ")[0]
+                                _chave_ind_estavel = _chave_estavel_mov(_idx_por_mov[id(mov)], mov)
+                                if _pend_manuais.get(_chave_ind_estavel) != codigo_ind:
+                                    _pend_manuais[_chave_ind_estavel] = codigo_ind
+                                    cb.aplicar_contrapartida_padrao(
+                                        [mov], resultado.conta_banco,
+                                        conta_saida_codigo=codigo_ind, conta_entrada_codigo=codigo_ind,
+                                    )
+                                    st.rerun()
 
     log_saidas = []
     _print_original = print
