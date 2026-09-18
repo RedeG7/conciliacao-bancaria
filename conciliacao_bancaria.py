@@ -231,6 +231,16 @@ _PDF_TRANSACAO_TIPO_RE = re.compile(
 _PDF_TRANSACAO_SEM_TIPO_RE = re.compile(
     r'^"(?P<desc>.*?)"\s+(?P<sinal>-)?R\$\s*(?P<valor>[\d.]+,\d{2})\s+-?R\$\s*[\d.,]+\s*$'
 )
+# algumas linhas do Inter nao tem nem "Tipo:" nem aspas na descricao (ex.:
+# "DARF NUMERADO -R$ 85.908,75 -R$ 87.277,16", "Estorno Pagamento de
+# titulo R$ 4.044,00 R$ 5.536,36") - sem esse padrao essas transacoes
+# somem silenciosamente (nao batem em nenhum dos outros 2). A checagem
+# "R$" not in desc evita que a linha de resumo do topo ("R$ 8.249,13 R$
+# 8.249,13 R$ 0,00") vire uma transacao fantasma caso o guard de
+# data_atual (linha antes de qualquer cabecalho de dia) nao seja suficiente.
+_PDF_TRANSACAO_SIMPLES_RE = re.compile(
+    r'^(?P<desc>[^":]+?)\s+(?P<sinal>-)?R\$\s*(?P<valor>[\d.]+,\d{2})\s+-?R\$\s*[\d.,]+\s*$'
+)
 
 
 def _parse_pdf_linhas_data_valor(paginas_texto: List[str], origem: str) -> List[Movimento]:
@@ -276,6 +286,10 @@ def _parse_pdf_extrato_dia_agrupado(paginas_texto: List[str], origem: str) -> Li
                 continue
 
             m_trans = _PDF_TRANSACAO_TIPO_RE.match(line) or _PDF_TRANSACAO_SEM_TIPO_RE.match(line)
+            if not m_trans:
+                m_simples = _PDF_TRANSACAO_SIMPLES_RE.match(line)
+                if m_simples and "R$" not in m_simples.group("desc"):
+                    m_trans = m_simples
             if m_trans and data_atual:
                 sinal = m_trans.group("sinal") or ""
                 valor = _parse_valor_br(f"{sinal}{m_trans.group('valor')}")
