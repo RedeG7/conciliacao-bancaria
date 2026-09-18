@@ -863,6 +863,12 @@ _BAL_LINE_RE = re.compile(
 
 _TOKEN_MONETARIO_RE = re.compile(r"^\(?-?\d{1,3}(?:\.\d{3})*,\d{2}\)?[DC]?$", re.IGNORECASE)
 
+# usado quando so da pra recuperar codigo+classificacao de uma linha de
+# balancete com sobreposicao de texto complexa demais - o nome real fica
+# ilegivel, mas ainda assim marcamos com esse texto (nunca inventando um
+# nome) pra conta aparecer na lista pra vincular por codigo.
+NOME_ILEGIVEL_BALANCETE = "⚠️ Nome não identificado (texto sobreposto no PDF de origem - confira o balancete)"
+
 
 def _limpar_nome_conta(nome: str) -> str:
     """Balancetes reais em PDF trazem saldo anterior/debito/credito/saldo
@@ -925,6 +931,8 @@ def _reparar_linhas_balancete_sobrepostas(page, linhas_texto: List[str]) -> List
     if not pendentes:
         return resultado
 
+    codigos_recuperados: List[str] = []
+
     for chars_linha in chars_por_linha.values():
         chars_ordenados = sorted(chars_linha, key=lambda c: c["x0"])
         texto_natural = "".join(c["text"] for c in chars_ordenados).strip()
@@ -940,6 +948,7 @@ def _reparar_linhas_balancete_sobrepostas(page, linhas_texto: List[str]) -> List
                 continue
             prefixo = [c for c in chars_ordenados if c["x0"] < 100]
             resto = [c for c in chars_ordenados if c["x0"] >= 100]
+            reparada = False
             if prefixo and resto:
                 estreitos = sorted((c for c in prefixo if c["text"] != " " and (c["x1"] - c["x0"]) < 4.5), key=lambda c: c["x0"])
                 largos = sorted((c for c in prefixo if c["text"] != " " and (c["x1"] - c["x0"]) >= 4.5), key=lambda c: c["x0"])
@@ -949,8 +958,44 @@ def _reparar_linhas_balancete_sobrepostas(page, linhas_texto: List[str]) -> List
                     linha_reparada = f"{texto_estreito} {texto_resto}".strip()
                     if _BAL_LINE_RE.match(linha_reparada):
                         resultado[i] = linha_reparada
+                        reparada = True
+            if not reparada:
+                # Sobreposicao complexa demais pra separar codigo/nome com
+                # confianca (ex.: a cadeia do nome comeca ANTES do codigo,
+                # nao so depois) - mas os digitos do codigo/classificacao,
+                # tomados so entre si (ignorando as letras intercaladas),
+                # mantem a ordem e o espacamento reais entre eles, entao
+                # ainda da pra recuperar SO codigo+classificacao com
+                # confianca (o nome, esse sim, fica ilegivel e marcado como
+                # tal - nunca inventado). Sem isso a conta simplesmente
+                # sumiria da lista pra vincular, sem nenhum aviso.
+                digitos = [
+                    c for c in chars_ordenados
+                    if c["text"] != " " and (c["text"].isdigit() or c["text"] == ".")
+                ]
+                tokens = _juntar_com_espacos(digitos).split()
+                if (
+                    len(tokens) >= 2 and tokens[0].isdigit()
+                    and re.match(r"^\d+(\.\d+)+$", tokens[1])
+                ):
+                    linha_reparada = f"{tokens[0]} {tokens[1]} {NOME_ILEGIVEL_BALANCETE}"
+                    if _BAL_LINE_RE.match(linha_reparada):
+                        resultado[i] = linha_reparada
+                        codigos_recuperados.append(tokens[0])
             pendentes.discard(i)
             break
+
+    if codigos_recuperados:
+        # print() puro (sem passar pelo NOME_ILEGIVEL_BALANCETE, que tem
+        # emoji) pra nao depender da codificacao do console/log onde o app
+        # estiver rodando - o aviso COM emoji continua aparecendo pro
+        # usuario normalmente, so nao no nome da conta em si.
+        print(f"!!! {len(codigos_recuperados)} conta(s) do balancete tem nome de conta comprido "
+              "demais e ficou sobreposto no PDF de origem - o codigo foi recuperado mas o nome "
+              "nao pode ser lido com confianca (aparece marcado como nao identificado na lista "
+              "de contas). Confira o nome real no balancete original antes de vincular: "
+              + ", ".join(codigos_recuperados))
+
     return resultado
 
 

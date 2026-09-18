@@ -959,6 +959,16 @@ if balancete_path:
         st.error(f"Erro ao ler o balancete: {exc}")
         contas_balancete = []
 
+    _contas_nome_ilegivel = [c for c in contas_balancete if c.nome == cb.NOME_ILEGIVEL_BALANCETE]
+    if _contas_nome_ilegivel:
+        st.warning(
+            f"⚠️ {len(_contas_nome_ilegivel)} conta(s) do balancete têm o nome comprido demais e "
+            "ficaram sobrepostas no PDF de origem — o código foi recuperado, mas o nome não pôde "
+            "ser lido com confiança (aparecem como \"não identificado\" na lista de contas abaixo). "
+            "Confira o nome real no balancete original pela classificação antes de vincular: "
+            + ", ".join(f"{c.codigo} ({c.classificacao})" for c in _contas_nome_ilegivel)
+        )
+
     if contas_balancete:
         conta_auto = None
         if extrato_path:
