@@ -457,6 +457,103 @@ def _tela_historico() -> None:
         )
 
 
+def _tela_gerenciar_clientes() -> None:
+    """Tela dedicada para gerenciar os clientes (empresas) cadastrados:
+    cadastrar, editar nome/código e remover. Disponível pra qualquer
+    usuário logado (é só referência de negócio, não dado sensível) -
+    super_admin_global escolhe qual escritório ver; os demais só enxergam
+    o próprio. Remoção fica restrita a admin_escritorio/super_admin_global
+    pra evitar que alguém apague por engano um código usado por outros."""
+    st.title("🏢 Gerenciar Clientes")
+    if st.button("← Voltar à conciliação"):
+        st.session_state["tela"] = "conciliacao"
+        st.rerun()
+    st.divider()
+
+    eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
+    pode_remover = st.session_state.get("papel_usuario") in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO)
+
+    if eh_global:
+        escritorios = auth.carregar_escritorios()
+        if not escritorios:
+            st.info("Nenhum escritório cadastrado ainda.")
+            return
+        escritorio_visto = st.selectbox(
+            "Escritório",
+            list(escritorios.keys()),
+            format_func=lambda eid: escritorios.get(eid, {}).get("nome", eid),
+            index=list(escritorios.keys()).index(st.session_state.get("escritorio_id"))
+            if st.session_state.get("escritorio_id") in escritorios else 0,
+        )
+    else:
+        escritorio_visto = st.session_state.get("escritorio_id")
+        st.caption(f"Escritório: **{st.session_state.get('escritorio_nome')}**")
+
+    st.subheader("Cadastrar cliente")
+    _flash("flash_gerenciar_cliente")
+    with st.form("gerenciar_cliente_form", clear_on_submit=True):
+        novo_nome = st.text_input("Nome do cliente")
+        novo_codigo = st.text_input("Código da empresa no Domínio")
+        salvar = st.form_submit_button("Cadastrar", type="primary")
+    if salvar:
+        if not novo_nome.strip() or not novo_codigo.strip():
+            st.error("Informe nome e código da empresa.")
+        else:
+            ok, msg = clientes.criar_cliente(escritorio_visto, novo_nome.strip(), novo_codigo.strip())
+            if ok:
+                _flash("flash_gerenciar_cliente", f"✅ {msg}")
+                st.rerun()
+            else:
+                st.error(msg)
+
+    st.divider()
+    lista = clientes.listar_clientes(escritorio_visto)
+    st.subheader(f"Clientes cadastrados ({len(lista)})")
+
+    if not lista:
+        st.info("Nenhum cliente cadastrado neste escritório ainda.")
+        return
+
+    for c in lista:
+        aberto = bool(st.session_state.get(f"aberto_cliente_{c['id']}"))
+        with st.expander(f"{c['nome']} — {c['codigo_dominio']}", expanded=aberto):
+            with st.form(f"editar_cliente_{c['id']}_form"):
+                nome_edit = st.text_input("Nome", value=c["nome"], key=f"nome_cliente_{c['id']}")
+                codigo_edit = st.text_input(
+                    "Código da empresa no Domínio", value=c["codigo_dominio"], key=f"codigo_cliente_{c['id']}"
+                )
+                salvar_edit = st.form_submit_button("💾 Salvar alterações")
+            if salvar_edit:
+                if not nome_edit.strip() or not codigo_edit.strip():
+                    st.error("Nome e código não podem ficar em branco.")
+                    st.session_state[f"aberto_cliente_{c['id']}"] = True
+                else:
+                    ok, msg = clientes.atualizar_cliente(
+                        c["id"], escritorio_visto, nome_edit.strip(), codigo_edit.strip()
+                    )
+                    if ok:
+                        _flash("flash_gerenciar_cliente", f"✅ {msg}")
+                        st.session_state[f"aberto_cliente_{c['id']}"] = False
+                        st.rerun()
+                    else:
+                        st.error(msg)
+                        st.session_state[f"aberto_cliente_{c['id']}"] = True
+
+            if pode_remover:
+                confirmar = st.checkbox(
+                    "Confirmar remoção definitiva", key=f"confirmar_remover_cliente_{c['id']}"
+                )
+                if confirmar:
+                    st.session_state[f"aberto_cliente_{c['id']}"] = True
+                if st.button(
+                    "🗑️ Remover definitivamente", key=f"remover_cliente_{c['id']}", disabled=not confirmar,
+                ):
+                    clientes.remover_cliente(c["id"], escritorio_visto)
+                    st.session_state[f"aberto_cliente_{c['id']}"] = False
+                    _flash("flash_gerenciar_cliente", f"✅ Cliente '{c['nome']}' removido.")
+                    st.rerun()
+
+
 if "usuario_logado" not in st.session_state:
     _tela_login()
     st.stop()
@@ -490,6 +587,10 @@ if st.session_state.get("tela") == "historico":
         _tela_historico()
         st.stop()
 
+if st.session_state.get("tela") == "gerenciar_clientes":
+    _tela_gerenciar_clientes()
+    st.stop()
+
 with st.sidebar:
     st.caption(f"👤 {st.session_state.get('nome_usuario')} · {st.session_state.get('papel_usuario')}")
     st.caption(f"🏢 {st.session_state.get('escritorio_nome')}")
@@ -501,6 +602,9 @@ with st.sidebar:
     with csb2:
         if st.button("Sair", use_container_width=True):
             _fazer_logout()
+    if st.button("🏢 Gerenciar Clientes", use_container_width=True):
+        st.session_state["tela"] = "gerenciar_clientes"
+        st.rerun()
     if st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL:
         if st.button("🌐 Gerenciar Escritórios", use_container_width=True):
             st.session_state["tela"] = "gerenciar_escritorios"
