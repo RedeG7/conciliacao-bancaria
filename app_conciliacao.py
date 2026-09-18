@@ -704,6 +704,7 @@ def _resetar_empresa() -> None:
         "forcar_escolha_conta",
         "sel_conta_saida_padrao", "sel_conta_entrada_padrao", "filtro_pendencias",
         "sel_conta_grupo_filtrado", "historico_ultima_assinatura", "pend_contas_manuais",
+        "pagina_pendencias_individual",
     ]
     for _chave in _chaves_reset_empresa:
         st.session_state.pop(_chave, None)
@@ -717,6 +718,10 @@ def _resetar_empresa() -> None:
     # selecionado - precisa trocar a propria key do widget (por isso o
     # contador "reset_seq" usado no key= deles mais abaixo).
     st.session_state["reset_seq"] = st.session_state.get("reset_seq", 0) + 1
+    # limpa o cache de processamento (@st.cache_data) tambem - garante que
+    # a proxima conciliacao roda 100% do zero, sem reaproveitar nenhum
+    # resultado (balancete/conta banco/conciliacao) calculado antes.
+    st.cache_data.clear()
 
 
 def _resetar_lancamento() -> None:
@@ -1221,35 +1226,54 @@ if pronto:
                             st.rerun()
 
                     st.markdown("**Ou tratar uma pendência por vez (individual):**")
-                    _LIMITE_INDIVIDUAL = 30
-                    if len(filtradas) > _LIMITE_INDIVIDUAL:
-                        st.caption(
-                            f"{len(filtradas)} pendência(s) é demais para tratar uma a uma na tela — "
-                            f"use o filtro acima para reduzir a lista a {_LIMITE_INDIVIDUAL} ou menos "
-                            "(ou aplique ao grupo filtrado acima)."
-                        )
+                    # Renderizar um st.selectbox com TODO o plano de contas pra
+                    # cada pendencia de uma vez trava a tela por minutos quando
+                    # ha centenas delas - por isso so mostra ate 30 por pagina
+                    # (nao um limite bloqueante: da pra folhear todas as
+                    # pendencias, filtradas ou nao, 30 em 30).
+                    _PAGINA_TAMANHO = 30
+                    _total_paginas = max(1, -(-len(filtradas) // _PAGINA_TAMANHO))
+                    _chave_pagina = "pagina_pendencias_individual"
+                    if st.session_state.get(_chave_pagina, 1) > _total_paginas:
+                        st.session_state[_chave_pagina] = _total_paginas
+                    if _total_paginas > 1:
+                        _pc1, _pc2 = st.columns([1, 3])
+                        with _pc1:
+                            _pagina_atual = st.number_input(
+                                "Página", min_value=1, max_value=_total_paginas, step=1,
+                                key=_chave_pagina,
+                            )
+                        with _pc2:
+                            st.write("")
+                            st.caption(f"{len(filtradas)} pendência(s) no total — {_PAGINA_TAMANHO} por página "
+                                       f"({_total_paginas} página(s)).")
                     else:
-                        for _idx_ind, mov in enumerate(filtradas):
-                            chave_ind = f"sel_ci_{_idx_ind}_{hash((mov.data, round(mov.valor, 2), mov.descricao))}"
-                            ci1, ci2, ci3 = st.columns([2, 3, 3])
-                            with ci1:
-                                st.caption(f"{mov.data:%d/%m/%Y} · {cb.fmt_money(mov.valor)}")
-                            with ci2:
-                                st.caption(mov.descricao[:70])
-                            with ci3:
-                                escolha_ind = st.selectbox(
-                                    "Conta", rotulos_contas, key=chave_ind, label_visibility="collapsed",
+                        _pagina_atual = 1
+                    _inicio_pagina = (_pagina_atual - 1) * _PAGINA_TAMANHO
+                    for _idx_ind, mov in enumerate(filtradas[_inicio_pagina:_inicio_pagina + _PAGINA_TAMANHO]):
+                        chave_ind = (
+                            f"sel_ci_{_inicio_pagina + _idx_ind}_"
+                            f"{hash((mov.data, round(mov.valor, 2), mov.descricao))}"
+                        )
+                        ci1, ci2, ci3 = st.columns([2, 3, 3])
+                        with ci1:
+                            st.caption(f"{mov.data:%d/%m/%Y} · {cb.fmt_money(mov.valor)}")
+                        with ci2:
+                            st.caption(mov.descricao[:70])
+                        with ci3:
+                            escolha_ind = st.selectbox(
+                                "Conta", rotulos_contas, key=chave_ind, label_visibility="collapsed",
+                            )
+                        if escolha_ind != "(não atribuir)":
+                            codigo_ind = escolha_ind.split(" — ")[0]
+                            _chave_ind_estavel = _chave_estavel_mov(_idx_por_mov[id(mov)], mov)
+                            if _pend_manuais.get(_chave_ind_estavel) != codigo_ind:
+                                _pend_manuais[_chave_ind_estavel] = codigo_ind
+                                cb.aplicar_contrapartida_padrao(
+                                    [mov], resultado.conta_banco,
+                                    conta_saida_codigo=codigo_ind, conta_entrada_codigo=codigo_ind,
                                 )
-                            if escolha_ind != "(não atribuir)":
-                                codigo_ind = escolha_ind.split(" — ")[0]
-                                _chave_ind_estavel = _chave_estavel_mov(_idx_por_mov[id(mov)], mov)
-                                if _pend_manuais.get(_chave_ind_estavel) != codigo_ind:
-                                    _pend_manuais[_chave_ind_estavel] = codigo_ind
-                                    cb.aplicar_contrapartida_padrao(
-                                        [mov], resultado.conta_banco,
-                                        conta_saida_codigo=codigo_ind, conta_entrada_codigo=codigo_ind,
-                                    )
-                                    st.rerun()
+                                st.rerun()
 
     log_saidas = []
     _print_original = print
