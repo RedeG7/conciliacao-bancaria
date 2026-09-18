@@ -211,6 +211,15 @@ _PDF_LINHA_DATA_VALOR_RE = re.compile(
     r"(\d{2}/\d{2}/\d{4})\s+(.+?)\s+(-?\(?R?\$?\s?-?\d{1,3}(?:\.\d{3})*,\d{2}\)?)\s*$"
 )
 
+# checkpoints de saldo (nao sao lancamentos) que por acaso batem no mesmo
+# padrao "data ... valor" de varios bancos (ex.: "DD/MM/AAAA Saldo do dia
+# R$ X,XX") - excluidos de qualquer parser de linha unica, senao viram
+# transacoes fantasma com o valor do saldo em vez do lancamento.
+_LINHA_CHECKPOINT_RE = re.compile(
+    r"\bsaldo\s+(do\s+dia|anterior|final|inicial|em\s+conta|dispon[íi]vel|bloqueado)\b",
+    re.IGNORECASE,
+)
+
 _PDF_DIA_EXTENSO_RE = re.compile(
     r"^(?P<dia>\d{1,2})\s+de\s+(?P<mes>[A-Za-zçÇãÃéÉêÊ]+)\s+de\s+(?P<ano>\d{4})\b",
     re.IGNORECASE,
@@ -230,7 +239,10 @@ def _parse_pdf_linhas_data_valor(paginas_texto: List[str], origem: str) -> List[
     movimentos = []
     for texto in paginas_texto:
         for line in texto.splitlines():
-            m = _PDF_LINHA_DATA_VALOR_RE.search(line.strip())
+            line = line.strip()
+            if _LINHA_CHECKPOINT_RE.search(line):
+                continue
+            m = _PDF_LINHA_DATA_VALOR_RE.search(line)
             if not m:
                 continue
             data = _parse_data_br(m.group(1))
@@ -270,6 +282,291 @@ def _parse_pdf_extrato_dia_agrupado(paginas_texto: List[str], origem: str) -> Li
                 tipo = m_trans.groupdict().get("tipo")
                 desc = f"{tipo.strip()}: {m_trans.group('desc').strip()}" if tipo else m_trans.group("desc").strip()
                 movimentos.append(Movimento(data=data_atual, valor=valor, descricao=desc, origem=origem))
+    return movimentos
+
+
+_NU_MESES = {
+    "JAN": 1, "FEV": 2, "MAR": 3, "ABR": 4, "MAI": 5, "JUN": 6,
+    "JUL": 7, "AGO": 8, "SET": 9, "OUT": 10, "NOV": 11, "DEZ": 12,
+}
+_NU_DIA_TOTAL_RE = re.compile(
+    r"^(?P<dia>\d{1,2})\s+(?P<mes>[A-ZÇ]{3})\s+(?P<ano>\d{4})\s+"
+    r"Total\s+de\s+(?P<tipo>entradas|sa[íi]das)\s+[+-]\s*[\d.,]+\s*$",
+    re.IGNORECASE,
+)
+_NU_TOTAL_RE = re.compile(
+    r"^Total\s+de\s+(?P<tipo>entradas|sa[íi]das)\s+[+-]\s*[\d.,]+\s*$", re.IGNORECASE,
+)
+_NU_SALDO_DIA_RE = re.compile(r"^Saldo do dia\b", re.IGNORECASE)
+_NU_LINHA_VALOR_RE = re.compile(r"^(?P<desc>.+?)\s+(?P<valor>\d{1,3}(?:\.\d{3})*,\d{2})\s*$")
+
+
+def _parse_pdf_nubank(paginas_texto: List[str], origem: str) -> List[Movimento]:
+    """Layout do extrato PDF do Nubank PJ: bloco por dia 'DD MES AAAA Total
+    de entradas/saidas +/-total', com um sub-cabecalho 'Total de
+    entradas/saidas' repetido quando o dia tem os dois tipos - o sinal de
+    cada lancamento (nao vem escrito na linha) e o da secao vigente
+    (entradas=positivo, saidas=negativo). 'Saldo do dia' e um checkpoint,
+    nao uma transacao. Processa todas as paginas como um unico fluxo (nao
+    ha garantia de que um dia sempre feche exatamente na quebra de
+    pagina)."""
+    todas_linhas: List[str] = []
+    for texto in paginas_texto:
+        todas_linhas.extend(texto.splitlines())
+
+    movimentos: List[Movimento] = []
+    data_atual: Optional[dt.date] = None
+    sinal_atual = 1
+
+    for linha in todas_linhas:
+        linha = linha.strip()
+        if not linha:
+            continue
+
+        m_dia = _NU_DIA_TOTAL_RE.match(linha)
+        if m_dia:
+            mes = _NU_MESES.get(m_dia.group("mes").upper())
+            if mes:
+                try:
+                    data_atual = dt.date(int(m_dia.group("ano")), mes, int(m_dia.group("dia")))
+                except ValueError:
+                    data_atual = None
+            sinal_atual = 1 if m_dia.group("tipo").lower().startswith("entrada") else -1
+            continue
+
+        m_tot = _NU_TOTAL_RE.match(linha)
+        if m_tot:
+            sinal_atual = 1 if m_tot.group("tipo").lower().startswith("entrada") else -1
+            continue
+
+        if _NU_SALDO_DIA_RE.match(linha):
+            continue
+
+        m_val = _NU_LINHA_VALOR_RE.match(linha)
+        if m_val and data_atual:
+            desc = m_val.group("desc").strip()
+            if _LINHA_CHECKPOINT_RE.search(desc):
+                continue
+            valor = sinal_atual * _parse_valor_br(m_val.group("valor"))
+            movimentos.append(Movimento(data=data_atual, valor=valor, descricao=desc, origem=origem))
+    return movimentos
+
+
+_C6_ANO_RE = re.compile(
+    r"\bde\s+(?:janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|"
+    r"outubro|novembro|dezembro)\s+de\s+(\d{4})\b", re.IGNORECASE,
+)
+_C6_LINHA_RE = re.compile(
+    r"^\d{2}/\d{2}\s+(?P<dia>\d{2})/(?P<mes>\d{2})\s+(?P<desc>.+?)\s+"
+    r"(?P<sinal>-)?R\$\s*(?P<valor>\d{1,3}(?:\.\d{3})*,\d{2})\s*$"
+)
+
+
+def _parse_pdf_c6(paginas_texto: List[str], origem: str) -> List[Movimento]:
+    """Layout do extrato PDF do C6 Bank: uma linha por lancamento 'DD/MM
+    DD/MM [Tipo] Descricao [-]R$ valor' (a 2a data e a 'data contabil',
+    igual a primeira na pratica) - sem sinal explicito quando e credito.
+    O ano nao aparece na linha da transacao, so no cabecalho do periodo
+    ('...ate DD de MES de AAAA'), entao e extraido uma vez do texto todo
+    e aplicado a todos os lancamentos."""
+    texto_completo = "\n".join(paginas_texto)
+    m_ano = _C6_ANO_RE.search(texto_completo)
+    ano = int(m_ano.group(1)) if m_ano else dt.date.today().year
+
+    movimentos: List[Movimento] = []
+    for texto in paginas_texto:
+        for linha in texto.splitlines():
+            linha = linha.strip()
+            if not linha:
+                continue
+            m = _C6_LINHA_RE.match(linha)
+            if not m:
+                continue
+            try:
+                data = dt.date(ano, int(m.group("mes")), int(m.group("dia")))
+            except ValueError:
+                continue
+            sinal = m.group("sinal") or ""
+            valor = _parse_valor_br(f"{sinal}{m.group('valor')}")
+            desc = m.group("desc").strip()
+            movimentos.append(Movimento(data=data, valor=valor, descricao=desc, origem=origem))
+    return movimentos
+
+
+_CORA_DIA_RE = re.compile(r"^(?P<dia>\d{2})/(?P<mes>\d{2})/(?P<ano>\d{4})\s+Saldo do dia\b", re.IGNORECASE)
+_CORA_LINHA_RE = re.compile(
+    r"^(?P<desc>.+?)\s+(?P<sinal>[+-])\s*R\$\s*(?P<valor>\d{1,3}(?:\.\d{3})*,\d{2})\s*$"
+)
+
+
+def _parse_pdf_cora(paginas_texto: List[str], origem: str) -> List[Movimento]:
+    """Layout do extrato PDF da Cora: ordem cronologica REVERSA (mais
+    recente primeiro), agrupado por dia via a linha 'DD/MM/AAAA Saldo do
+    dia R$ valor' (um checkpoint - o saldo e o do FINAL daquele dia, nao
+    uma transacao). As transacoes do dia vem logo depois, cada uma com
+    sinal explicito (+/- antes de R$). Um bloco de dia pode continuar
+    depois de uma quebra de pagina, entao processa tudo como um so
+    fluxo (sem resetar a data a cada pagina)."""
+    movimentos: List[Movimento] = []
+    data_atual: Optional[dt.date] = None
+    for texto in paginas_texto:
+        for linha in texto.splitlines():
+            linha = linha.strip()
+            if not linha:
+                continue
+            m_dia = _CORA_DIA_RE.match(linha)
+            if m_dia:
+                try:
+                    data_atual = dt.date(int(m_dia.group("ano")), int(m_dia.group("mes")), int(m_dia.group("dia")))
+                except ValueError:
+                    data_atual = None
+                continue
+            m = _CORA_LINHA_RE.match(linha)
+            if m and data_atual:
+                sinal = m.group("sinal")
+                valor = _parse_valor_br(f"{'-' if sinal == '-' else ''}{m.group('valor')}")
+                desc = m.group("desc").strip()
+                movimentos.append(Movimento(data=data_atual, valor=valor, descricao=desc, origem=origem))
+    return movimentos
+
+
+_SICOOB_ANO_RE = re.compile(r"Periodo:\s*\d{2}/\d{2}/(\d{4})", re.IGNORECASE)
+# decimais aceita 2-3 digitos: OCR as vezes gruda um digito extra depois da
+# virgula (ex.: "3.631,517" em vez de "3.631,51") - sem essa tolerancia o
+# regex simplesmente nao bate e a transacao inteira some, virando texto de
+# continuacao da transacao anterior (silencioso e muito pior que sinalizar
+# pra conferencia manual - ver _sicoob_valor_com_alerta).
+_SICOOB_LINHA_RE = re.compile(
+    r"^(?P<dia>\d{2})/(?P<mes>\d{2})(?:/(?P<ano>\d{4}))?\s+"
+    r"(?P<desc>.+?)\s+"
+    r"(?:R\$\s*)?(?P<valor>\d{1,3}(?:\.\d{3})*,\d{2,3})?(?P<cd>[CD])?\s*$"
+)
+_SICOOB_VALOR_SOLTO_RE = re.compile(r"^(?P<valor>\d{1,3}(?:\.\d{3})*,\d{2,3})(?P<cd>[CD])\s*$")
+
+
+def _sicoob_valor_com_alerta(valor_str: str) -> Tuple[float, Optional[str]]:
+    """Converte o valor lido, tolerando o digito extra apos a virgula que o
+    OCR as vezes gruda (ver comentario acima) - usa so os 2 primeiros
+    digitos decimais (nunca inventa qual e o valor certo) e devolve um
+    alerta pra revisao manual quando isso acontece."""
+    inteiro, _, decimais = valor_str.rpartition(",")
+    if len(decimais) > 2:
+        valor = _parse_valor_br(f"{inteiro},{decimais[:2]}")
+        alerta = (
+            f"⚠️ OCR: valor lido com dígito(s) extra(s) após a vírgula ('{valor_str}') - "
+            f"usei os 2 primeiros decimais ({decimais[:2]}); confira contra o extrato original."
+        )
+        return valor, alerta
+    return _parse_valor_br(valor_str), None
+
+
+def _parse_pdf_sicoob(paginas_linhas: List[List[str]], origem: str) -> List[Movimento]:
+    """Layout do extrato PDF do Sicoob (SISBR): cada lancamento comeca numa
+    linha 'DD/MM[/AAAA] [documento] descricao [R$] valorC|D' (credito/
+    debito colado no valor, sem espaco) e pode continuar em linhas soltas
+    seguintes (favorecido, CNPJ, finalidade) ate a proxima data. Cobre as
+    2 variantes reais vistas: com ano e sem 'R$' (extrato com texto
+    embutido), e so 'DD/MM' com 'R$' (comum quando o extrato precisa de
+    OCR - nesse caso o ano vem do cabecalho 'Periodo: ...'). Quando a
+    descricao e longa, o valor as vezes quebra pra uma linha propria (ex.:
+    'R$' no fim de uma linha, digito+C/D sozinho na seguinte) - tratado
+    via o estado `pendente`. Linhas 'SALDO DO DIA'/'SALDO ANTERIOR'/
+    'SALDO BLOQUEADO' sao checkpoints, nao transacoes."""
+    texto_completo = "\n".join("\n".join(linhas) for linhas in paginas_linhas)
+    m_ano = _SICOOB_ANO_RE.search(texto_completo)
+    ano_padrao = int(m_ano.group(1)) if m_ano else dt.date.today().year
+
+    movimentos: List[Movimento] = []
+    for linhas in paginas_linhas:
+        mov_atual: Optional[Movimento] = None
+        pendente: Optional[Movimento] = None
+
+        for linha in linhas:
+            linha = linha.strip()
+            if not linha:
+                continue
+
+            if pendente is not None:
+                m_val = _SICOOB_VALOR_SOLTO_RE.match(linha)
+                if m_val:
+                    valor, alerta = _sicoob_valor_com_alerta(m_val.group("valor"))
+                    if m_val.group("cd").upper() == "D":
+                        valor = -valor
+                    pendente.valor = valor
+                    pendente.alerta_valor = alerta
+                    mov_atual = pendente
+                    pendente = None
+                    continue
+                pendente = None
+
+            m = _SICOOB_LINHA_RE.match(linha)
+            if m:
+                ano = int(m.group("ano")) if m.group("ano") else ano_padrao
+                try:
+                    data = dt.date(ano, int(m.group("mes")), int(m.group("dia")))
+                except ValueError:
+                    continue
+                desc = m.group("desc").strip()
+                if _LINHA_CHECKPOINT_RE.search(desc):
+                    mov_atual = None
+                    continue
+                if m.group("valor") and m.group("cd"):
+                    valor, alerta = _sicoob_valor_com_alerta(m.group("valor"))
+                    if m.group("cd").upper() == "D":
+                        valor = -valor
+                    mov_atual = Movimento(
+                        data=data, valor=valor, descricao=desc, origem=origem, alerta_valor=alerta,
+                    )
+                    movimentos.append(mov_atual)
+                else:
+                    # o valor ficou pra proxima linha (descricao empurrou
+                    # o numero pra fora da largura da coluna no OCR)
+                    mov_atual = None
+                    pendente = Movimento(data=data, valor=0.0, descricao=desc, origem=origem)
+                    movimentos.append(pendente)
+                continue
+
+            if mov_atual is not None and len(linha) > 2:
+                mov_atual.descricao = f"{mov_atual.descricao} {linha}".strip()
+    return movimentos
+
+
+_PAGBANK_SALDO_DIA_RE = re.compile(r"^\d{2}/\d{2}/\d{4}\s+Saldo do dia\b", re.IGNORECASE)
+_PAGBANK_LINHA_RE = re.compile(
+    r"^\d{2}/\d{2}/\d{4}\s+(?P<desc>.*?)\s*(?P<sinal>-)?R\$\s*(?P<valor>\d{1,3}(?:\.\d{3})*,\d{2})\s*$"
+)
+
+
+def _parse_pdf_pagbank(paginas_texto: List[str], origem: str) -> List[Movimento]:
+    """Layout do extrato PDF do PagBank: uma linha por lancamento
+    'DD/MM/AAAA descricao [-]R$ valor'. Usa um regex proprio (em vez do
+    padrao tabular generico) porque o "R$" e obrigatorio aqui - sem isso,
+    quando a descricao vem vazia na mesma linha (ex.: descricao longa que
+    quebrou pra linha anterior), o "-" do sinal e engolido junto com a
+    descricao e o valor perde o sinal negativo. Alem disso cada dia tem
+    uma linha extra 'DD/MM/AAAA Saldo do dia R$ valor', que bate no MESMO
+    padrao e precisa ser excluida explicitamente (checkpoint, nao
+    transacao)."""
+    movimentos: List[Movimento] = []
+    for texto in paginas_texto:
+        linha_anterior = ""
+        for linha in texto.splitlines():
+            linha = linha.strip()
+            if not linha:
+                continue
+            if _PAGBANK_SALDO_DIA_RE.match(linha):
+                linha_anterior = linha
+                continue
+            m = _PAGBANK_LINHA_RE.match(linha)
+            if not m:
+                linha_anterior = linha
+                continue
+            data = _parse_data_br(linha[:10])
+            desc = m.group("desc").strip() or linha_anterior
+            sinal = m.group("sinal") or ""
+            valor = _parse_valor_br(f"{sinal}{m.group('valor')}")
+            movimentos.append(Movimento(data=data, valor=valor, descricao=desc, origem=origem))
+            linha_anterior = linha
     return movimentos
 
 
@@ -439,15 +736,37 @@ def _ocr_linhas_por_pagina(path: str) -> List[List[str]]:
         ) from exc
 
 
+# deteccao de banco pelo texto do proprio extrato, pra despachar direto pro
+# parser certo - evita que o padrao tabular generico (ou o de outro banco)
+# capture algumas linhas de forma ambigua/errada antes de chegar no parser
+# realmente feito pra aquele layout (ex.: "Saldo do dia" do PagBank bate no
+# padrao generico e viraria uma transacao fantasma se o generico rodasse
+# primeiro). Cada marcador e checado em ordem contra o texto inteiro do
+# documento (minusculo); o primeiro que bater manda chamar o parser
+# especifico. Se nenhum bater, cai pros parsers genericos/heuristicos.
+_MARCADORES_BANCO: List[Tuple[re.Pattern, str]] = [
+    (re.compile(r"\bnubank\b"), "nubank"),
+    (re.compile(r"\bc6\s*bank\b"), "c6"),
+    (re.compile(r"\bcora\s*scfi\b"), "cora"),
+    (re.compile(r"pagseguro|\bpagbank\b"), "pagbank"),
+    (re.compile(r"\bsicoob\b"), "sicoob"),
+    (re.compile(r"gerenciador\s*caixa|caixa\s*econ[oô]mica\s*federal"), "caixa"),
+]
+
+
 def parse_pdf_generic(path: str, origem: str = "extrato") -> List[Movimento]:
-    """Tenta reconhecer o extrato em PDF por mais de um layout: primeiro o
-    padrao tabular 'DD/MM/AAAA descricao valor' numa linha so; depois o
-    padrao de extrato agrupado por dia (Banco Inter e similares); depois o
-    padrao do Gerenciador CAIXA (Caixa Economica Federal). Se o PDF nao
-    tiver NENHUM texto embutido (comum em extratos "impressos em PDF" pelo
-    navegador, onde o texto vira desenho vetorial em vez de caracteres),
-    cai para OCR como ultimo recurso antes de tentar os mesmos padroes.
-    Ajuste/estenda estas funcoes para outros layouts de banco."""
+    """Le o PDF e despacha pro parser certo: primeiro tenta identificar o
+    banco pelo proprio texto do extrato (Nubank, C6, Cora, PagBank/
+    PagSeguro, Sicoob, Gerenciador CAIXA), cada um com layout dedicado;
+    se nenhum bater, cai nos padroes genericos (tabular 'DD/MM/AAAA
+    descricao valor' numa linha, extrato agrupado por dia tipo Banco
+    Inter, e por fim o layout da Caixa de novo como ultimo recurso, ja
+    que seu padrao - dois valores 'R$' no fim da linha - dificilmente
+    bate por engano em outro banco). Se o PDF nao tiver NENHUM texto
+    embutido (comum em extratos "impressos em PDF" pelo navegador, onde
+    o texto vira desenho vetorial em vez de caracteres), cai para OCR
+    antes de qualquer uma dessas tentativas. Ajuste/estenda os parsers
+    _parse_pdf_* para outros bancos."""
     try:
         import pdfplumber  # type: ignore
     except ImportError as exc:
@@ -466,8 +785,26 @@ def parse_pdf_generic(path: str, origem: str = "extrato") -> List[Movimento]:
         paginas_linhas = [texto.splitlines() for texto in paginas_texto]
 
     paginas_texto_reconstruido = ["\n".join(linhas) for linhas in paginas_linhas]
+    texto_completo = "\n".join(paginas_texto_reconstruido).lower()
 
-    movimentos = _parse_pdf_linhas_data_valor(paginas_texto_reconstruido, origem)
+    banco = next((nome for regex, nome in _MARCADORES_BANCO if regex.search(texto_completo)), None)
+
+    movimentos: List[Movimento] = []
+    if banco == "nubank":
+        movimentos = _parse_pdf_nubank(paginas_texto_reconstruido, origem)
+    elif banco == "c6":
+        movimentos = _parse_pdf_c6(paginas_texto_reconstruido, origem)
+    elif banco == "cora":
+        movimentos = _parse_pdf_cora(paginas_texto_reconstruido, origem)
+    elif banco == "pagbank":
+        movimentos = _parse_pdf_pagbank(paginas_texto_reconstruido, origem)
+    elif banco == "sicoob":
+        movimentos = _parse_pdf_sicoob(paginas_linhas, origem)
+    elif banco == "caixa":
+        movimentos = _parse_pdf_gerenciador_caixa(paginas_linhas, origem)
+
+    if not movimentos:
+        movimentos = _parse_pdf_linhas_data_valor(paginas_texto_reconstruido, origem)
     if not movimentos:
         movimentos = _parse_pdf_extrato_dia_agrupado(paginas_texto_reconstruido, origem)
     if not movimentos:
@@ -475,8 +812,8 @@ def parse_pdf_generic(path: str, origem: str = "extrato") -> List[Movimento]:
 
     if not movimentos:
         dica_ocr = (
-            " O PDF nao tinha texto embutido e foi lido via OCR - se o layout for diferente do "
-            "Gerenciador CAIXA (Caixa Economica Federal), pode ser necessario ajustar o parser."
+            " O PDF nao tinha texto embutido e foi lido via OCR - se o layout for diferente dos "
+            "bancos ja suportados, pode ser necessario ajustar o parser."
             if usado_ocr else ""
         )
         raise ValueError(
