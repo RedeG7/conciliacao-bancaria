@@ -17,6 +17,7 @@ Permite:
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -35,6 +36,28 @@ st.set_page_config(page_title="Conciliacao Bancaria", page_icon="🏦", layout="
 # diferentes mexendo ao mesmo tempo (cada operacao e uma transacao atomica
 # no banco).
 
+if "DATABASE_URL" not in os.environ:
+    # roda esse arquivo direto (sem docker compose) sem apontar pra um
+    # Postgres - o mais comum e alguem tentando ACESSAR o sistema em vez de
+    # rodar em modo desenvolvedor: o site de producao ja fica no ar em
+    # https://hub.redeg7.com, nao precisa (nem deveria) rodar isso localmente
+    # pra usar o sistema.
+    st.error(
+        "⚠️ **Este app não está configurado com um banco de dados** "
+        "(variável de ambiente `DATABASE_URL` não definida)."
+    )
+    st.info(
+        "**Se você quer só usar o sistema:** acesse "
+        "[hub.redeg7.com](https://hub.redeg7.com) — não precisa rodar nada "
+        "no seu computador.\n\n"
+        "**Se você é desenvolvedor e quer testar localmente:** defina a "
+        "variável `DATABASE_URL` apontando pra um Postgres (local ou via "
+        "túnel) antes de rodar `streamlit run app_conciliacao.py`, ex.:\n\n"
+        "```\nDATABASE_URL=postgresql://usuario:senha@localhost:5432/conciliacao "
+        "streamlit run app_conciliacao.py\n```"
+    )
+    st.stop()
+
 
 @st.cache_resource
 def _garantir_schema_extra() -> bool:
@@ -45,7 +68,15 @@ def _garantir_schema_extra() -> bool:
     return True
 
 
-_garantir_schema_extra()
+try:
+    _garantir_schema_extra()
+except Exception as exc:
+    st.error(
+        f"⚠️ **Não consegui conectar ao banco de dados configurado.** "
+        f"Confira se o Postgres em `DATABASE_URL` está no ar e acessível.\n\n"
+        f"Detalhe técnico: `{exc}`"
+    )
+    st.stop()
 
 # ---------------------------------------------------------------------------
 # Login / autenticacao multi-escritorio - nada do app roda sem sessao
