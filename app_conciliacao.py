@@ -865,6 +865,21 @@ if pronto:
         )
         st.session_state["historico_ultima_assinatura"] = _assinatura_execucao
 
+    if info.get("aviso_ocr"):
+        qtd_alertas = info.get("qtd_alertas_valor", 0)
+        detalhe_alertas = (
+            f" **{qtd_alertas} lançamento(s)** ficaram marcados com ⚠️ no espelho abaixo — o valor "
+            "lido não bateu com a variação do saldo impresso no extrato, então comece a conferência "
+            "por eles." if qtd_alertas else
+            " Nenhum lançamento ficou marcado como divergente do saldo impresso, mas ainda assim "
+            "vale uma conferência rápida."
+        )
+        st.error(
+            "⚠️ O extrato foi lido via **OCR** (reconhecimento de imagem), porque o PDF não tinha "
+            "texto real embutido — comum em PDFs gerados por \"Imprimir em PDF\" do navegador. "
+            "OCR pode errar dígitos em valores monetários." + detalhe_alertas
+        )
+
     st.success(f"Conciliação concluída automaticamente — competência: {resultado.competencia}.")
 
     with st.expander("Log de execução"):

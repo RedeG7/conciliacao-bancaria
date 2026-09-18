@@ -79,6 +79,8 @@ class Movimento:
     conta_credito: Optional[str] = None
     status: str = "pendente"  # "OK" | "pendente" | "conta_nao_identificada"
     categoria: Optional[str] = None
+    origem_ocr: bool = False  # True quando lido via OCR (PDF sem texto embutido)
+    alerta_valor: Optional[str] = None  # motivo pra revisar manualmente este valor (ex.: saldo nao bate)
 
 
 @dataclass
@@ -271,11 +273,181 @@ def _parse_pdf_extrato_dia_agrupado(paginas_texto: List[str], origem: str) -> Li
     return movimentos
 
 
+_CEF_DATA_CHEIA_RE = re.compile(r"^(?P<data>\d{2}/\d{2}/\d{4})\s*(?P<resto>.*)$")
+_CEF_DATA_HORA_RE = re.compile(r"^\d{2}/\d{2}\s+\d{2}:\d{2}\s*(?P<resto>.*)$")
+_CEF_VALOR_FINAL_RE = re.compile(
+    r"^(?P<pre>.*?)"
+    r"(?P<sinal>-)?\s*R\$\s*(?P<valor>\d{1,3}(?:\.\d{3})*,\d{2})\s+"
+    r"R\$\s*(?P<saldo>\d{1,3}(?:\.\d{3})*,\d{2})\s*(?P<saldo_cd>[CD])\s*$",
+    re.IGNORECASE,
+)
+_CEF_DOC_PREFIXO_RE = re.compile(r"^\d{4,}\s+")
+
+
+def _parse_pdf_gerenciador_caixa(paginas_linhas: List[List[str]], origem: str) -> List[Movimento]:
+    """Layout do 'Gerenciador CAIXA' (extrato PDF do internet banking da
+    Caixa): cada lancamento ocupa 2-3 linhas visuais (data | documento +
+    historico + valor + saldo | data efetiva + resto do historico). Via
+    OCR essas linhas as vezes saem reagrupadas de forma imprevisivel (o
+    inicio do historico pode aparecer ANTES da propria linha da data, o
+    numero do documento pode colar em qualquer uma delas) - por isso o
+    parser funciona como uma maquina de estados: acumula texto de
+    descricao solto num buffer, guarda a ultima data vista, e so fecha
+    UMA transacao quando encontra o padrao final '[-] R$ valor R$ saldo
+    [C|D]' - juntando o buffer acumulado + o que sobrar antes do valor
+    naquela mesma linha como descricao. A linha 'SALDO DIA' (so um valor,
+    sem 'Valor' de lancamento) e um checkpoint, nao uma transacao.
+
+    O proprio 'Saldo' impresso em cada linha e aproveitado como conferencia
+    cruzada (saldo atual - saldo anterior deve bater com o valor lido desta
+    transacao): quando OCR erra um digito do VALOR, o saldo geralmente
+    continua certo (fonte/posicao diferente), entao a divergencia aponta
+    exatamente qual lancamento revisar - em vez de pedir para conferir tudo
+    as cegas. Usa o proprio saldo impresso como nova referencia a cada
+    passo, pra um unico erro nao contaminar todas as comparacoes seguintes."""
+    movimentos: List[Movimento] = []
+    saldo_anterior: Optional[float] = None
+    for linhas in paginas_linhas:
+        data_atual: Optional[dt.date] = None
+        desc_buffer: List[str] = []
+
+        for linha in linhas:
+            linha = linha.strip()
+            if not linha or "saldo dia" in linha.lower():
+                if "saldo dia" in linha.lower():
+                    desc_buffer = []
+                continue
+
+            m_de = _CEF_DATA_HORA_RE.match(linha)
+            if m_de:
+                resto = m_de.group("resto").strip()
+                if resto:
+                    desc_buffer.append(resto)
+                continue
+
+            m_dt = _CEF_DATA_CHEIA_RE.match(linha)
+            if m_dt:
+                data_atual = _parse_data_br(m_dt.group("data"))
+                linha = m_dt.group("resto").strip()
+                if not linha:
+                    continue
+
+            m_val = _CEF_VALOR_FINAL_RE.match(linha)
+            if m_val and data_atual:
+                pre = _CEF_DOC_PREFIXO_RE.sub("", m_val.group("pre").strip(), count=1).strip()
+                desc = " ".join(desc_buffer + ([pre] if pre else [])).strip()
+                sinal = m_val.group("sinal") or ""
+                valor = _parse_valor_br(f"{sinal}{m_val.group('valor')}")
+                saldo_atual = _parse_valor_br(m_val.group("saldo"))
+                if m_val.group("saldo_cd").upper() == "D":
+                    saldo_atual = -saldo_atual
+
+                alerta = None
+                if saldo_anterior is not None:
+                    delta = round(saldo_atual - saldo_anterior, 2)
+                    if abs(delta - valor) > 0.01:
+                        alerta = (
+                            f"⚠️ OCR: valor lido ({_fmt_money(valor)}) nao bate com a variacao do "
+                            f"saldo impresso ({_fmt_money(delta)}) - confira este lancamento no "
+                            "extrato original."
+                        )
+                saldo_anterior = saldo_atual
+
+                movimentos.append(Movimento(
+                    data=data_atual, valor=valor, descricao=desc or "(sem descricao)", origem=origem,
+                    alerta_valor=alerta,
+                ))
+                desc_buffer = []
+                continue
+
+            if len(linha) > 3:
+                desc_buffer.append(_CEF_DOC_PREFIXO_RE.sub("", linha, count=1))
+    return movimentos
+
+
+def _ocr_linhas_por_pagina(path: str) -> List[List[str]]:
+    """Renderiza cada pagina do PDF (via PyMuPDF, sem depender de poppler) e
+    roda OCR (Tesseract), reconstruindo a ordem visual linha a linha pelas
+    coordenadas de cada palavra reconhecida - usado como ultimo recurso
+    quando o PDF nao tem NENHUM texto embutido (comum em extratos gerados
+    por 'Imprimir em PDF' do navegador, que desenham o texto em vez de
+    incorpora-lo como caracteres de verdade)."""
+    try:
+        import pytesseract  # type: ignore
+        from pytesseract import Output  # type: ignore
+        import fitz  # type: ignore  # PyMuPDF
+        from PIL import Image  # type: ignore
+    except ImportError as exc:
+        raise ImportError(
+            "Este PDF nao tem texto embutido (foi provavelmente gerado por 'Imprimir em PDF') - "
+            "a leitura via OCR requer pytesseract + PyMuPDF + Pillow (pip install pytesseract "
+            "pymupdf pillow) e o binario tesseract-ocr instalado no servidor."
+        ) from exc
+
+    try:
+        doc = fitz.open(path)
+        paginas: List[List[str]] = []
+        for page in doc:
+            pix = page.get_pixmap(dpi=300)
+            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+            # extratos "impressos em PDF" as vezes desenham o conteudo
+            # girado (texto na vertical) mesmo sem nenhuma flag /Rotate no
+            # PDF - detecta e corrige antes do OCR, ou o Tesseract le tudo
+            # embaralhado (tenta ler texto vertical como se fosse horizontal).
+            try:
+                osd = pytesseract.image_to_osd(img, output_type=Output.DICT)
+                rotacao = int(osd.get("rotate", 0))
+            except Exception:
+                rotacao = 0
+            if rotacao:
+                img = img.rotate(-rotacao, expand=True)
+
+            dados = pytesseract.image_to_data(img, lang="por", output_type=Output.DICT)
+
+            palavras = []
+            for i, texto in enumerate(dados["text"]):
+                texto = texto.strip()
+                if not texto:
+                    continue
+                palavras.append({
+                    "texto": texto,
+                    "x": dados["left"][i],
+                    "y": dados["top"][i] + dados["height"][i] / 2,
+                })
+
+            palavras.sort(key=lambda p: p["y"])
+            linhas_pagina: List[List[dict]] = []
+            tolerancia_y = 10
+            for p in palavras:
+                if linhas_pagina and abs(p["y"] - linhas_pagina[-1][0]["y"]) <= tolerancia_y:
+                    linhas_pagina[-1].append(p)
+                else:
+                    linhas_pagina.append([p])
+
+            paginas.append([
+                " ".join(w["texto"] for w in sorted(linha, key=lambda w: w["x"]))
+                for linha in linhas_pagina
+            ])
+        return paginas
+    except ImportError:
+        raise
+    except Exception as exc:
+        raise ValueError(
+            f"Falha ao rodar OCR em {path}: {exc}. Confira se o tesseract-ocr (e o pacote de "
+            "idioma portugues, tesseract-ocr-por) estao instalados no servidor."
+        ) from exc
+
+
 def parse_pdf_generic(path: str, origem: str = "extrato") -> List[Movimento]:
     """Tenta reconhecer o extrato em PDF por mais de um layout: primeiro o
-    padrao tabular 'DD/MM/AAAA descricao valor' numa linha so; se nao achar
-    nada, tenta o padrao de extrato agrupado por dia (Banco Inter e
-    similares). Ajuste/estenda estas funcoes para outros layouts de banco."""
+    padrao tabular 'DD/MM/AAAA descricao valor' numa linha so; depois o
+    padrao de extrato agrupado por dia (Banco Inter e similares); depois o
+    padrao do Gerenciador CAIXA (Caixa Economica Federal). Se o PDF nao
+    tiver NENHUM texto embutido (comum em extratos "impressos em PDF" pelo
+    navegador, onde o texto vira desenho vetorial em vez de caracteres),
+    cai para OCR como ultimo recurso antes de tentar os mesmos padroes.
+    Ajuste/estenda estas funcoes para outros layouts de banco."""
     try:
         import pdfplumber  # type: ignore
     except ImportError as exc:
@@ -286,16 +458,36 @@ def parse_pdf_generic(path: str, origem: str = "extrato") -> List[Movimento]:
     with pdfplumber.open(path) as pdf:
         paginas_texto = [page.extract_text() or "" for page in pdf.pages]
 
-    movimentos = _parse_pdf_linhas_data_valor(paginas_texto, origem)
+    usado_ocr = False
+    if not "".join(paginas_texto).strip():
+        paginas_linhas = _ocr_linhas_por_pagina(path)
+        usado_ocr = True
+    else:
+        paginas_linhas = [texto.splitlines() for texto in paginas_texto]
+
+    paginas_texto_reconstruido = ["\n".join(linhas) for linhas in paginas_linhas]
+
+    movimentos = _parse_pdf_linhas_data_valor(paginas_texto_reconstruido, origem)
     if not movimentos:
-        movimentos = _parse_pdf_extrato_dia_agrupado(paginas_texto, origem)
+        movimentos = _parse_pdf_extrato_dia_agrupado(paginas_texto_reconstruido, origem)
+    if not movimentos:
+        movimentos = _parse_pdf_gerenciador_caixa(paginas_linhas, origem)
 
     if not movimentos:
-        raise ValueError(
-            f"Nenhuma linha reconhecida em {path}. O layout deste PDF nao bate com "
-            "nenhum dos padroes conhecidos - ajuste parse_pdf_generic()/"
-            "_parse_pdf_extrato_dia_agrupado() para este formato."
+        dica_ocr = (
+            " O PDF nao tinha texto embutido e foi lido via OCR - se o layout for diferente do "
+            "Gerenciador CAIXA (Caixa Economica Federal), pode ser necessario ajustar o parser."
+            if usado_ocr else ""
         )
+        raise ValueError(
+            f"Nenhuma linha reconhecida em {path}.{dica_ocr} O layout deste PDF nao bate com "
+            "nenhum dos padroes conhecidos - ajuste parse_pdf_generic() para este formato."
+        )
+
+    if usado_ocr:
+        for mov in movimentos:
+            mov.origem_ocr = True
+
     return movimentos
 
 
@@ -620,10 +812,18 @@ def gerar_espelho_md(
     pendentes_razao: List[Movimento],
     saldo_final_razao: float,
     saldo_final_extrato: float,
+    aviso_ocr: bool = False,
 ) -> str:
     linhas = []
     linhas.append(f"# Conciliacao Bancaria - {conta_nome}")
     linhas.append(f"Periodo: {competencia}\n")
+    if aviso_ocr:
+        linhas.append(
+            "> ⚠️ **ATENCAO**: parte destes lancamentos foi lida via OCR (o PDF original nao "
+            "tinha texto embutido). OCR pode errar digitos em valores monetarios - confira "
+            "cada valor abaixo contra o extrato original antes de confiar neles ou importar "
+            "no Dominio.\n"
+        )
     linhas.append(f"Saldo inicial razao: {_fmt_money(saldo_inicial_razao)}  ===  "
                    f"Saldo inicial extrato: {_fmt_money(saldo_inicial_extrato)}  "
                    f"{'(conferido)' if _centavos(saldo_inicial_razao) == _centavos(saldo_inicial_extrato) else '(!!! DIVERGENTE !!!)'}\n")
@@ -632,20 +832,35 @@ def gerar_espelho_md(
     linhas.append("| Data | Descricao | Valor |")
     linhas.append("|---|---|---:|")
     for mov_e, _ in sorted(pareados, key=lambda p: p[0].data):
-        linhas.append(f"| {mov_e.data:%d/%m/%Y} | {mov_e.descricao} | {_fmt_money(mov_e.valor)} |")
+        marca = " ⚠️" if mov_e.alerta_valor else ""
+        linhas.append(f"| {mov_e.data:%d/%m/%Y} | {mov_e.descricao}{marca} | {_fmt_money(mov_e.valor)} |")
 
     linhas.append("\n## Pendencias lado banco (no extrato, falta lancar no razao)")
     if pendentes_banco:
         linhas.append("| Data | Descricao | Valor | Categoria sugerida | Debito | Credito |")
         linhas.append("|---|---|---:|---|---|---|")
         for mov in sorted(pendentes_banco, key=lambda m: m.data):
+            marca = " ⚠️" if mov.alerta_valor else ""
             linhas.append(
-                f"| {mov.data:%d/%m/%Y} | {mov.descricao} | {_fmt_money(mov.valor)} | "
+                f"| {mov.data:%d/%m/%Y} | {mov.descricao}{marca} | {_fmt_money(mov.valor)} | "
                 f"{mov.categoria or '-'} | {mov.conta_debito or '**A CONFIRMAR**'} | "
                 f"{mov.conta_credito or '**A CONFIRMAR**'} |"
             )
     else:
         linhas.append("_Nenhuma._")
+
+    todos_com_alerta = [
+        m for m in list(pendentes_banco) + [p[0] for p in pareados] + list(pendentes_razao)
+        if m.alerta_valor
+    ]
+    if todos_com_alerta:
+        linhas.append("\n## ⚠️ Lancamentos com valor a conferir (OCR)")
+        linhas.append(
+            "O valor lido nao bateu com a variacao do saldo impresso no extrato original - "
+            "confira estes especificamente antes de importar:"
+        )
+        for mov in sorted(todos_com_alerta, key=lambda m: m.data):
+            linhas.append(f"- {mov.data:%d/%m/%Y} — {mov.descricao} — {_fmt_money(mov.valor)}")
 
     linhas.append("\n## Pendencias lado razao (cheques/depositos em transito - nao aparecem ainda no extrato)")
     if pendentes_razao:
@@ -900,6 +1115,9 @@ def gerar_saidas(
 
     saldo_final_razao = resultado.saldo_inicial_razao + sum(m.valor for m in resultado.razao)
     saldo_final_extrato = resultado.saldo_inicial_extrato + sum(m.valor for m in resultado.extrato)
+    todos_movs = resultado.extrato + resultado.razao
+    aviso_ocr = any(m.origem_ocr for m in todos_movs)
+    qtd_alertas_valor = sum(1 for m in todos_movs if m.alerta_valor)
 
     espelho = gerar_espelho_md(
         conta_nome=resultado.conta_contabil_nome,
@@ -911,6 +1129,7 @@ def gerar_saidas(
         pendentes_razao=resultado.pendentes_razao,
         saldo_final_razao=saldo_final_razao,
         saldo_final_extrato=saldo_final_extrato,
+        aviso_ocr=aviso_ocr,
     )
     espelho_path = out / f"espelho_{resultado.competencia}.md"
     espelho_path.write_text(espelho, encoding="utf-8")
@@ -945,6 +1164,8 @@ def gerar_saidas(
         "import_path": import_path,
         "qtd_prontos": qtd_prontos,
         "sem_conta": sem_conta,
+        "aviso_ocr": aviso_ocr,
+        "qtd_alertas_valor": qtd_alertas_valor,
         "saldo_final_razao": saldo_final_razao,
         "saldo_final_extrato": saldo_final_extrato,
     }
