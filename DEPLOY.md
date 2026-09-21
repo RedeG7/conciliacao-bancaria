@@ -8,7 +8,10 @@ redeploys da imagem da aplicação (só o container `app` é trocado).
 
 ## 1. Provisionar o VPS (HomeHost)
 
-1. Contrate o plano (recomendado: 2 vCPU / 4 GB RAM ou superior).
+1. Contrate o plano (recomendado: 2 vCPU / 4 GB RAM ou superior — **4 GB é o
+   mínimo** se o hub de RPA estiver em uso: o worker sobe um Chromium
+   headless por execução, cada instância consome ~300-500 MB de RAM além do
+   que o app/Postgres/Caddy já usam).
 2. Ao criar o servidor, escolha um Linux 64-bit (Ubuntu 22.04/24.04 ou
    AlmaLinux 9 - o passo de instalar Docker abaixo cobre os dois).
 3. Anote o **IP** do servidor.
@@ -51,7 +54,9 @@ mkdir -p /opt/conciliacao-bancaria
 ```
 
 No GitHub: **Package → conciliacao-bancaria → Package settings → Change
-visibility → Public**.
+visibility → Public**. Repita para o pacote
+**conciliacao-bancaria-worker** depois do primeiro build (ele só aparece na
+lista de pacotes após o primeiro push que dispara o workflow).
 
 Copie `docker-compose.yml` e `Caddyfile` deste repositório para
 `/opt/conciliacao-bancaria/` no servidor (a primeira vez precisa ser manual;
@@ -69,8 +74,21 @@ Postgres, ex.: `openssl rand -base64 24`):
 cat > /opt/conciliacao-bancaria/.env << 'EOF'
 DOMINIO=conciliacao.seudominio.com.br
 POSTGRES_PASSWORD=cole-aqui-uma-senha-forte
+RPA_ENC_KEY=cole-aqui-a-chave-gerada-abaixo
 EOF
 ```
+
+`RPA_ENC_KEY` cifra as credenciais de procurador salvas no hub de RPA (ex.:
+login do ISS Web). Gere uma antes de colar acima:
+
+```bash
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+**Guarde uma cópia dessa chave em lugar seguro fora do VPS** (ex.: gerenciador
+de senhas do escritório) — perdê-la torna as credenciais já cadastradas
+irrecuperáveis (não tem "esqueci minha senha" pra isso, precisa recadastrar
+tudo). Trocar a chave depois de já ter credenciais salvas também as invalida.
 
 Suba pela primeira vez:
 
@@ -107,8 +125,10 @@ ssh-copy-id -i deploy_key.pub root@SEU_IP
 ## 4. Deploy automático
 
 A partir daqui, todo `git push` (ou merge de PR) na branch `main` já:
-1. Builda a imagem Docker.
-2. Publica em `ghcr.io/redeg7/conciliacao-bancaria:latest`.
+1. Builda as imagens Docker: a do app (`Dockerfile`) e a do worker de RPA
+   (`Dockerfile.worker`, com Playwright/Chromium).
+2. Publica em `ghcr.io/redeg7/conciliacao-bancaria:latest` e
+   `ghcr.io/redeg7/conciliacao-bancaria-worker:latest`.
 3. Copia `docker-compose.yml`/`Caddyfile` atualizados para o VPS.
 4. Roda `docker compose pull && docker compose up -d` no VPS (o Postgres
    só é recriado se o volume `pgdata` não existir - dados preservados).

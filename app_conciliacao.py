@@ -28,8 +28,10 @@ import auth
 import clientes
 import historico
 import conciliacao_bancaria as cb
+from rpa import core as rpa_core
+from rpa import registry as rpa_registry
 
-st.set_page_config(page_title="Conciliacao Bancaria", page_icon="🏦", layout="wide")
+st.set_page_config(page_title="Hub App", page_icon="🧩", layout="wide")
 
 # Usuarios/escritorios/clientes/historico ficam no Postgres (DATABASE_URL) -
 # ver auth.py. Isso evita corrida de escrita entre admins de escritorios
@@ -65,6 +67,7 @@ def _garantir_schema_extra() -> bool:
     auth.garantir_schema()
     clientes.garantir_schema()
     historico.garantir_schema()
+    rpa_core.garantir_schema()
     return True
 
 
@@ -174,7 +177,7 @@ def _tela_login() -> None:
     st.markdown(
         "<div style='display:flex;justify-content:center;align-items:center;"
         "text-align:center;font-size:2.25rem;font-weight:700;line-height:1.2;"
-        "margin-bottom:0.5rem;'>🏦 Conciliação Bancária Automatizada</div>"
+        "margin-bottom:0.5rem;'>🧩 Hub App</div>"
         "<div style='display:flex;justify-content:center;align-items:center;"
         "text-align:center;color:rgba(250,250,250,0.6);margin-bottom:1rem;'>"
         "Faça login para continuar — cada escritório vê só os próprios dados.</div>",
@@ -249,8 +252,8 @@ def _tela_gerenciar_escritorios() -> None:
     excluir. Fica separada do painel de usuários porque mexe no tenant em
     si, não em quem tem acesso a ele."""
     st.title("🌐 Gerenciar Escritórios")
-    if st.button("← Voltar à conciliação"):
-        st.session_state["tela"] = "conciliacao"
+    if st.button("← Início"):
+        st.session_state["tela"] = "home"
         st.rerun()
     st.caption("Cada escritório é isolado: usuários de um não enxergam nem gerenciam os de outro.")
     st.divider()
@@ -350,8 +353,8 @@ def _tela_gerenciar_usuarios() -> None:
     TODOS os escritórios (escolhendo qual ver); admin_escritorio só
     enxerga/gerencia o próprio (isolamento entre escritórios-cliente)."""
     st.title("👥 Gerenciar Usuários")
-    if st.button("← Voltar à conciliação"):
-        st.session_state["tela"] = "conciliacao"
+    if st.button("← Início"):
+        st.session_state["tela"] = "home"
         st.rerun()
     st.divider()
 
@@ -485,8 +488,8 @@ def _tela_historico() -> None:
     admin_escritorio (so o proprio) enxergam; usuario comum nao ve o
     historico dos colegas."""
     st.title("📜 Histórico de Lançamentos")
-    if st.button("← Voltar à conciliação"):
-        st.session_state["tela"] = "conciliacao"
+    if st.button("← Início"):
+        st.session_state["tela"] = "home"
         st.rerun()
     st.divider()
 
@@ -530,8 +533,8 @@ def _tela_gerenciar_clientes() -> None:
     o próprio. Remoção fica restrita a admin_escritorio/super_admin_global
     pra evitar que alguém apague por engano um código usado por outros."""
     st.title("🏢 Gerenciar Clientes")
-    if st.button("← Voltar à conciliação"):
-        st.session_state["tela"] = "conciliacao"
+    if st.button("← Início"):
+        st.session_state["tela"] = "home"
         st.rerun()
     st.divider()
 
@@ -619,6 +622,179 @@ def _tela_gerenciar_clientes() -> None:
                     st.rerun()
 
 
+def _tela_rpa_hub() -> None:
+    """Hub de RPAs do escritório: cadastro de credenciais de procurador,
+    upload de planilha e acompanhamento das execuções, por módulo (ISS Web
+    é o primeiro — novos módulos só entram em rpa/registry.py, esta tela
+    não muda). O processamento de verdade roda no worker separado
+    (rpa_worker.py, container à parte com Playwright) — esta tela só
+    enfileira em rpa_execucoes/rpa_empresas e mostra status/resultado."""
+    st.title("🤖 Hub de RPAs")
+    if st.button("← Início"):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    st.divider()
+
+    escritorio_id = st.session_state.get("escritorio_id")
+    usuario = st.session_state.get("usuario_logado")
+
+    modulo_id = st.selectbox(
+        "Rotina", list(rpa_registry.MODULOS.keys()),
+        format_func=lambda m: rpa_registry.MODULOS[m]["titulo"],
+    )
+    modulo_info = rpa_registry.MODULOS[modulo_id]
+    sistema = modulo_info["sistema_credencial"]
+
+    st.subheader("Credenciais do procurador")
+    cred = rpa_core.tem_credencial(escritorio_id, sistema)
+    if cred:
+        st.caption(
+            f"✅ Cadastrada — CNPJ {cred['cnpj']} · "
+            f"atualizado em {cred['atualizado_em']:%d/%m/%Y %H:%M} por {cred['atualizado_por']}"
+        )
+    else:
+        st.caption("⚠️ Nenhuma credencial cadastrada ainda para esta rotina.")
+
+    with st.expander("Cadastrar / atualizar credencial"):
+        with st.form(f"credencial_form_{modulo_id}", clear_on_submit=True):
+            cnpj_proc = st.text_input("CNPJ do procurador")
+            senha_proc = st.text_input("Senha do procurador", type="password")
+            salvar_cred = st.form_submit_button("Salvar", type="primary")
+        if salvar_cred:
+            if not cnpj_proc.strip() or not senha_proc:
+                st.error("Informe CNPJ e senha.")
+            else:
+                rpa_core.salvar_credencial(escritorio_id, sistema, cnpj_proc.strip(), senha_proc, usuario)
+                _flash("flash_rpa_hub", "✅ Credencial salva.")
+                st.rerun()
+
+    st.divider()
+    _flash("flash_rpa_hub")
+
+    st.subheader("Nova execução")
+    if not cred:
+        st.info("Cadastre a credencial do procurador acima antes de enviar uma planilha.")
+    else:
+        up_planilha = st.file_uploader(
+            "Planilha de empresas (.xlsx)", type=["xlsx"], key=f"up_planilha_{modulo_id}",
+        )
+        if up_planilha:
+            conteudo = up_planilha.getvalue()
+            try:
+                empresas = rpa_registry.ler_empresas(modulo_id, conteudo)
+            except Exception as exc:
+                st.error(str(exc))
+            else:
+                st.success(f"{len(empresas)} empresa(s) de Senador Canedo encontradas na planilha.")
+                with st.expander("Ver empresas identificadas"):
+                    st.dataframe(
+                        [
+                            {"Código": e["codigo"], "CNPJ/CPF": e["cnpj_cpf"], "Obrigação": e["obrigacao"]}
+                            for e in empresas
+                        ],
+                        use_container_width=True, hide_index=True,
+                    )
+                if st.button("🚀 Iniciar processamento", type="primary"):
+                    execucao_id = rpa_core.criar_execucao(
+                        escritorio_id, modulo_id, conteudo, up_planilha.name, usuario, empresas,
+                    )
+                    _flash("flash_rpa_hub", f"✅ Execução #{execucao_id} criada — {len(empresas)} empresa(s) na fila.")
+                    st.rerun()
+
+    st.divider()
+    st.subheader("Execuções")
+    execucoes = rpa_core.listar_execucoes(escritorio_id, modulo_id)
+    if not execucoes:
+        st.info("Nenhuma execução ainda para esta rotina.")
+        return
+
+    if st.button("🔄 Atualizar status"):
+        st.rerun()
+
+    emoji_status = {"PENDENTE": "⏳", "RODANDO": "🔄", "CONCLUIDO": "✅", "ERRO": "❌"}
+    for execucao in execucoes:
+        empresas_exec = rpa_core.listar_empresas(execucao["id"])
+        concluidas = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_CONCLUIDO)
+        erros = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_ERRO)
+        titulo = (
+            f"{emoji_status.get(execucao['status'], '•')} Execução #{execucao['id']} — "
+            f"{execucao['criado_em']:%d/%m/%Y %H:%M} — {execucao['status']} "
+            f"({concluidas}/{len(empresas_exec)} concluídas, {erros} erro(s))"
+        )
+        with st.expander(titulo):
+            st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}")
+            for empresa in empresas_exec:
+                cols = st.columns([1, 2, 1, 1, 2])
+                cols[0].write(empresa["codigo"])
+                cols[1].write(empresa["cnpj_cpf"])
+                cols[2].write(empresa["obrigacao"])
+                cols[3].write(empresa["status"])
+                if empresa["status"] == rpa_core.STATUS_CONCLUIDO and empresa["pdf"]:
+                    cols[4].download_button(
+                        "⬇️ PDF", bytes(empresa["pdf"]), file_name=empresa["pdf_nome"],
+                        key=f"pdf_{empresa['id']}",
+                    )
+                elif empresa["status"] == rpa_core.STATUS_ERRO:
+                    cols[4].caption(f"⚠️ {empresa['erro']}")
+                else:
+                    cols[4].write("—")
+
+
+_APPS_HOME = [
+    {
+        "icone": "🏦",
+        "titulo": "Conciliação Bancária Automática",
+        "descricao": "Extrato/fluxo de caixa × razão contábil × balancete → espelho e arquivo de importação Domínio.",
+        "tela": "conciliacao",
+    },
+    {
+        "icone": "🤖",
+        "titulo": "RPA — Fechamento REST/DMS",
+        "descricao": "Fechamento mensal de REST e DMS no ISS Web (Senador Canedo/GO).",
+        "tela": "rpa_hub",
+    },
+    {
+        "icone": "📋",
+        "titulo": "RPA — Folha de Pagamento",
+        "descricao": "Fechamento da folha no Domínio Folha. Ainda roda por automação assistida, sem tela própria aqui.",
+        "tela": None,
+    },
+]
+
+
+def _tela_home() -> None:
+    """Tela inicial: um icone por aplicativo do escritorio. Cada app novo
+    (proxima automacao) so precisa de uma entrada em _APPS_HOME - nao mexe
+    no roteamento das telas que ja existem."""
+    st.markdown(
+        "<div style='text-align:center;font-size:2.25rem;font-weight:700;"
+        "margin-bottom:0.25rem;'>👋 Bem-vindo(a)</div>"
+        "<div style='text-align:center;color:rgba(250,250,250,0.6);"
+        "margin-bottom:2rem;'>Escolha um aplicativo para começar.</div>",
+        unsafe_allow_html=True,
+    )
+
+    colunas = st.columns(len(_APPS_HOME))
+    for coluna, app in zip(colunas, _APPS_HOME):
+        with coluna:
+            with st.container(border=True):
+                st.markdown(
+                    f"<div style='text-align:center;font-size:3rem;'>{app['icone']}</div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(f"<div style='text-align:center;font-weight:600;'>{app['titulo']}</div>",
+                            unsafe_allow_html=True)
+                st.caption(app["descricao"])
+                if app["tela"]:
+                    if st.button("Abrir", key=f"home_abrir_{app['tela']}",
+                                 use_container_width=True, type="primary"):
+                        st.session_state["tela"] = app["tela"]
+                        st.rerun()
+                else:
+                    st.button("Em breve", key="home_abrir_rpa_folha",
+                              use_container_width=True, disabled=True)
+
+
 _renderizar_cookie_pendente()
 
 if "usuario_logado" not in st.session_state:
@@ -644,29 +820,39 @@ if st.session_state.get("mostrar_trocar_senha"):
     _tela_trocar_senha(obrigatoria=False)
     st.stop()
 
+st.session_state.setdefault("tela", "home")
+
+if st.session_state.get("tela") == "home":
+    _tela_home()
+    st.stop()
+
 if st.session_state.get("tela") == "gerenciar_escritorios":
     if st.session_state.get("papel_usuario") != auth.PAPEL_SUPER_GLOBAL:
-        st.session_state["tela"] = "conciliacao"
+        st.session_state["tela"] = "home"
     else:
         _tela_gerenciar_escritorios()
         st.stop()
 
 if st.session_state.get("tela") == "gerenciar_usuarios":
     if st.session_state.get("papel_usuario") not in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
-        st.session_state["tela"] = "conciliacao"
+        st.session_state["tela"] = "home"
     else:
         _tela_gerenciar_usuarios()
         st.stop()
 
 if st.session_state.get("tela") == "historico":
     if st.session_state.get("papel_usuario") not in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
-        st.session_state["tela"] = "conciliacao"
+        st.session_state["tela"] = "home"
     else:
         _tela_historico()
         st.stop()
 
 if st.session_state.get("tela") == "gerenciar_clientes":
     _tela_gerenciar_clientes()
+    st.stop()
+
+if st.session_state.get("tela") == "rpa_hub":
+    _tela_rpa_hub()
     st.stop()
 
 with st.sidebar:
@@ -680,6 +866,9 @@ with st.sidebar:
     with csb2:
         if st.button("Sair", use_container_width=True):
             _fazer_logout()
+    if st.button("🏠 Início", use_container_width=True):
+        st.session_state["tela"] = "home"
+        st.rerun()
     if st.button("🏢 Gerenciar Clientes", use_container_width=True):
         st.session_state["tela"] = "gerenciar_clientes"
         st.rerun()

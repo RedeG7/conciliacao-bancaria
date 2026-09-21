@@ -1,0 +1,21 @@
+# Imagem do worker de RPA (Playwright headless) - RedeG7
+#
+# Separada da imagem do app (Dockerfile) de proposito: o app Streamlit fica
+# leve e rapido de re-deployar, e so essa imagem carrega o Chromium (~300MB
+# + deps do sistema).
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements-worker.txt .
+RUN pip install --no-cache-dir -r requirements-worker.txt \
+    && playwright install --with-deps chromium
+
+COPY auth.py rpa_worker.py ./
+COPY rpa/ ./rpa/
+
+# Sem estado local: fila e credenciais ficam no Postgres (DATABASE_URL) e o
+# PDF final e gravado direto no banco - nao ha volume nem porta exposta
+# (o worker so fala com o Postgres, nunca recebe HTTP).
+
+ENTRYPOINT ["python", "rpa_worker.py"]

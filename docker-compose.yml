@@ -23,11 +23,24 @@ services:
     restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql://conciliacao:${POSTGRES_PASSWORD}@db:5432/conciliacao
+      - RPA_ENC_KEY=${RPA_ENC_KEY}
     depends_on:
       db:
         condition: service_healthy
     expose:
       - "8501"
+
+  rpa_worker:
+    image: ghcr.io/redeg7/conciliacao-bancaria-worker:latest
+    container_name: conciliacao-rpa-worker
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://conciliacao:${POSTGRES_PASSWORD}@db:5432/conciliacao
+      - RPA_ENC_KEY=${RPA_ENC_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Sem expose/ports: so fala com o Postgres, nunca recebe HTTP.
 
   caddy:
     image: caddy:2-alpine
