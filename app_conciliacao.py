@@ -17,8 +17,10 @@ Permite:
 
 from __future__ import annotations
 
+import io
 import os
 import tempfile
+import zipfile
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -835,6 +837,28 @@ def _tela_gerenciar_clientes() -> None:
                     st.rerun()
 
 
+def _montar_zip_execucao(execucao: dict, empresas_exec: list[dict]) -> bytes:
+    """Monta um .zip só com os arquivos já concluídos da execução, uma
+    pasta por empresa (código) e dentro dela uma subpasta pela competência
+    no formato MMAAAA (ex.: empresa '10', competência 08/2026 -> '10/082026/').
+    PDF e XML (quando houver) do mesmo jeito que a tela oferece pra baixar
+    individualmente — aqui só empacota tudo junto pra baixar de uma vez."""
+    competencia = execucao.get("competencia") or ""
+    pasta_competencia = competencia.replace("/", "") if competencia else "sem-competencia"
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for empresa in empresas_exec:
+            if empresa["status"] != rpa_core.STATUS_CONCLUIDO:
+                continue
+            pasta = f"{empresa['codigo']}/{pasta_competencia}"
+            if empresa.get("pdf"):
+                zf.writestr(f"{pasta}/{empresa['pdf_nome']}", bytes(empresa["pdf"]))
+            if empresa.get("xml_zip"):
+                zf.writestr(f"{pasta}/{empresa['xml_zip_nome']}", bytes(empresa["xml_zip"]))
+    return buffer.getvalue()
+
+
 def _tela_rpa_hub() -> None:
     """Hub de RPAs do escritório: cadastro de credenciais de procurador,
     upload de planilha e acompanhamento das execuções, por módulo (ISS Web
@@ -968,6 +992,14 @@ def _tela_rpa_hub() -> None:
         )
         with st.expander(titulo):
             st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}")
+            if concluidas:
+                _pasta_competencia_zip = (execucao.get("competencia") or "sem-competencia").replace("/", "")
+                st.download_button(
+                    "📦 Baixar tudo (.zip, uma pasta por empresa/competência)",
+                    _montar_zip_execucao(execucao, empresas_exec),
+                    file_name=f"DMS-XML {_pasta_competencia_zip}.zip",
+                    key=f"zip_execucao_{execucao['id']}",
+                )
             for empresa in empresas_exec:
                 cols = st.columns([1, 2, 1, 1, 2])
                 cols[0].write(empresa["codigo"])
