@@ -18,6 +18,7 @@ abre conexao propria nem redefine schema de fila.
 
 from __future__ import annotations
 
+import calendar
 import os
 from typing import Optional
 
@@ -89,11 +90,14 @@ def garantir_schema() -> None:
         # xml_zip: segundo arquivo opcional por empresa, só usado pelo fluxo
         # condicional do issnet (DMS com movimento também baixa o zip de
         # XMLs das notas do período, além do PDF do Livro Fiscal) - ver
-        # rpa/issnet/processar.py.
+        # rpa/issnet/processar.py. municipio: só o issnet usa (Goiânia e
+        # Aparecida de Goiânia são caminhos/sessões separados no mesmo
+        # domínio do portal), issweb deixa em branco.
         conn.execute("""
             ALTER TABLE rpa_empresas
             ADD COLUMN IF NOT EXISTS xml_zip BYTEA,
-            ADD COLUMN IF NOT EXISTS xml_zip_nome TEXT
+            ADD COLUMN IF NOT EXISTS xml_zip_nome TEXT,
+            ADD COLUMN IF NOT EXISTS municipio TEXT
         """)
         conn.commit()
 
@@ -206,25 +210,47 @@ def obter_credencial(escritorio_id: str, sistema: str) -> Optional[dict]:
 # Fila de execucoes
 # ---------------------------------------------------------------------------
 
+def montar_competencia(mes: int, ano: int) -> dict:
+    """Monta o dict de competencia (mesmo formato de calcular_competencia_anterior
+    de cada modulo) a partir de um mes/ano escolhido na tela, em vez de sempre
+    "mes anterior" - usado pelo worker quando a execucao ja tem competencia
+    gravada (ver criar_execucao/rpa_worker.py)."""
+    ultimo_dia = calendar.monthrange(ano, mes)[1]
+    return {
+        "mm_aaaa": f"{mes:02d}/{ano}",
+        "mm_aaaa_arquivo": f"{mes:02d} {ano}",
+        "mes": mes,
+        "ano": ano,
+        "data_inicial": f"01/{mes:02d}/{ano}",
+        "data_final": f"{ultimo_dia:02d}/{mes:02d}/{ano}",
+    }
+
+
 def criar_execucao(
     escritorio_id: str, modulo: str, planilha_bytes: bytes, planilha_nome: str,
-    criado_por: str, empresas: list[dict],
+    criado_por: str, empresas: list[dict], competencia: str,
 ) -> int:
     """Cria a execucao e ja insere as linhas de empresa (status PENDENTE),
-    tudo numa transacao so."""
+    tudo numa transacao so. competencia (formato "MM/AAAA") e a escolhida
+    pelo usuario na tela - gravada ja na criacao pra o worker processar a
+    competencia certa mesmo que so pegue a execucao da fila depois (ver
+    rpa_worker.py), em vez de recalcular "mes anterior" na hora de rodar."""
     with auth.conectar() as conn:
         linha = conn.execute("""
-            INSERT INTO rpa_execucoes (escritorio_id, modulo, planilha_original, planilha_nome, criado_por)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO rpa_execucoes (escritorio_id, modulo, planilha_original, planilha_nome, criado_por, competencia)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (escritorio_id, modulo, planilha_bytes, planilha_nome, criado_por)).fetchone()
+        """, (escritorio_id, modulo, planilha_bytes, planilha_nome, criado_por, competencia)).fetchone()
         execucao_id = linha["id"]
 
         for empresa in empresas:
             conn.execute("""
-                INSERT INTO rpa_empresas (execucao_id, codigo, cnpj_cpf, obrigacao)
-                VALUES (%s, %s, %s, %s)
-            """, (execucao_id, empresa["codigo"], empresa["cnpj_cpf"], empresa["obrigacao"]))
+                INSERT INTO rpa_empresas (execucao_id, codigo, cnpj_cpf, obrigacao, municipio)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                execucao_id, empresa["codigo"], empresa["cnpj_cpf"], empresa["obrigacao"],
+                empresa.get("municipio") or None,
+            ))
 
         conn.commit()
     return execucao_id

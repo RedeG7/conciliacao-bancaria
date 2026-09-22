@@ -2,17 +2,22 @@
 
 Mesmo padrao de rpa/issweb/planilha.py: a planilha vira bytes numa linha de
 rpa_execucoes (auditoria/reprocesso) e cada empresa vira uma linha em
-rpa_empresas. Unica diferenca — este modulo cobre DOIS municipios no mesmo
-portal (Goiania e Aparecida de Goiania), entao filtra por uma lista em vez
-de um municipio unico.
+rpa_empresas. Diferencas:
+  - cobre DOIS municipios no mesmo portal (Goiania e Aparecida de Goiania),
+    entao filtra por uma lista em vez de um municipio unico, e Município
+    aqui é OBRIGATÓRIO (o worker precisa saber qual sessão/caminho do
+    portal usar por empresa - ver rpa/issnet/portal.py PORTAL_URLS).
+  - não tem coluna "Obrigação": diferente do issweb, o issnet decide
+    sozinho REST x DMS por empresa (gera o Livro Fiscal de Serviços
+    Prestados primeiro; só processa Serviços Contratados se vier sem
+    movimento - ver rpa/issnet/processar.py), não é escolha da planilha.
 """
 
 from io import BytesIO
 
 from openpyxl import load_workbook
 
-COLUNAS_OBRIGATORIAS = ["Código da Empresa", "CNPJ/CPF", "Obrigação"]
-COLUNA_MUNICIPIO = "Município"
+COLUNAS_OBRIGATORIAS = ["Código da Empresa", "CNPJ/CPF", "Município"]
 MUNICIPIOS_ALVO = {"GOIÂNIA", "APARECIDA DE GOIÂNIA"}
 
 
@@ -25,16 +30,11 @@ def _mapear_cabecalho(ws) -> dict:
 
 
 def ler_empresas(conteudo: bytes) -> list[dict]:
-    """Retorna [{'codigo', 'cnpj_cpf', 'obrigacao'}] só das linhas cujo
-    Município seja Goiânia ou Aparecida de Goiânia (ou sem coluna Município —
-    planilha dedicada só a esses portais). Levanta PlanilhaInvalida com
-    mensagem clara se faltar alguma coluna obrigatória.
-
-    Município não vai pra rpa_empresas (schema é o mesmo do issweb, sem
-    coluna própria pra isso) — serve só de filtro na leitura. Se o fluxo do
-    portal acabar precisando saber a qual das duas cidades cada empresa
-    pertence durante o processamento, isso ainda está em aberto (ver TODO em
-    rpa/issnet/processar.py) e exigirá alterar rpa_empresas."""
+    """Retorna [{'codigo', 'cnpj_cpf', 'obrigacao', 'municipio'}] só das
+    linhas cujo Município seja Goiânia ou Aparecida de Goiânia. 'obrigacao'
+    fica sempre vazio aqui (não vem da planilha, ver módulo docstring).
+    Levanta PlanilhaInvalida com mensagem clara se faltar alguma coluna
+    obrigatória."""
     try:
         wb = load_workbook(BytesIO(conteudo))
     except Exception as exc:
@@ -56,15 +56,15 @@ def ler_empresas(conteudo: bytes) -> list[dict]:
         if not codigo:
             continue
 
-        if COLUNA_MUNICIPIO in mapa:
-            municipio = str(ws.cell(row=linha, column=mapa[COLUNA_MUNICIPIO]).value or "").strip().upper()
-            if municipio and municipio not in MUNICIPIOS_ALVO:
-                continue
+        municipio = str(ws.cell(row=linha, column=mapa["Município"]).value or "").strip().upper()
+        if municipio not in MUNICIPIOS_ALVO:
+            continue
 
         empresas.append({
             "codigo": str(codigo).strip(),
             "cnpj_cpf": str(ws.cell(row=linha, column=mapa["CNPJ/CPF"]).value or "").strip(),
-            "obrigacao": str(ws.cell(row=linha, column=mapa["Obrigação"]).value or "").strip().upper(),
+            "obrigacao": "",
+            "municipio": municipio,
         })
 
     if not empresas:

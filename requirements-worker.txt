@@ -1,6 +1,9 @@
 # Dependências do container rpa_worker (ver Dockerfile.worker): o essencial
 # de auth.py/rpa/core.py (psycopg, cryptography) + playwright, que só o
-# worker precisa (o container do app fica leve, sem Chromium).
+# worker precisa (o container do app fica leve, sem Chromium). pdfplumber:
+# só o rpa/issnet usa, pra ler "Total Registros" do Livro Fiscal e decidir
+# se a empresa tem movimento no DMS.
 psycopg[binary]>=3.1,<4
 cryptography>=42,<44
 playwright>=1.47,<2
+pdfplumber>=0.11,<1

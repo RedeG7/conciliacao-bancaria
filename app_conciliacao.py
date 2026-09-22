@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -857,6 +858,15 @@ def _tela_rpa_hub() -> None:
     modulo_info = rpa_registry.MODULOS[modulo_id]
     sistema = modulo_info["sistema_credencial"]
 
+    _periodo_padrao = rpa_registry.preparar_periodo(modulo_id)
+    _data_competencia = st.date_input(
+        "Competência a executar", value=date(_periodo_padrao["ano"], _periodo_padrao["mes"], 1),
+        key=f"competencia_{modulo_id}",
+        help="Escolha qualquer dia dentro do mês/ano desejado — só o mês e o ano importam, "
+             "o dia é ignorado. Vem pré-preenchido com o mês anterior ao de hoje.",
+    )
+    competencia_escolhida = f"{_data_competencia.month:02d}/{_data_competencia.year}"
+
     st.subheader("Credenciais do procurador")
     cred = rpa_core.tem_credencial(escritorio_id, sistema)
     if cred:
@@ -867,18 +877,35 @@ def _tela_rpa_hub() -> None:
     else:
         st.caption("⚠️ Nenhuma credencial cadastrada ainda para esta rotina.")
 
+    tipo_auth = modulo_info.get("tipo_auth", "senha")
     with st.expander("Cadastrar / atualizar credencial"):
-        with st.form(f"credencial_form_{modulo_id}", clear_on_submit=True):
-            cnpj_proc = st.text_input("CNPJ do procurador")
-            senha_proc = st.text_input("Senha do procurador", type="password")
-            salvar_cred = st.form_submit_button("Salvar", type="primary")
-        if salvar_cred:
-            if not cnpj_proc.strip() or not senha_proc:
-                st.error("Informe CNPJ e senha.")
-            else:
-                rpa_core.salvar_credencial(escritorio_id, sistema, cnpj_proc.strip(), senha_proc, usuario)
-                _flash("flash_rpa_hub", "✅ Credencial salva.")
-                st.rerun()
+        if tipo_auth == "certificado":
+            with st.form(f"credencial_form_{modulo_id}", clear_on_submit=True):
+                cnpj_proc = st.text_input("CPF/CNPJ do titular do certificado")
+                up_certificado = st.file_uploader("Certificado digital A1 (.pfx/.p12)", type=["pfx", "p12"])
+                senha_cert = st.text_input("Senha do certificado", type="password")
+                salvar_cred = st.form_submit_button("Salvar", type="primary")
+            if salvar_cred:
+                if not cnpj_proc.strip() or not up_certificado or not senha_cert:
+                    st.error("Informe CPF/CNPJ, o arquivo do certificado e a senha.")
+                else:
+                    rpa_core.salvar_credencial_certificado(
+                        escritorio_id, sistema, cnpj_proc.strip(), up_certificado.getvalue(), senha_cert, usuario,
+                    )
+                    _flash("flash_rpa_hub", "✅ Certificado salvo.")
+                    st.rerun()
+        else:
+            with st.form(f"credencial_form_{modulo_id}", clear_on_submit=True):
+                cnpj_proc = st.text_input("CNPJ do procurador")
+                senha_proc = st.text_input("Senha do procurador", type="password")
+                salvar_cred = st.form_submit_button("Salvar", type="primary")
+            if salvar_cred:
+                if not cnpj_proc.strip() or not senha_proc:
+                    st.error("Informe CNPJ e senha.")
+                else:
+                    rpa_core.salvar_credencial(escritorio_id, sistema, cnpj_proc.strip(), senha_proc, usuario)
+                    _flash("flash_rpa_hub", "✅ Credencial salva.")
+                    st.rerun()
 
     st.divider()
     _flash("flash_rpa_hub")
@@ -909,8 +936,13 @@ def _tela_rpa_hub() -> None:
                 if st.button("🚀 Iniciar processamento", type="primary"):
                     execucao_id = rpa_core.criar_execucao(
                         escritorio_id, modulo_id, conteudo, up_planilha.name, usuario, empresas,
+                        competencia_escolhida,
                     )
-                    _flash("flash_rpa_hub", f"✅ Execução #{execucao_id} criada — {len(empresas)} empresa(s) na fila.")
+                    _flash(
+                        "flash_rpa_hub",
+                        f"✅ Execução #{execucao_id} criada — competência {competencia_escolhida}, "
+                        f"{len(empresas)} empresa(s) na fila.",
+                    )
                     st.rerun()
 
     st.divider()
@@ -928,9 +960,10 @@ def _tela_rpa_hub() -> None:
         empresas_exec = rpa_core.listar_empresas(execucao["id"])
         concluidas = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_CONCLUIDO)
         erros = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_ERRO)
+        _competencia_exec = f" · competência {execucao['competencia']}" if execucao.get("competencia") else ""
         titulo = (
             f"{emoji_status.get(execucao['status'], '•')} Execução #{execucao['id']} — "
-            f"{execucao['criado_em']:%d/%m/%Y %H:%M} — {execucao['status']} "
+            f"{execucao['criado_em']:%d/%m/%Y %H:%M}{_competencia_exec} — {execucao['status']} "
             f"({concluidas}/{len(empresas_exec)} concluídas, {erros} erro(s))"
         )
         with st.expander(titulo):
@@ -946,6 +979,11 @@ def _tela_rpa_hub() -> None:
                         "⬇️ PDF", bytes(empresa["pdf"]), file_name=empresa["pdf_nome"],
                         key=f"pdf_{empresa['id']}",
                     )
+                    if empresa.get("xml_zip"):
+                        cols[4].download_button(
+                            "⬇️ XML", bytes(empresa["xml_zip"]), file_name=empresa["xml_zip_nome"],
+                            key=f"xml_{empresa['id']}",
+                        )
                 elif empresa["status"] == rpa_core.STATUS_ERRO:
                     cols[4].caption(f"⚠️ {empresa['erro']}")
                 else:
