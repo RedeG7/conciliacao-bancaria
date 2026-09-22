@@ -21,6 +21,12 @@ MODULOS = {
         "colunas_planilha": ["Código da Empresa", "CNPJ/CPF", "Obrigação", "Município"],
         "municipio_alvo": "SENADOR CANEDO",
     },
+    "issnet_rest_dms": {
+        "titulo": "Fechamento REST/DMS — ISS Net Online (Goiânia/Ap. de Goiânia)",
+        "sistema_credencial": "issnet_goiania_apgyn",
+        "colunas_planilha": ["Código da Empresa", "CNPJ/CPF", "Obrigação", "Município"],
+        "municipio_alvo": "GOIÂNIA / APARECIDA DE GOIÂNIA",
+    },
 }
 
 
@@ -30,6 +36,9 @@ def processar_empresa(modulo: str, *args, **kwargs) -> dict:
     if modulo == "issweb_rest_dms":
         from rpa.issweb import processar
         return processar.processar_empresa(*args, **kwargs)
+    if modulo == "issnet_rest_dms":
+        from rpa.issnet import processar
+        return processar.processar_empresa(*args, **kwargs)
     raise ValueError(f"Módulo de RPA desconhecido: {modulo}")
 
 
@@ -38,6 +47,9 @@ def preparar_periodo(modulo: str) -> dict:
     tardio, mesmo motivo de processar_empresa)."""
     if modulo == "issweb_rest_dms":
         from rpa.issweb.competencia import calcular_competencia_anterior
+        return calcular_competencia_anterior()
+    if modulo == "issnet_rest_dms":
+        from rpa.issnet.competencia import calcular_competencia_anterior
         return calcular_competencia_anterior()
     raise ValueError(f"Módulo de RPA desconhecido: {modulo}")
 
@@ -49,6 +61,9 @@ def ler_empresas(modulo: str, conteudo: bytes) -> list[dict]:
     if modulo == "issweb_rest_dms":
         from rpa.issweb import planilha
         return planilha.ler_empresas(conteudo)
+    if modulo == "issnet_rest_dms":
+        from rpa.issnet import planilha
+        return planilha.ler_empresas(conteudo)
     raise ValueError(f"Módulo de RPA desconhecido: {modulo}")
 
 
@@ -57,6 +72,10 @@ def fazer_login(modulo: str, page, cnpj: str, senha: str) -> None:
     fluxo de login (URL, campos, mensagens de erro)."""
     if modulo == "issweb_rest_dms":
         from rpa.issweb import portal, processar
+        portal.login(page, cnpj, senha, processar.PORTAL_URL)
+        return
+    if modulo == "issnet_rest_dms":
+        from rpa.issnet import portal, processar
         portal.login(page, cnpj, senha, processar.PORTAL_URL)
         return
     raise ValueError(f"Módulo de RPA desconhecido: {modulo}")

@@ -48,6 +48,14 @@ def garantir_schema() -> None:
                 PRIMARY KEY (escritorio_id, sistema)
             )
         """)
+        # certificado_pfx: só usado por módulos com tipo_auth "certificado"
+        # (ver rpa/registry.py) - login por certificado digital A1 (.pfx) em
+        # vez de usuário/senha. Quando presente, senha_cifrada guarda a senha
+        # do PRÓPRIO certificado (cifrada), não a senha do portal.
+        conn.execute("""
+            ALTER TABLE rpa_credenciais
+            ADD COLUMN IF NOT EXISTS certificado_pfx BYTEA
+        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS rpa_execucoes (
                 id SERIAL PRIMARY KEY,
@@ -77,6 +85,15 @@ def garantir_schema() -> None:
                 erro TEXT,
                 atualizado_em TIMESTAMPTZ
             )
+        """)
+        # xml_zip: segundo arquivo opcional por empresa, só usado pelo fluxo
+        # condicional do issnet (DMS com movimento também baixa o zip de
+        # XMLs das notas do período, além do PDF do Livro Fiscal) - ver
+        # rpa/issnet/processar.py.
+        conn.execute("""
+            ALTER TABLE rpa_empresas
+            ADD COLUMN IF NOT EXISTS xml_zip BYTEA,
+            ADD COLUMN IF NOT EXISTS xml_zip_nome TEXT
         """)
         conn.commit()
 
@@ -109,6 +126,51 @@ def salvar_credencial(escritorio_id: str, sistema: str, cnpj: str, senha: str, a
                 atualizado_por = EXCLUDED.atualizado_por
         """, (escritorio_id, sistema, cnpj, senha_cifrada, atualizado_por))
         conn.commit()
+
+
+def salvar_credencial_certificado(
+    escritorio_id: str, sistema: str, cnpj_titular: str, pfx_bytes: bytes,
+    senha_certificado: str, atualizado_por: str,
+) -> None:
+    """Equivalente a salvar_credencial(), mas para módulos com login por
+    certificado digital A1: cifra o próprio arquivo .pfx (em certificado_pfx)
+    e a senha do certificado (em senha_cifrada, mesmo campo de sempre)."""
+    fernet = _fernet()
+    pfx_cifrado = fernet.encrypt(pfx_bytes)
+    senha_cifrada = fernet.encrypt(senha_certificado.encode("utf-8"))
+    with auth.conectar() as conn:
+        conn.execute("""
+            INSERT INTO rpa_credenciais (escritorio_id, sistema, cnpj, senha_cifrada, certificado_pfx, atualizado_por)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (escritorio_id, sistema) DO UPDATE SET
+                cnpj = EXCLUDED.cnpj,
+                senha_cifrada = EXCLUDED.senha_cifrada,
+                certificado_pfx = EXCLUDED.certificado_pfx,
+                atualizado_em = now(),
+                atualizado_por = EXCLUDED.atualizado_por
+        """, (escritorio_id, sistema, cnpj_titular, senha_cifrada, pfx_cifrado, atualizado_por))
+        conn.commit()
+
+
+def obter_credencial_certificado(escritorio_id: str, sistema: str) -> Optional[dict]:
+    """Decifra e retorna {'cnpj', 'pfx_bytes', 'senha'} - só o worker deve
+    chamar isso. Mesmo motivo de InvalidToken de obter_credencial()."""
+    with auth.conectar() as conn:
+        linha = conn.execute(
+            "SELECT cnpj, senha_cifrada, certificado_pfx FROM rpa_credenciais WHERE escritorio_id = %s AND sistema = %s",
+            (escritorio_id, sistema),
+        ).fetchone()
+    if not linha or not linha["certificado_pfx"]:
+        return None
+    fernet = _fernet()
+    try:
+        senha = fernet.decrypt(bytes(linha["senha_cifrada"])).decode("utf-8")
+        pfx_bytes = fernet.decrypt(bytes(linha["certificado_pfx"]))
+    except InvalidToken as exc:
+        raise RuntimeError(
+            f"Não foi possível decifrar a credencial de '{sistema}' — RPA_ENC_KEY pode ter mudado."
+        ) from exc
+    return {"cnpj": linha["cnpj"], "pfx_bytes": pfx_bytes, "senha": senha}
 
 
 def tem_credencial(escritorio_id: str, sistema: str) -> Optional[dict]:
@@ -256,11 +318,13 @@ def marcar_empresa_status(empresa_id: int, status: str) -> None:
 def atualizar_empresa(
     empresa_id: int, status: str, movimento: str = "", erro: str = "",
     pdf: Optional[bytes] = None, pdf_nome: str = "",
+    xml_zip: Optional[bytes] = None, xml_zip_nome: str = "",
 ) -> None:
     with auth.conectar() as conn:
         conn.execute("""
             UPDATE rpa_empresas
-            SET status = %s, movimento = %s, erro = %s, pdf = %s, pdf_nome = %s, atualizado_em = now()
+            SET status = %s, movimento = %s, erro = %s, pdf = %s, pdf_nome = %s,
+                xml_zip = %s, xml_zip_nome = %s, atualizado_em = now()
             WHERE id = %s
-        """, (status, movimento, erro, pdf, pdf_nome, empresa_id))
+        """, (status, movimento, erro, pdf, pdf_nome, xml_zip, xml_zip_nome, empresa_id))
         conn.commit()
