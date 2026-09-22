@@ -1072,8 +1072,28 @@ def _reparar_linhas_balancete_sobrepostas(page, linhas_texto: List[str]) -> List
             resto = [c for c in chars_ordenados if c["x0"] >= 100]
             reparada = False
             if prefixo and resto:
-                estreitos = sorted((c for c in prefixo if c["text"] != " " and (c["x1"] - c["x0"]) < 4.5), key=lambda c: c["x0"])
-                largos = sorted((c for c in prefixo if c["text"] != " " and (c["x1"] - c["x0"]) >= 4.5), key=lambda c: c["x0"])
+                # precisa das DUAS condicoes pra entrar no fluxo do
+                # codigo/classificacao - largura ESTREITA (fonte do
+                # codigo, ~3.3px nesse tipo de balancete) E ser
+                # digito/ponto. So a largura nao basta: um hifen dentro
+                # do nome da conta (ex.: "MATERIA-PRIMA") tem largura
+                # parecida com a de um digito nessa fonte e contaminaria
+                # o codigo se entrasse so por largura. So o conteudo
+                # tambem nao basta: um digito que faz parte do NOME (ex.:
+                # o "6" de "C6 Bank") pode cair dentro da mesma faixa X
+                # do codigo por acaso, mas e desenhado na fonte LARGA do
+                # nome (bem mais largo que os digitos do codigo) - exigir
+                # as duas evita tanto contaminar o codigo com um hifen
+                # quanto com um digito que na verdade e parte do nome.
+                estreitos = sorted(
+                    (c for c in prefixo
+                     if (c["text"].isdigit() or c["text"] == ".") and (c["x1"] - c["x0"]) < 4.5),
+                    key=lambda c: c["x0"],
+                )
+                largos = sorted(
+                    (c for c in prefixo if c["text"] != " " and c not in estreitos),
+                    key=lambda c: c["x0"],
+                )
                 if estreitos and largos:
                     texto_estreito = _juntar_com_espacos(estreitos)
                     texto_resto = _juntar_com_espacos(sorted(resto, key=lambda c: c["x0"]))
