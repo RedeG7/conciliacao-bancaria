@@ -1232,11 +1232,24 @@ def contas_provaveis_banco(contas: List[ContaBalancete]) -> List[ContaBalancete]
 # ---------------------------------------------------------------------------
 
 _BANCOS_CONHECIDOS = [
-    "banco do brasil", "bradesco", "itau", "itaú", "santander", "caixa economica federal",
-    "caixa econômica federal", "nubank", "inter", "sicoob", "sicredi", "safra", "original",
+    "banco do brasil", "bradesco", "itau", "santander", "caixa economica federal",
+    "nubank", "inter", "sicoob", "sicredi", "safra", "original",
     "banco pan", "banrisul", "pagseguro", "pagbank", "mercado pago", "stone", "c6 bank",
     "btg pactual", "neon", "next", "modal", "will bank", "caixa",
 ]
+
+
+def _sem_acento(texto: str) -> str:
+    """Remove acentos (ex.: 'Itaú' -> 'itau') pra comparacao de nome de
+    banco nao depender de qual variante (acentuada ou nao) apareceu no
+    extrato/balancete - o rodape de extratos costuma trazer o dominio sem
+    acento ('itau.com.br'), enquanto o nome da conta no balancete vem
+    escrito certo em portugues ('BANCO ITAÚ'); sem normalizar, uma busca
+    de substring simples nunca bate entre os dois."""
+    import unicodedata
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", texto) if not unicodedata.combining(ch)
+    )
 
 
 def extrair_identificador_banco(path: str) -> Optional[str]:
@@ -1247,7 +1260,7 @@ def extrair_identificador_banco(path: str) -> Optional[str]:
         raw = Path(path).read_text(encoding="latin-1", errors="replace")
         m = re.search(r"<ORG>([^<\r\n]+)", raw, re.IGNORECASE)
         if m:
-            org = m.group(1).strip().lower()
+            org = _sem_acento(m.group(1).strip().lower())
             for nome in _BANCOS_CONHECIDOS:
                 if nome in org:
                     return nome
@@ -1255,7 +1268,7 @@ def extrair_identificador_banco(path: str) -> Optional[str]:
     else:
         texto = extrair_texto_arquivo(path)
 
-    busca = f"{Path(path).stem} {texto}".lower()
+    busca = _sem_acento(f"{Path(path).stem} {texto}".lower())
     for nome in _BANCOS_CONHECIDOS:
         if nome in busca:
             return nome
@@ -1271,7 +1284,7 @@ def detectar_conta_banco(extrato_path: str, contas: List[ContaBalancete]) -> Opt
     if not ident:
         return None
     candidatas = contas_provaveis_banco(contas) or contas
-    achados = [c for c in candidatas if ident in c.nome.lower()]
+    achados = [c for c in candidatas if ident in _sem_acento(c.nome.lower())]
     if len(achados) == 1:
         return achados[0]
     return None
