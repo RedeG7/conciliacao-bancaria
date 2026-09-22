@@ -537,6 +537,21 @@ def _tela_gerenciar_escritorios() -> None:
                     _flash("flash_escritorio_renomeado", f"✅ Escritório renomeado para '{novo_nome.strip()}'.")
                     st.rerun()
 
+            st.markdown("**Aplicativos permitidos**")
+            st.caption("Nenhum marcado = sem restrição (vê todos). Isso é o teto: cada usuário do "
+                       "escritório pode ainda ser restrito mais em Gerenciar Usuários, mas nunca além disso.")
+            _ids_apps = [a["id"] for a in _APPS_HOME]
+            _apps_atuais_escritorio = [a for a in edados.get("apps_permitidos") or [] if a in _ids_apps]
+            _apps_escolhidos_escritorio = st.multiselect(
+                "Apps", options=_ids_apps,
+                format_func=lambda aid: next((a["titulo"] for a in _APPS_HOME if a["id"] == aid), aid),
+                default=_apps_atuais_escritorio, key=f"apps_escritorio_{eid}", label_visibility="collapsed",
+            )
+            if st.button("Salvar apps permitidos", key=f"salvar_apps_escritorio_{eid}"):
+                auth.definir_apps_escritorio(eid, _apps_escolhidos_escritorio)
+                _flash("flash_escritorio_renomeado", "✅ Apps permitidos do escritório atualizados.")
+                st.rerun()
+
             st.markdown("**Usuários deste escritório**")
             if usuarios_do:
                 for uname, udados in usuarios_do.items():
@@ -677,6 +692,25 @@ def _tela_gerenciar_usuarios() -> None:
                             st.rerun()
                         else:
                             st.error("Não foi possível remover: precisa sobrar pelo menos 1 admin para este escritório.")
+
+            st.divider()
+            st.markdown("**Aplicativos permitidos**")
+            _ids_apps_escritorio_do_user = (
+                escritorios.get(dados.get("escritorio_id"), {}).get("apps_permitidos")
+                or [a["id"] for a in _APPS_HOME]
+            )
+            st.caption("Nenhum marcado = vê tudo que o escritório permite. As opções aqui já respeitam "
+                       "o teto definido em Gerenciar Escritórios.")
+            _apps_atuais_user = [a for a in dados.get("apps_permitidos") or [] if a in _ids_apps_escritorio_do_user]
+            _apps_escolhidos_user = st.multiselect(
+                "Apps", options=_ids_apps_escritorio_do_user,
+                format_func=lambda aid: next((a["titulo"] for a in _APPS_HOME if a["id"] == aid), aid),
+                default=_apps_atuais_user, key=f"apps_usuario_{uname}", label_visibility="collapsed",
+            )
+            if st.button("Salvar apps permitidos", key=f"salvar_apps_usuario_{uname}"):
+                auth.definir_apps_usuario(uname, _apps_escolhidos_user)
+                _flash("flash_usuario_status", "✅ Apps permitidos do usuário atualizados.")
+                st.rerun()
 
             st.divider()
             st.markdown("**Redefinir senha**")
@@ -1024,24 +1058,46 @@ def _tela_rpa_hub() -> None:
 
 _APPS_HOME = [
     {
+        "id": "conciliacao",
         "icone": "🏦",
         "titulo": "Conciliação Bancária Automática",
         "descricao": "Extrato/fluxo de caixa × razão contábil × balancete → espelho e arquivo de importação Domínio.",
         "tela": "conciliacao",
     },
     {
+        "id": "rpa_hub",
         "icone": "🤖",
         "titulo": "RPA — Fechamento REST/DMS",
         "descricao": "Fechamento mensal de REST e DMS no ISS Web.",
         "tela": "rpa_hub",
     },
     {
+        "id": "rpa_folha",
         "icone": "📋",
         "titulo": "RPA — Folha de Pagamento",
         "descricao": "Fechamento da folha no Domínio Folha. Ainda roda por automação assistida, sem tela própria aqui.",
         "tela": None,
     },
 ]
+
+
+def _apps_permitidos_efetivos(escritorio_id: str, usuario: str) -> set:
+    """IDs de app (_APPS_HOME) visíveis para este usuário: interseção entre
+    o teto do escritório (todos, se ele não restringiu nada) e o refino do
+    próprio usuário (todos os do escritório, se ele não restringiu nada) -
+    configurado em Gerenciar Escritórios/Usuários. super_admin_global nunca
+    é restringido (é quem administra o hub inteiro)."""
+    if st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL:
+        return {a["id"] for a in _APPS_HOME}
+
+    todos = {a["id"] for a in _APPS_HOME}
+    escritorio = auth.carregar_escritorios().get(escritorio_id, {})
+    apps_escritorio = set(escritorio.get("apps_permitidos") or todos) & todos
+
+    usuarios = auth.carregar_usuarios()
+    apps_usuario = set(usuarios.get(usuario, {}).get("apps_permitidos") or apps_escritorio)
+
+    return apps_escritorio & apps_usuario
 
 
 def _tela_home() -> None:
@@ -1082,8 +1138,16 @@ def _tela_home() -> None:
         unsafe_allow_html=True,
     )
 
-    colunas = st.columns(len(_APPS_HOME))
-    for coluna, app in zip(colunas, _APPS_HOME):
+    _ids_visiveis = _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado"),
+    )
+    _apps_visiveis = [a for a in _APPS_HOME if a["id"] in _ids_visiveis]
+    if not _apps_visiveis:
+        st.info("Nenhum aplicativo liberado para o seu usuário ainda — fale com o administrador do seu escritório.")
+        return
+
+    colunas = st.columns(len(_apps_visiveis))
+    for coluna, app in zip(colunas, _apps_visiveis):
         with coluna:
             with st.container(border=True):
                 # titulo+descricao num min-height fixo (em vez de
@@ -1166,8 +1230,24 @@ if st.session_state.get("tela") == "gerenciar_clientes":
     st.stop()
 
 if st.session_state.get("tela") == "rpa_hub":
+    if "rpa_hub" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
     _tela_rpa_hub()
     st.stop()
+
+if st.session_state.get("tela") == "conciliacao":
+    if "conciliacao" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    # sem st.stop() no caso permitido: cai no corpo principal do arquivo
+    # (a tela de Conciliacao Bancaria sempre foi o "resto do script", sem
+    # funcao propria - so ganhou esse guard explicito aqui pra checar
+    # permissao antes de renderizar).
 
 with st.sidebar:
     st.caption(f"👤 {st.session_state.get('nome_usuario')} · {st.session_state.get('papel_usuario')}")

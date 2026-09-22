@@ -95,6 +95,15 @@ def garantir_schema() -> None:
                 ativo BOOLEAN NOT NULL DEFAULT true
             )
         """)
+        # apps_permitidos: lista de ids de app (ver _APPS_HOME em
+        # app_conciliacao.py) que o escritorio/usuario pode ver na tela
+        # inicial - NULL ou vazio significa "todos" (sem restricao), pra
+        # nao quebrar escritorios/usuarios ja cadastrados antes dessa
+        # funcionalidade existir. Escritorio limita o teto; usuario refina
+        # dentro do que o proprio escritorio ja permite (seguranca em duas
+        # camadas, ver _apps_permitidos_efetivos em app_conciliacao.py).
+        conn.execute("ALTER TABLE escritorios ADD COLUMN IF NOT EXISTS apps_permitidos TEXT[]")
+        conn.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS apps_permitidos TEXT[]")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sessoes (
                 token TEXT PRIMARY KEY,
@@ -254,7 +263,10 @@ def carregar_escritorios() -> Dict[str, dict]:
     with _conectar() as conn:
         linhas = conn.execute("SELECT * FROM escritorios").fetchall()
     return {
-        l["id"]: {"nome": l["nome"], "criado_em": l["criado_em"].isoformat()}
+        l["id"]: {
+            "nome": l["nome"], "criado_em": l["criado_em"].isoformat(),
+            "apps_permitidos": l.get("apps_permitidos") or [],
+        }
         for l in linhas
     }
 
@@ -458,3 +470,28 @@ def definir_status_usuario(usuario: str, ativo: bool) -> "tuple[bool, str]":
             conn.execute("UPDATE usuarios SET ativo = %s WHERE usuario = %s", (ativo, usuario))
 
     return True, ("Usuário ativado." if ativo else "Usuário inativado.")
+
+
+# ---------------------------------------------------------------------------
+# Permissao de apps (quais telas o escritorio/usuario ve na tela inicial)
+# ---------------------------------------------------------------------------
+
+def definir_apps_escritorio(escritorio_id: str, apps: list) -> None:
+    """apps vazio grava NULL (equivale a "todos", ver garantir_schema)."""
+    with _conectar() as conn:
+        conn.execute(
+            "UPDATE escritorios SET apps_permitidos = %s WHERE id = %s",
+            (apps or None, escritorio_id),
+        )
+        conn.commit()
+
+
+def definir_apps_usuario(usuario: str, apps: list) -> None:
+    """apps vazio grava NULL (equivale a "herda do escritorio", ver
+    garantir_schema)."""
+    with _conectar() as conn:
+        conn.execute(
+            "UPDATE usuarios SET apps_permitidos = %s WHERE usuario = %s",
+            (apps or None, usuario),
+        )
+        conn.commit()
