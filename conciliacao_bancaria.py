@@ -216,7 +216,7 @@ _PDF_LINHA_DATA_VALOR_RE = re.compile(
 # R$ X,XX") - excluidos de qualquer parser de linha unica, senao viram
 # transacoes fantasma com o valor do saldo em vez do lancamento.
 _LINHA_CHECKPOINT_RE = re.compile(
-    r"\bsaldo\s+(do\s+dia|anterior|final|inicial|em\s+conta|dispon[íi]vel|bloqueado)\b",
+    r"\bsaldo\s+(total\s+)?(do\s+dia|anterior|final|inicial|em\s+conta|dispon[íi]vel|bloqueado)\b",
     re.IGNORECASE,
 )
 
@@ -676,6 +676,115 @@ def _parse_pdf_gerenciador_caixa(paginas_linhas: List[List[str]], origem: str) -
     return movimentos
 
 
+_ITAU_DATA_RE = re.compile(r"^\d{2}/\d{2}/\d{4}$")
+_ITAU_VALOR_RE = re.compile(r"^-?\d{1,3}(?:\.\d{3})*,\d{2}$")
+
+
+def _parse_pdf_itau(path: str, origem: str) -> List[Movimento]:
+    """Layout do extrato PDF do Itau ('Lancamentos do periodo'): tabela de
+    5 colunas (Data | Lancamentos | Razao Social | CNPJ/CPF | Valor (R$) |
+    Saldo (R$)) onde as colunas de texto (Lancamentos e Razao Social)
+    quebram de forma INDEPENDENTE quando o conteudo e comprido, sem
+    relacao com quantas linhas a outra coluna precisa - simples
+    extract_text() sequencial embaralha lancamentos vizinhos (rouba um
+    pedaco de descricao do lancamento errado). Usa as COORDENADAS X de
+    cada palavra (via extract_words) pra saber exatamente de qual coluna
+    ela e, apoiado nas proprias posicoes do cabecalho da tabela (robusto
+    a pequenas variacoes de layout entre extratos). Uma linha-ancora e
+    reconhecida por ter uma Data (coluna 1) E um Valor (coluna Valor) na
+    mesma altura; se o lancamento coube todo numa linha so (tem texto
+    tanto em Lancamentos quanto em Razao Social na propria ancora), nao
+    busca continuacao - senao, "rouba" a linha imediatamente acima e/ou
+    abaixo (que devem ter conteudo so nas colunas de texto, nunca uma
+    Data propria) pra completar a descricao."""
+    import pdfplumber  # type: ignore
+
+    with pdfplumber.open(path) as pdf:
+        x_lanc = x_razao = x_cnpj = x_valor = x_saldo = None
+        for page in pdf.pages:
+            palavras_cabecalho = page.extract_words()
+            data_word = next((w for w in palavras_cabecalho if w["text"] == "Data"), None)
+            if data_word:
+                cabecalho = {w["text"]: w["x0"] for w in palavras_cabecalho if abs(w["top"] - data_word["top"]) < 2}
+                if "Lançamentos" in cabecalho and "Razão" in cabecalho and "Valor" in cabecalho and "Saldo" in cabecalho:
+                    x_lanc = cabecalho["Lançamentos"]
+                    x_razao = cabecalho["Razão"]
+                    x_cnpj = cabecalho.get("CNPJ/CPF", x_razao + 100)
+                    x_valor = cabecalho["Valor"]
+                    x_saldo = cabecalho["Saldo"]
+                    break
+        if x_lanc is None:
+            return []  # cabecalho nao encontrado - nao e este layout
+
+        # numeros negativos (sinal "-") ficam um pouco mais largos e podem
+        # comecar alguns pixels antes do x0 "oficial" da coluna Valor (que
+        # veio da palavra do cabecalho, sem sinal) - folga validada contra
+        # o CNPJ/CPF mais largo do documento (nunca passa de x1 ~440, bem
+        # longe da coluna de valor) pra nao arriscar capturar coluna errada.
+        x_valor_tolerante = x_valor - 15
+        x_saldo_tolerante = x_saldo - 15
+
+        movimentos: List[Movimento] = []
+        for page in pdf.pages:
+            palavras = page.extract_words()
+            bandas: List[Tuple[float, list]] = []
+            for w in sorted(palavras, key=lambda w: w["top"]):
+                if bandas and abs(w["top"] - bandas[-1][0]) < 2:
+                    bandas[-1][1].append(w)
+                else:
+                    bandas.append([w["top"], [w]])
+
+            def _texto_colunas(ws: list) -> str:
+                relevantes = [w for w in ws if x_lanc <= w["x0"] < x_valor_tolerante]
+                return " ".join(w["text"] for w in sorted(relevantes, key=lambda w: w["x0"]))
+
+            for i, (_top, banda) in enumerate(bandas):
+                data_word = next(
+                    (w for w in banda if w["x0"] < x_lanc and _ITAU_DATA_RE.match(w["text"])), None
+                )
+                valor_word = next(
+                    (w for w in banda if x_valor_tolerante <= w["x0"] < x_saldo_tolerante
+                     and _ITAU_VALOR_RE.match(w["text"])), None
+                )
+                if not data_word or not valor_word:
+                    continue
+                meio = _texto_colunas(banda)
+                if _LINHA_CHECKPOINT_RE.search(meio):
+                    continue
+                tem_lancamento = any(x_lanc <= w["x0"] < x_razao for w in banda)
+                tem_razao_social = any(x_razao <= w["x0"] < x_cnpj for w in banda)
+                autossuficiente = tem_lancamento and tem_razao_social
+
+                partes = []
+                if not autossuficiente and i - 1 >= 0:
+                    _, banda_anterior = bandas[i - 1]
+                    tem_data_propria = any(
+                        w["x0"] < x_lanc and _ITAU_DATA_RE.match(w["text"]) for w in banda_anterior
+                    )
+                    if not tem_data_propria:
+                        txt = _texto_colunas(banda_anterior)
+                        if txt:
+                            partes.append(txt)
+                if meio:
+                    partes.append(meio)
+                if not autossuficiente and i + 1 < len(bandas):
+                    _, banda_proxima = bandas[i + 1]
+                    tem_data_propria = any(
+                        w["x0"] < x_lanc and _ITAU_DATA_RE.match(w["text"]) for w in banda_proxima
+                    )
+                    if not tem_data_propria:
+                        txt = _texto_colunas(banda_proxima)
+                        if txt:
+                            partes.append(txt)
+                desc = " ".join(partes).strip()
+                if not desc:
+                    continue
+                data = _parse_data_br(data_word["text"])
+                valor = _parse_valor_br(valor_word["text"])
+                movimentos.append(Movimento(data=data, valor=valor, descricao=desc, origem=origem))
+        return movimentos
+
+
 def _ocr_linhas_por_pagina(path: str) -> List[List[str]]:
     """Renderiza cada pagina do PDF (via PyMuPDF, sem depender de poppler) e
     roda OCR (Tesseract), reconstruindo a ordem visual linha a linha pelas
@@ -765,13 +874,14 @@ _MARCADORES_BANCO: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"pagseguro|\bpagbank\b"), "pagbank"),
     (re.compile(r"\bsicoob\b"), "sicoob"),
     (re.compile(r"gerenciador\s*caixa|caixa\s*econ[oô]mica\s*federal"), "caixa"),
+    (re.compile(r"itau\.com\.br|ita[uú]\s+unibanco"), "itau"),
 ]
 
 
 def parse_pdf_generic(path: str, origem: str = "extrato") -> List[Movimento]:
     """Le o PDF e despacha pro parser certo: primeiro tenta identificar o
     banco pelo proprio texto do extrato (Nubank, C6, Cora, PagBank/
-    PagSeguro, Sicoob, Gerenciador CAIXA), cada um com layout dedicado;
+    PagSeguro, Sicoob, Gerenciador CAIXA, Itau), cada um com layout dedicado;
     se nenhum bater, cai nos padroes genericos (tabular 'DD/MM/AAAA
     descricao valor' numa linha, extrato agrupado por dia tipo Banco
     Inter, e por fim o layout da Caixa de novo como ultimo recurso, ja
@@ -816,6 +926,8 @@ def parse_pdf_generic(path: str, origem: str = "extrato") -> List[Movimento]:
         movimentos = _parse_pdf_sicoob(paginas_linhas, origem)
     elif banco == "caixa":
         movimentos = _parse_pdf_gerenciador_caixa(paginas_linhas, origem)
+    elif banco == "itau":
+        movimentos = _parse_pdf_itau(path, origem)
 
     if not movimentos:
         movimentos = _parse_pdf_linhas_data_valor(paginas_texto_reconstruido, origem)
