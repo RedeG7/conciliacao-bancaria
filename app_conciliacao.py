@@ -33,13 +33,16 @@ from rpa import registry as rpa_registry
 
 st.set_page_config(page_title="Hub App", page_icon="🧩", layout="wide")
 
-# A barra de ferramentas nativa do Streamlit (⋮ com tema/Print/Record
-# screen + botao "Deploy", no canto superior direito) nao tem como ser
-# traduzida pro portugues (texto fixo no proprio framework, sem hook de
-# i18n) - em vez de deixar ingles solto na interface, escondemos ela em
-# todas as telas (nenhuma dessas opcoes e relevante pro usuario final).
+# O menu "⋮" (tema/Print/Record screen) e o botao "Deploy" no canto
+# superior direito sao texto fixo em ingles, sem suporte a traducao -
+# escondidos por isso. IMPORTANTE: nao esconder [data-testid='stToolbar']
+# inteiro - o botao de EXPANDIR a sidebar quando ela esta minimizada
+# (stExpandSidebarButton) mora dentro desse mesmo container, e escondendo
+# o pai ele some junto, prendendo o usuario com a sidebar fechada sem
+# jeito de reabrir.
 st.markdown(
-    "<style>#MainMenu, [data-testid='stMainMenu'], [data-testid='stToolbar']"
+    "<style>#MainMenu, [data-testid='stMainMenu'], [data-testid='stMainMenuButton'],"
+    "[data-testid='stBaseButton-header']"
     "{visibility:hidden; display:none;}"
     # o aviso "Press Enter to submit form"/"Press Enter to apply" que o
     # Streamlit mostra ao digitar num campo tambem e texto fixo em ingles,
