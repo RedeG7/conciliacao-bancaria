@@ -33,6 +33,21 @@ from rpa import registry as rpa_registry
 
 st.set_page_config(page_title="Hub App", page_icon="🧩", layout="wide")
 
+# A barra de ferramentas nativa do Streamlit (⋮ com tema/Print/Record
+# screen + botao "Deploy", no canto superior direito) nao tem como ser
+# traduzida pro portugues (texto fixo no proprio framework, sem hook de
+# i18n) - em vez de deixar ingles solto na interface, escondemos ela em
+# todas as telas (nenhuma dessas opcoes e relevante pro usuario final).
+st.markdown(
+    "<style>#MainMenu, [data-testid='stMainMenu'], [data-testid='stToolbar']"
+    "{visibility:hidden; display:none;}"
+    # o aviso "Press Enter to submit form"/"Press Enter to apply" que o
+    # Streamlit mostra ao digitar num campo tambem e texto fixo em ingles,
+    # sem opcao de traducao - escondido pelo mesmo motivo.
+    "[data-testid='InputInstructions']{visibility:hidden; display:none;}</style>",
+    unsafe_allow_html=True,
+)
+
 # Usuarios/escritorios/clientes/historico ficam no Postgres (DATABASE_URL) -
 # ver auth.py. Isso evita corrida de escrita entre admins de escritorios
 # diferentes mexendo ao mesmo tempo (cada operacao e uma transacao atomica
@@ -173,22 +188,167 @@ def _fazer_logout() -> None:
     st.rerun()
 
 
-def _tela_login() -> None:
+def _estilo_hub_app() -> None:
+    """CSS + fundo decorativo compartilhados pelas telas de autenticacao
+    (login e trocar senha) - a identidade visual do Hub App (fundo escuro,
+    ondas e icone de quebra-cabeca em degrade verde). Cada tela monta seu
+    proprio cabecalho/conteudo em cima disso com as classes happ-*."""
     st.markdown(
-        "<div style='display:flex;justify-content:center;align-items:center;"
-        "text-align:center;font-size:2.25rem;font-weight:700;line-height:1.2;"
-        "margin-bottom:0.5rem;'>🧩 Hub App</div>"
-        "<div style='display:flex;justify-content:center;align-items:center;"
-        "text-align:center;color:rgba(250,250,250,0.6);margin-bottom:1rem;'>"
-        "Faça login para continuar — cada escritório vê só os próprios dados.</div>",
+        """
+        <style>
+        #MainMenu, header[data-testid="stHeader"], footer {visibility:hidden; height:0;}
+        .block-container {padding-top:1.5rem !important; padding-bottom:2rem !important; max-width:1400px !important;}
+        .stApp {
+            background:
+                radial-gradient(1100px 600px at 85% -10%, rgba(34,224,138,0.16), transparent 60%),
+                radial-gradient(900px 500px at -10% 110%, rgba(34,224,138,0.10), transparent 60%),
+                linear-gradient(160deg, #070b14 0%, #0b1220 55%, #060a12 100%);
+        }
+        .happ-bg-decor {position:fixed; inset:0; z-index:0; overflow:hidden; pointer-events:none;}
+        .happ-header, .happ-dept-list, .happ-side-tagline, .happ-features, .happ-footer,
+        div[data-testid="stForm"] {position:relative; z-index:1;}
+        .happ-bg-decor .puzzle {
+            position:absolute; top:-40px; right:-40px; font-size:420px; line-height:1;
+            opacity:0.10; transform:rotate(8deg); filter:hue-rotate(70deg) saturate(1.6) grayscale(0.15);
+        }
+        .happ-bg-decor svg {position:absolute; left:0; bottom:-40px; width:100%; opacity:0.55;}
+
+        .happ-header {text-align:center; margin-bottom:0.2rem;}
+        .happ-logo-row {display:flex; align-items:center; justify-content:center; gap:14px; margin-bottom:2px;}
+        .happ-logo-icon {
+            font-size:44px; line-height:1;
+            filter:hue-rotate(70deg) saturate(1.6) brightness(1.15) drop-shadow(0 0 12px rgba(34,224,138,.5));
+        }
+        .happ-logo-text {font-size:42px; font-weight:800; letter-spacing:-1px; color:#f5f7fa;}
+        .happ-logo-text .happ-app {
+            background:linear-gradient(90deg,#22e08a,#a8e63d);
+            -webkit-background-clip:text; background-clip:text; color:transparent;
+        }
+        .happ-welcome {font-size:26px; font-weight:800; margin:10px 0 4px; color:#f5f7fa;}
+        .happ-subtitle {font-size:15.5px; color:#93a1b7; margin:0 0 8px;}
+        .happ-tagline {font-size:13px; color:#6f7f97;}
+        .happ-tagline b {color:#9fb0c8; font-weight:600;}
+
+        .happ-dept-list {display:flex; flex-direction:column; gap:18px; padding-top:26px;}
+        .happ-dept-item {display:flex; align-items:center; gap:12px;}
+        .happ-dept-icon {
+            width:42px; height:42px; border-radius:11px; flex:none;
+            display:flex; align-items:center; justify-content:center;
+            background:rgba(255,255,255,0.035); border:1px solid rgba(255,255,255,0.09); font-size:18px;
+        }
+        .happ-dept-name {font-weight:700; font-size:14px; color:#f5f7fa;}
+        .happ-dept-desc {font-size:11.5px; color:#93a1b7;}
+
+        div[data-testid="stForm"] {
+            background:rgba(255,255,255,0.035); border:1px solid rgba(255,255,255,0.09);
+            border-radius:18px; padding:1.8rem 2rem 1.4rem;
+        }
+        div[data-testid="stForm"] label p {font-weight:700; color:#f5f7fa; font-size:14px;}
+        div[data-testid="stTextInput"] {position:relative;}
+        div[data-testid="stTextInput"] input {
+            background:#111a2c !important; border:1px solid rgba(255,255,255,0.10) !important;
+            border-radius:10px !important; color:#f5f7fa !important; padding-left:42px !important;
+        }
+        div[data-testid="stTextInput"]:has(input[aria-label="Usuário"])::before {
+            content:"👤"; position:absolute; left:14px; top:41px; font-size:14px; opacity:.6; z-index:5;
+        }
+        div[data-testid="stTextInput"]:has(input[type="password"])::before {
+            content:"🔒"; position:absolute; left:14px; top:41px; font-size:14px; opacity:.6; z-index:5;
+        }
+        .happ-remember-row {
+            display:flex; align-items:center; justify-content:space-between;
+            margin:2px 0 18px; font-size:12.5px; color:#93a1b7;
+        }
+        .happ-remember-row span.happ-forgot {color:#22e08a; font-weight:600;}
+        div[data-testid="stFormSubmitButton"] button {
+            width:100%; background:linear-gradient(90deg,#22e08a,#a8e63d) !important; color:#06210f !important;
+            font-weight:800 !important; border:none !important; border-radius:10px !important; padding:0.75rem !important;
+        }
+        div[data-testid="stButton"] button {
+            background:transparent !important; color:#93a1b7 !important;
+            border:1px solid rgba(255,255,255,0.14) !important;
+        }
+
+        .happ-side-tagline {padding-top:70px;}
+        .happ-side-tagline p {font-style:italic; font-size:19px; line-height:1.35; color:#dfe6ef; font-weight:500; margin:0 0 12px;}
+        .happ-underline {width:60px; height:4px; border-radius:4px; background:linear-gradient(90deg,#22e08a,#a8e63d);}
+
+        .happ-features {display:flex; justify-content:center; gap:70px; margin-top:44px; flex-wrap:wrap;}
+        .happ-feature {display:flex; align-items:center; gap:12px;}
+        .happ-feature .ficon {font-size:20px; color:#22e08a;}
+        .happ-feature .ftitle {font-weight:700; font-size:13.5px; color:#f5f7fa;}
+        .happ-feature .fdesc {font-size:11.5px; color:#93a1b7;}
+
+        .happ-footer {text-align:center; margin-top:26px; font-size:11px; letter-spacing:2px; color:#4a5773;}
+        </style>
+
+        <div class="happ-bg-decor">
+            <div class="puzzle">🧩</div>
+            <svg viewBox="0 0 1600 260" preserveAspectRatio="none">
+                <path d="M0,140 C300,220 500,60 850,120 C1150,175 1350,80 1600,140 L1600,260 L0,260 Z" fill="rgba(34,224,138,0.10)"/>
+                <path d="M0,180 C320,240 620,120 900,160 C1200,200 1380,140 1600,190 L1600,260 L0,260 Z" fill="rgba(34,224,138,0.16)"/>
+            </svg>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
-    _esq, meio, _dir = st.columns([1, 1.3, 1])
-    with meio:
+
+
+def _tela_login() -> None:
+    """Tela de login com a identidade visual do Hub App: lista decorativa
+    de departamentos e cartao de login. "Lembrar de mim" e "Esqueceu a
+    senha?" sao so visuais - o sistema ainda nao tem essas funcoes (a
+    sessao ja fica lembrada via cookie, e reset de senha e feito por um
+    admin em Gerenciar Usuarios)."""
+    _estilo_hub_app()
+    st.markdown(
+        """
+        <div class="happ-header">
+            <div class="happ-logo-row">
+                <div class="happ-logo-icon">🧩</div>
+                <div class="happ-logo-text">Hub <span class="happ-app">APP</span></div>
+            </div>
+            <div class="happ-welcome">Bem-vindo!</div>
+            <div class="happ-subtitle">Sua central de automação contábil para todos os departamentos.</div>
+            <div class="happ-tagline"><b>Mais eficiência</b> &nbsp;|&nbsp; <b>Mais integração</b> &nbsp;|&nbsp; <b>Mais resultados</b></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_esq, col_meio, col_dir = st.columns([1, 1.3, 1])
+
+    with col_esq:
+        st.markdown(
+            """
+            <div class="happ-dept-list">
+                <div class="happ-dept-item"><div class="happ-dept-icon">👥</div>
+                    <div><div class="happ-dept-name">DP</div><div class="happ-dept-desc">Gestão de Pessoas</div></div></div>
+                <div class="happ-dept-item"><div class="happ-dept-icon">📄</div>
+                    <div><div class="happ-dept-name">Fiscal</div><div class="happ-dept-desc">Apuração e Obrigações</div></div></div>
+                <div class="happ-dept-item"><div class="happ-dept-icon">📈</div>
+                    <div><div class="happ-dept-name">Contábil</div><div class="happ-dept-desc">Demonstrativos e Relatórios</div></div></div>
+                <div class="happ-dept-item"><div class="happ-dept-icon">⚙️</div>
+                    <div><div class="happ-dept-name">Societário</div><div class="happ-dept-desc">Processos e Documentos</div></div></div>
+                <div class="happ-dept-item"><div class="happ-dept-icon">☁️</div>
+                    <div><div class="happ-dept-name">TI</div><div class="happ-dept-desc">Integrações e Automação</div></div></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col_meio:
         with st.form("login_form"):
-            usuario = st.text_input("Usuário")
-            senha = st.text_input("Senha", type="password")
-            entrar = st.form_submit_button("Entrar", type="primary", use_container_width=True)
+            usuario = st.text_input("Usuário", placeholder="Digite seu usuário")
+            senha = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+            st.markdown(
+                '<div class="happ-remember-row">'
+                '<span>☐ Lembrar de mim</span>'
+                '<span class="happ-forgot">Esqueceu a senha?</span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            entrar = st.form_submit_button("Entrar →", type="primary", use_container_width=True)
         if entrar:
             auth.garantir_bootstrap()
             usuario = usuario.strip()
@@ -203,34 +363,83 @@ def _tela_login() -> None:
                 _agendar_cookie_sessao("set", token)
                 st.rerun()
 
+    with col_dir:
+        st.markdown(
+            """
+            <div class="happ-side-tagline">
+                <p>Conectando<br/>pessoas, processos<br/>e resultados.</p>
+                <div class="happ-underline"></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        """
+        <div class="happ-features">
+            <div class="happ-feature"><span class="ficon">⚡</span>
+                <div><div class="ftitle">Automatize</div><div class="fdesc">tarefas repetitivas</div></div></div>
+            <div class="happ-feature"><span class="ficon">🚀</span>
+                <div><div class="ftitle">Ganhe tempo</div><div class="fdesc">para o que importa</div></div></div>
+            <div class="happ-feature"><span class="ficon">📊</span>
+                <div><div class="ftitle">Tenha mais</div><div class="fdesc">produtividade</div></div></div>
+        </div>
+        <div class="happ-footer">HUB APP&nbsp;&nbsp;|&nbsp;&nbsp;A CONTABILIDADE MAIS INTELIGENTE</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def _tela_trocar_senha(obrigatoria: bool) -> None:
-    st.title("🔑 Trocar senha")
-    if obrigatoria:
-        st.warning("Por segurança, defina uma nova senha antes de continuar "
-                    "(esta conta ainda está com a senha padrão/temporária).")
-    with st.form("trocar_senha_form"):
-        senha_atual = st.text_input("Senha atual", type="password")
-        nova = st.text_input("Nova senha (mín. 6 caracteres)", type="password")
-        confirmar = st.text_input("Confirmar nova senha", type="password")
-        enviar = st.form_submit_button("Salvar nova senha", type="primary")
-    if enviar:
-        usuario = st.session_state["usuario_logado"]
-        if not auth.autenticar(usuario, senha_atual):
-            st.error("Senha atual incorreta.")
-        elif len(nova) < 6:
-            st.error("A nova senha precisa ter pelo menos 6 caracteres.")
-        elif nova != confirmar:
-            st.error("As senhas digitadas não coincidem.")
-        else:
-            auth.redefinir_senha(usuario, nova, forcar_troca=False)
-            st.session_state["deve_trocar_senha"] = False
+    """Tela de troca de senha com a mesma identidade visual do login
+    (_estilo_hub_app) - aparece tanto no primeiro acesso (senha
+    temporaria, obrigatoria=True) quanto acionada pelo botao "Trocar
+    senha" da sidebar (obrigatoria=False, com opcao de cancelar)."""
+    _estilo_hub_app()
+    subtitulo = (
+        "Por segurança, defina uma nova senha antes de continuar "
+        "(esta conta ainda está com a senha padrão/temporária)."
+        if obrigatoria else
+        "Atualize a senha da sua conta."
+    )
+    st.markdown(
+        f"""
+        <div class="happ-header">
+            <div class="happ-logo-row">
+                <div class="happ-logo-icon">🧩</div>
+                <div class="happ-logo-text">Hub <span class="happ-app">APP</span></div>
+            </div>
+            <div class="happ-welcome">🔑 Trocar senha</div>
+            <div class="happ-subtitle">{subtitulo}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    _esq, meio, _dir = st.columns([1, 1.3, 1])
+    with meio:
+        with st.form("trocar_senha_form"):
+            senha_atual = st.text_input("Senha atual", type="password", placeholder="Digite sua senha atual")
+            nova = st.text_input("Nova senha (mín. 6 caracteres)", type="password", placeholder="Digite a nova senha")
+            confirmar = st.text_input("Confirmar nova senha", type="password", placeholder="Repita a nova senha")
+            enviar = st.form_submit_button("Salvar nova senha →", type="primary", use_container_width=True)
+        if enviar:
+            usuario = st.session_state["usuario_logado"]
+            if not auth.autenticar(usuario, senha_atual):
+                st.error("Senha atual incorreta.")
+            elif len(nova) < 6:
+                st.error("A nova senha precisa ter pelo menos 6 caracteres.")
+            elif nova != confirmar:
+                st.error("As senhas digitadas não coincidem.")
+            else:
+                auth.redefinir_senha(usuario, nova, forcar_troca=False)
+                st.session_state["deve_trocar_senha"] = False
+                st.session_state["mostrar_trocar_senha"] = False
+                st.success("Senha atualizada.")
+                st.rerun()
+        if not obrigatoria and st.button("Cancelar", use_container_width=True):
             st.session_state["mostrar_trocar_senha"] = False
-            st.success("Senha atualizada.")
             st.rerun()
-    if not obrigatoria and st.button("Cancelar"):
-        st.session_state["mostrar_trocar_senha"] = False
-        st.rerun()
 
 
 def _flash(chave: str, texto: Optional[str] = None) -> None:
@@ -685,7 +894,7 @@ def _tela_rpa_hub() -> None:
             except Exception as exc:
                 st.error(str(exc))
             else:
-                st.success(f"{len(empresas)} empresa(s) de Senador Canedo encontradas na planilha.")
+                st.success(f"{len(empresas)} empresa(s) encontradas na planilha para esta rotina.")
                 with st.expander("Ver empresas identificadas"):
                     st.dataframe(
                         [
@@ -750,7 +959,7 @@ _APPS_HOME = [
     {
         "icone": "🤖",
         "titulo": "RPA — Fechamento REST/DMS",
-        "descricao": "Fechamento mensal de REST e DMS no ISS Web (Senador Canedo/GO).",
+        "descricao": "Fechamento mensal de REST e DMS no ISS Web.",
         "tela": "rpa_hub",
     },
     {
@@ -765,7 +974,33 @@ _APPS_HOME = [
 def _tela_home() -> None:
     """Tela inicial: um icone por aplicativo do escritorio. Cada app novo
     (proxima automacao) so precisa de uma entrada em _APPS_HOME - nao mexe
-    no roteamento das telas que ja existem."""
+    no roteamento das telas que ja existem. A sidebar daqui e a unica
+    dona de Gerenciar Escritorios/Usuarios - a tela de Conciliacao
+    Bancaria nao mostra mais esses dois (sao administracao do hub, nao
+    algo especifico daquele app)."""
+    papel_usuario = st.session_state.get("papel_usuario")
+    with st.sidebar:
+        st.caption(f"👤 {st.session_state.get('nome_usuario')} · {papel_usuario}")
+        st.caption(f"🏢 {st.session_state.get('escritorio_nome')}")
+        csb1, csb2 = st.columns(2)
+        with csb1:
+            if st.button("Trocar senha", use_container_width=True, key="home_trocar_senha"):
+                st.session_state["mostrar_trocar_senha"] = True
+                st.rerun()
+        with csb2:
+            if st.button("Sair", use_container_width=True, key="home_sair"):
+                _fazer_logout()
+        if papel_usuario in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
+            st.divider()
+            st.caption("Administração")
+            if papel_usuario == auth.PAPEL_SUPER_GLOBAL:
+                if st.button("🌐 Gerenciar Escritórios", use_container_width=True, key="home_gerenciar_escritorios"):
+                    st.session_state["tela"] = "gerenciar_escritorios"
+                    st.rerun()
+            if st.button("👥 Gerenciar Usuários", use_container_width=True, key="home_gerenciar_usuarios"):
+                st.session_state["tela"] = "gerenciar_usuarios"
+                st.rerun()
+
     st.markdown(
         "<div style='text-align:center;font-size:2.25rem;font-weight:700;"
         "margin-bottom:0.25rem;'>👋 Bem-vindo(a)</div>"
@@ -778,13 +1013,19 @@ def _tela_home() -> None:
     for coluna, app in zip(colunas, _APPS_HOME):
         with coluna:
             with st.container(border=True):
+                # titulo+descricao num min-height fixo (em vez de
+                # st.caption separado): garante que os 3 cards tenham a
+                # mesma altura e o botao "Abrir" comece sempre na mesma
+                # posicao, mesmo com textos de tamanhos diferentes.
                 st.markdown(
-                    f"<div style='text-align:center;font-size:3rem;'>{app['icone']}</div>",
+                    f"<div style='text-align:center;font-size:3rem;margin-bottom:0.4rem;'>{app['icone']}</div>"
+                    f"<div style='min-height:150px;'>"
+                    f"<div style='text-align:center;font-weight:600;margin-bottom:0.3rem;'>{app['titulo']}</div>"
+                    f"<div style='text-align:center;color:rgba(250,250,250,0.6);font-size:0.875rem;'>"
+                    f"{app['descricao']}</div>"
+                    f"</div>",
                     unsafe_allow_html=True,
                 )
-                st.markdown(f"<div style='text-align:center;font-weight:600;'>{app['titulo']}</div>",
-                            unsafe_allow_html=True)
-                st.caption(app["descricao"])
                 if app["tela"]:
                     if st.button("Abrir", key=f"home_abrir_{app['tela']}",
                                  use_container_width=True, type="primary"):
@@ -872,14 +1113,7 @@ with st.sidebar:
     if st.button("🏢 Gerenciar Clientes", use_container_width=True):
         st.session_state["tela"] = "gerenciar_clientes"
         st.rerun()
-    if st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL:
-        if st.button("🌐 Gerenciar Escritórios", use_container_width=True):
-            st.session_state["tela"] = "gerenciar_escritorios"
-            st.rerun()
     if st.session_state.get("papel_usuario") in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
-        if st.button("👥 Gerenciar Usuários", use_container_width=True):
-            st.session_state["tela"] = "gerenciar_usuarios"
-            st.rerun()
         if st.button("📜 Histórico de Lançamentos", use_container_width=True):
             st.session_state["tela"] = "historico"
             st.rerun()
