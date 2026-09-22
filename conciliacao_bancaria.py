@@ -978,8 +978,18 @@ _TOKEN_MONETARIO_RE = re.compile(r"^\(?-?\d{1,3}(?:\.\d{3})*,\d{2}\)?[DC]?$", re
 # usado quando so da pra recuperar codigo+classificacao de uma linha de
 # balancete com sobreposicao de texto complexa demais - o nome real fica
 # ilegivel, mas ainda assim marcamos com esse texto (nunca inventando um
-# nome) pra conta aparecer na lista pra vincular por codigo.
-NOME_ILEGIVEL_BALANCETE = "⚠️ Nome não identificado (texto sobreposto no PDF de origem - confira o balancete)"
+# nome) pra conta aparecer na lista pra vincular por codigo. O CODIGO entra
+# no proprio texto do nome pra cada conta recuperada ficar com um nome
+# UNICO (nunca repetido entre contas diferentes) - sem isso,
+# localizar_conta() (usada pra resolver a conta banco escolhida na tela)
+# acha varias contas com o mesmo nome exato e desiste (match ambiguo),
+# fazendo a conta banco "sumir" (vira None) e nenhuma contrapartida
+# aplicada consegue ser gravada.
+NOME_ILEGIVEL_BALANCETE_PREFIXO = "⚠️ Nome não identificado"
+
+
+def _nome_ilegivel_balancete(codigo: str) -> str:
+    return f"{NOME_ILEGIVEL_BALANCETE_PREFIXO} (conta {codigo} - texto sobreposto no PDF de origem, confira o balancete)"
 
 
 def _limpar_nome_conta(nome: str) -> str:
@@ -1090,7 +1100,7 @@ def _reparar_linhas_balancete_sobrepostas(page, linhas_texto: List[str]) -> List
                     len(tokens) >= 2 and tokens[0].isdigit()
                     and re.match(r"^\d+(\.\d+)+$", tokens[1])
                 ):
-                    linha_reparada = f"{tokens[0]} {tokens[1]} {NOME_ILEGIVEL_BALANCETE}"
+                    linha_reparada = f"{tokens[0]} {tokens[1]} {_nome_ilegivel_balancete(tokens[0])}"
                     if _BAL_LINE_RE.match(linha_reparada):
                         resultado[i] = linha_reparada
                         codigos_recuperados.append(tokens[0])

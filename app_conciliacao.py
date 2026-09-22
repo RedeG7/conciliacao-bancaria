@@ -1565,7 +1565,9 @@ if balancete_path:
         st.error(f"Erro ao ler o balancete: {exc}")
         contas_balancete = []
 
-    _contas_nome_ilegivel = [c for c in contas_balancete if c.nome == cb.NOME_ILEGIVEL_BALANCETE]
+    _contas_nome_ilegivel = [
+        c for c in contas_balancete if c.nome.startswith(cb.NOME_ILEGIVEL_BALANCETE_PREFIXO)
+    ]
     if _contas_nome_ilegivel:
         with st.expander(
             f"⚠️ {len(_contas_nome_ilegivel)} conta(s) do balancete com nome ilegível "
