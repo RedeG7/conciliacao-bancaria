@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements-worker.txt \
 # garantia contra Cloudflare, mas headless comprovadamente nao funciona
 # nesse portal.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends xvfb \
+    && apt-get install -y --no-install-recommends xvfb xauth \
     && rm -rf /var/lib/apt/lists/*
 
 COPY auth.py rpa_worker.py ./
