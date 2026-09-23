@@ -37,6 +37,11 @@ services:
     environment:
       - DATABASE_URL=postgresql://conciliacao:${POSTGRES_PASSWORD}@db:5432/conciliacao
       - RPA_ENC_KEY=${RPA_ENC_KEY}
+      # Muitos certificados A1 brasileiros usam algoritmo de criptografia
+      # (RC2/3DES) que o OpenSSL 3.x (Node 24, bundlado no driver do
+      # Playwright) desabilitou por padrao - sem isso, login por
+      # certificado (issnet) falha com "Unsupported TLS certificate".
+      - NODE_OPTIONS=--openssl-legacy-provider
     depends_on:
       db:
         condition: service_healthy
