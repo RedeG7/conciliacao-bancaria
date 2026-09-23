@@ -1113,6 +1113,9 @@ def _tela_rpa_hub() -> None:
                         )
                 elif empresa["status"] == rpa_core.STATUS_ERRO:
                     cols[4].caption(f"⚠️ {empresa['erro']}")
+                    if empresa.get("screenshot_erro"):
+                        with cols[4].popover("🖼️ Ver tela do erro"):
+                            st.image(bytes(empresa["screenshot_erro"]))
                 else:
                     cols[4].write("—")
 

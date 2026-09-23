@@ -64,8 +64,15 @@ def processar_execucao(execucao: dict) -> None:
             registry.fazer_login(modulo, page, credencial)
         except Exception as exc:
             log.error("Execução %s: falha no login — %s", execucao_id, exc)
+            screenshot = None
+            try:
+                screenshot = page.screenshot(full_page=True)
+            except Exception:
+                log.warning("Execução %s: não deu pra tirar screenshot da falha de login", execucao_id)
             for empresa in empresas:
-                core.atualizar_empresa(empresa["id"], status=core.STATUS_ERRO, erro=str(exc))
+                core.atualizar_empresa(
+                    empresa["id"], status=core.STATUS_ERRO, erro=str(exc), screenshot_erro=screenshot,
+                )
             core.marcar_execucao_concluida(execucao_id, competencia["mm_aaaa"], core.STATUS_ERRO)
             browser.close()
             return
@@ -85,7 +92,14 @@ def processar_execucao(execucao: dict) -> None:
                 alguma_concluida = True
             except Exception as exc:
                 log.error("Execução %s: empresa %s falhou — %s", execucao_id, empresa["codigo"], exc)
-                core.atualizar_empresa(empresa["id"], status=core.STATUS_ERRO, erro=str(exc))
+                screenshot = None
+                try:
+                    screenshot = page.screenshot(full_page=True)
+                except Exception:
+                    log.warning("Execução %s: empresa %s — não deu pra tirar screenshot do erro", execucao_id, empresa["codigo"])
+                core.atualizar_empresa(
+                    empresa["id"], status=core.STATUS_ERRO, erro=str(exc), screenshot_erro=screenshot,
+                )
 
         browser.close()
 

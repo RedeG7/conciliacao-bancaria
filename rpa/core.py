@@ -106,6 +106,13 @@ def garantir_schema() -> None:
             ALTER TABLE rpa_empresas
             ADD COLUMN IF NOT EXISTS razao_social TEXT
         """)
+        # screenshot_erro: print da tela no momento exato da falha (só
+        # quando status vira ERRO) - ajuda a diagnosticar sem precisar
+        # reproduzir a automação de novo. Nunca gravado em sucesso.
+        conn.execute("""
+            ALTER TABLE rpa_empresas
+            ADD COLUMN IF NOT EXISTS screenshot_erro BYTEA
+        """)
         conn.commit()
 
 
@@ -371,12 +378,13 @@ def atualizar_empresa(
     empresa_id: int, status: str, movimento: str = "", erro: str = "",
     pdf: Optional[bytes] = None, pdf_nome: str = "",
     xml_zip: Optional[bytes] = None, xml_zip_nome: str = "",
+    screenshot_erro: Optional[bytes] = None,
 ) -> None:
     with auth.conectar() as conn:
         conn.execute("""
             UPDATE rpa_empresas
             SET status = %s, movimento = %s, erro = %s, pdf = %s, pdf_nome = %s,
-                xml_zip = %s, xml_zip_nome = %s, atualizado_em = now()
+                xml_zip = %s, xml_zip_nome = %s, screenshot_erro = %s, atualizado_em = now()
             WHERE id = %s
-        """, (status, movimento, erro, pdf, pdf_nome, xml_zip, xml_zip_nome, empresa_id))
+        """, (status, movimento, erro, pdf, pdf_nome, xml_zip, xml_zip_nome, screenshot_erro, empresa_id))
         conn.commit()
