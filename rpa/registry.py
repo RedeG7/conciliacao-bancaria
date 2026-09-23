@@ -32,6 +32,22 @@ MODULOS = {
         "tipo_auth": "certificado",
         "colunas_planilha": ["Código da Empresa", "CNPJ/CPF", "Município", "Razão Social (opcional)"],
         "municipio_alvo": "GOIÂNIA / APARECIDA DE GOIÂNIA",
+        # automatizado=False: o portal (issnetonline.com.br) tem protecao
+        # Cloudflare que bloqueia navegador controlado por automacao
+        # (Playwright/CDP) com uma tela "Performing security verification" -
+        # confirmado ao vivo, rodando tanto no VPS quanto numa rede
+        # residencial/escritorio (ver historico). Nao ha contorno legitimo
+        # sem consentimento do proprio portal - fica manual ate a Prefeitura/
+        # suporte do ISS Net Online liberar acesso oficial (ver
+        # motivo_manual, mostrado na tela do Hub).
+        "automatizado": False,
+        "motivo_manual": (
+            "O portal ISS Net Online tem proteção Cloudflare que bloqueia navegador "
+            "controlado por automação (testado do servidor e de uma rede de escritório, "
+            "mesmo resultado nas duas). Não é algo que dá pra contornar sem autorização do "
+            "próprio portal — fechamento fica manual até a Prefeitura/suporte liberar acesso "
+            "oficial para automação."
+        ),
     },
 }
 

@@ -983,6 +983,13 @@ def _tela_rpa_hub() -> None:
     modulo_info = rpa_registry.MODULOS[modulo_id]
     sistema = modulo_info["sistema_credencial"]
 
+    if not modulo_info.get("automatizado", True):
+        st.warning(
+            f"⚠️ **Esta rotina ainda roda por automação assistida (manual)**, não pelo worker.\n\n"
+            f"{modulo_info.get('motivo_manual', '')}"
+        )
+        return
+
     _periodo_padrao = rpa_registry.preparar_periodo(modulo_id)
     _data_competencia = st.date_input(
         "Competência a executar", value=date(_periodo_padrao["ano"], _periodo_padrao["mes"], 1),
