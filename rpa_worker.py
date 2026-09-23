@@ -123,8 +123,15 @@ def loop_principal() -> None:
         if execucao:
             try:
                 processar_execucao(execucao)
-            except Exception:
+            except Exception as exc:
                 log.exception("Execução %s: erro inesperado no worker (execução abortada)", execucao["id"])
+                # Sem isso, empresas que nem chegaram a ser tentadas (erro
+                # antes do loop por empresa, ex.: certificado/contexto do
+                # navegador) ficam presas em PENDENTE pra sempre - a
+                # execução já não está mais PENDENTE (não seria pega de
+                # novo) e "Reprocessar" só aparece pra empresas com ERRO.
+                for empresa in core.listar_empresas_pendentes(execucao["id"]):
+                    core.atualizar_empresa(empresa["id"], status=core.STATUS_ERRO, erro=str(exc))
                 core.marcar_execucao_concluida(execucao["id"], competencia="", status=core.STATUS_ERRO)
         else:
             time.sleep(INTERVALO_POLLING_S)
