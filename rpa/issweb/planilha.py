@@ -11,9 +11,10 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 
-COLUNAS_OBRIGATORIAS = ["Código da Empresa", "CNPJ/CPF", "Obrigação"]
+COLUNAS_OBRIGATORIAS = ["Código da Empresa", "CNPJ/CPF"]
 COLUNA_MUNICIPIO = "Município"
 MUNICIPIO_ALVO = "SENADOR CANEDO"
+OBRIGACOES_PADRAO = ["DMS", "REST"]
 
 
 class PlanilhaInvalida(Exception):
@@ -28,7 +29,11 @@ def ler_empresas(conteudo: bytes) -> list[dict]:
     """Retorna [{'codigo', 'cnpj_cpf', 'obrigacao'}] só das linhas cujo
     Município seja Senador Canedo (ou sem coluna Município — planilha
     dedicada só a esse portal). Levanta PlanilhaInvalida com mensagem clara
-    se faltar alguma coluna obrigatória."""
+    se faltar alguma coluna obrigatória.
+
+    A planilha lista cada empresa uma vez só (código + CNPJ/CPF) — o sistema
+    processa DMS e REST automaticamente para cada uma (duas linhas de fila,
+    uma por obrigação, geradas aqui a partir de uma linha só da planilha)."""
     try:
         wb = load_workbook(BytesIO(conteudo))
     except Exception as exc:
@@ -55,11 +60,10 @@ def ler_empresas(conteudo: bytes) -> list[dict]:
             if municipio and municipio != MUNICIPIO_ALVO:
                 continue
 
-        empresas.append({
-            "codigo": str(codigo).strip(),
-            "cnpj_cpf": str(ws.cell(row=linha, column=mapa["CNPJ/CPF"]).value or "").strip(),
-            "obrigacao": str(ws.cell(row=linha, column=mapa["Obrigação"]).value or "").strip().upper(),
-        })
+        codigo_str = str(codigo).strip()
+        cnpj_cpf = str(ws.cell(row=linha, column=mapa["CNPJ/CPF"]).value or "").strip()
+        for obrigacao in OBRIGACOES_PADRAO:
+            empresas.append({"codigo": codigo_str, "cnpj_cpf": cnpj_cpf, "obrigacao": obrigacao})
 
     if not empresas:
         raise PlanilhaInvalida(

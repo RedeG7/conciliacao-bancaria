@@ -23,7 +23,7 @@ MODULOS = {
         "titulo": "Fechamento REST/DMS — ISS Web (Senador Canedo/GO)",
         "sistema_credencial": "issweb_senador_canedo",
         "tipo_auth": "senha",
-        "colunas_planilha": ["Código da Empresa", "CNPJ/CPF", "Obrigação", "Município"],
+        "colunas_planilha": ["Código da Empresa", "CNPJ/CPF", "Município"],
         "municipio_alvo": "SENADOR CANEDO",
     },
     "issnet_rest_dms": {
