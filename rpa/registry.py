@@ -30,7 +30,7 @@ MODULOS = {
         "titulo": "Fechamento REST/DMS — ISS Net Online (Goiânia/Ap. de Goiânia)",
         "sistema_credencial": "issnet_goiania_apgyn",
         "tipo_auth": "certificado",
-        "colunas_planilha": ["Código da Empresa", "CNPJ/CPF", "Município", "Razão Social (opcional)"],
+        "colunas_planilha": ["Código da Empresa", "CNPJ/CPF", "Razão Social (opcional)", "Município (opcional)"],
         "municipio_alvo": "GOIÂNIA / APARECIDA DE GOIÂNIA",
     },
 }

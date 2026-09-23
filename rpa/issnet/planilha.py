@@ -3,10 +3,13 @@
 Mesmo padrao de rpa/issweb/planilha.py: a planilha vira bytes numa linha de
 rpa_execucoes (auditoria/reprocesso) e cada empresa vira uma linha em
 rpa_empresas. Diferencas:
-  - cobre DOIS municipios no mesmo portal (Goiania e Aparecida de Goiania),
-    entao filtra por uma lista em vez de um municipio unico, e Município
-    aqui é OBRIGATÓRIO (o worker precisa saber qual sessão/caminho do
-    portal usar por empresa - ver rpa/issnet/portal.py PORTAL_URLS).
+  - cobre DOIS municipios no mesmo portal (Goiania e Aparecida de Goiania).
+    Município NÃO é coluna obrigatória — a Rotina já diz que é "ISS Net
+    Online", então o sistema tenta os dois municípios sozinho por empresa
+    (mesmo padrão do issweb tentando "Mobiliário" e depois "Contribuinte" -
+    ver rpa/issnet/processar.py). Se a planilha tiver a coluna Município
+    preenchida, usamos só como DICA de qual cidade tentar primeiro
+    (evita uma tentativa desnecessária), nunca como exigência.
   - não tem coluna "Obrigação": diferente do issweb, o issnet decide
     sozinho REST x DMS por empresa (gera o Livro Fiscal de Serviços
     Prestados primeiro; só processa Serviços Contratados se vier sem
@@ -17,7 +20,8 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 
-COLUNAS_OBRIGATORIAS = ["Código da Empresa", "CNPJ/CPF", "Município"]
+COLUNAS_OBRIGATORIAS = ["Código da Empresa", "CNPJ/CPF"]
+COLUNA_MUNICIPIO = "Município"
 COLUNA_RAZAO_SOCIAL = "Razão Social"
 MUNICIPIOS_ALVO = {"GOIÂNIA", "APARECIDA DE GOIÂNIA"}
 
@@ -31,11 +35,15 @@ def _mapear_cabecalho(ws) -> dict:
 
 
 def ler_empresas(conteudo: bytes) -> list[dict]:
-    """Retorna [{'codigo', 'cnpj_cpf', 'obrigacao', 'municipio'}] só das
-    linhas cujo Município seja Goiânia ou Aparecida de Goiânia. 'obrigacao'
-    fica sempre vazio aqui (não vem da planilha, ver módulo docstring).
-    Levanta PlanilhaInvalida com mensagem clara se faltar alguma coluna
-    obrigatória."""
+    """Retorna [{'codigo', 'cnpj_cpf', 'obrigacao', 'municipio'}] com todas
+    as linhas com código preenchido. 'municipio' vem vazio ("") quando a
+    planilha não informa (ou informa algo fora de Goiânia/Aparecida de
+    Goiânia) — nesse caso o worker tenta os dois municípios por empresa
+    (ver rpa/issnet/processar.py). Quando a coluna Município vem preenchida
+    com um valor reconhecido, guardamos como dica pra tentar primeiro.
+    'obrigacao' fica sempre vazio aqui (não vem da planilha, ver módulo
+    docstring). Levanta PlanilhaInvalida com mensagem clara se faltar
+    alguma coluna obrigatória."""
     try:
         wb = load_workbook(BytesIO(conteudo))
     except Exception as exc:
@@ -57,9 +65,11 @@ def ler_empresas(conteudo: bytes) -> list[dict]:
         if not codigo:
             continue
 
-        municipio = str(ws.cell(row=linha, column=mapa["Município"]).value or "").strip().upper()
-        if municipio not in MUNICIPIOS_ALVO:
-            continue
+        municipio = ""
+        if COLUNA_MUNICIPIO in mapa:
+            municipio_bruto = str(ws.cell(row=linha, column=mapa[COLUNA_MUNICIPIO]).value or "").strip().upper()
+            if municipio_bruto in MUNICIPIOS_ALVO:
+                municipio = municipio_bruto
 
         razao_social = ""
         if COLUNA_RAZAO_SOCIAL in mapa:
@@ -75,7 +85,7 @@ def ler_empresas(conteudo: bytes) -> list[dict]:
 
     if not empresas:
         raise PlanilhaInvalida(
-            "Nenhuma empresa de Goiânia/Aparecida de Goiânia encontrada na planilha "
-            "(confira a coluna Município e se há linhas preenchidas)."
+            "Nenhuma empresa encontrada na planilha (confira se há linhas com "
+            "Código da Empresa preenchido)."
         )
     return empresas
