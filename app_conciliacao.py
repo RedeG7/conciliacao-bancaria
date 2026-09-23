@@ -892,6 +892,27 @@ def _nome_pasta_empresa(empresa: dict) -> str:
     return nome.translate(_CARACTERES_INVALIDOS_PASTA)
 
 
+def _planilha_modelo(modulo_info: dict) -> bytes:
+    """Planilha em branco (só cabeçalho + 1 linha de exemplo) com as colunas
+    esperadas do módulo selecionado, pra baixar e preencher com os dados
+    reais — evita ter que descobrir o nome exato das colunas na mão."""
+    from openpyxl import Workbook
+
+    colunas = [c.replace(" (opcional)", "") for c in modulo_info["colunas_planilha"]]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Empresas"
+    ws.append(colunas)
+    linha_exemplo = {
+        "Código da Empresa": "68", "CNPJ/CPF": "00.000.000/0001-00",
+        "Razão Social": "Empresa Exemplo LTDA", "Município": modulo_info["municipio_alvo"].split(" / ")[0],
+    }
+    ws.append([linha_exemplo.get(c, "") for c in colunas])
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
 def _gerar_relatorio_geral(execucao: dict, empresas_exec: list[dict]) -> bytes:
     """Relatorio_Geral_Processamento.xlsx: uma linha por empresa/obrigação
     processada na execução, com status, movimento, quantidade de notas
@@ -1024,6 +1045,10 @@ def _tela_rpa_hub() -> None:
         st.info("Cadastre a credencial do procurador acima antes de enviar uma planilha.")
     else:
         st.caption("Colunas esperadas: " + " · ".join(modulo_info["colunas_planilha"]))
+        st.download_button(
+            "📥 Baixar planilha modelo (.xlsx)", _planilha_modelo(modulo_info),
+            file_name=f"modelo_empresas_{modulo_id}.xlsx", key=f"modelo_{modulo_id}",
+        )
         up_planilha = st.file_uploader(
             "Planilha de empresas (.xlsx)", type=["xlsx"], key=f"up_planilha_{modulo_id}",
         )
