@@ -352,17 +352,32 @@ def recuperar_execucoes_orfas() -> int:
 # Usadas só pelo worker
 # ---------------------------------------------------------------------------
 
-def reivindicar_proxima_execucao() -> Optional[dict]:
+def reivindicar_proxima_execucao(modulos_permitidos: Optional[list] = None) -> Optional[dict]:
     """SELECT...FOR UPDATE SKIP LOCKED: se um dia houver mais de um worker,
-    nenhum pega a execucao que o outro ja esta processando."""
+    nenhum pega a execucao que o outro ja esta processando.
+
+    modulos_permitidos (opcional) restringe quais modulos este worker
+    pega - usado quando ha mais de um worker rodando em maquinas diferentes
+    (ex.: issnet precisa rodar numa rede que o Cloudflare do portal nao
+    bloqueie, entao o worker do VPS ignora esse modulo e so um worker local
+    o pega - ver WORKER_MODULOS em rpa_worker.py)."""
     with auth.conectar() as conn:
-        linha = conn.execute("""
-            SELECT * FROM rpa_execucoes
-            WHERE status = %s
-            ORDER BY criado_em
-            FOR UPDATE SKIP LOCKED
-            LIMIT 1
-        """, (STATUS_PENDENTE,)).fetchone()
+        if modulos_permitidos:
+            linha = conn.execute("""
+                SELECT * FROM rpa_execucoes
+                WHERE status = %s AND modulo = ANY(%s)
+                ORDER BY criado_em
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            """, (STATUS_PENDENTE, modulos_permitidos)).fetchone()
+        else:
+            linha = conn.execute("""
+                SELECT * FROM rpa_execucoes
+                WHERE status = %s
+                ORDER BY criado_em
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            """, (STATUS_PENDENTE,)).fetchone()
         if linha:
             conn.execute(
                 "UPDATE rpa_execucoes SET status = %s, iniciado_em = now() WHERE id = %s",

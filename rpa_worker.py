@@ -18,6 +18,7 @@ execução da fila.
 """
 
 import logging
+import os
 import time
 
 from playwright.sync_api import sync_playwright
@@ -29,6 +30,18 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("rpa_worker")
 
 INTERVALO_POLLING_S = 15
+
+# WORKER_MODULOS (opcional, lista separada por virgula de ids de modulo -
+# ver rpa/registry.py MODULOS): restringe quais modulos ESTA instancia do
+# worker processa. Sem essa variavel, pega qualquer modulo pendente (padrao
+# de sempre). Existe pra rodar workers em maquinas diferentes por modulo -
+# caso de uso real: issnet precisa rodar numa rede residencial/escritorio
+# (Cloudflare do portal bloqueia o IP de datacenter do VPS), entao o VPS
+# roda com WORKER_MODULOS=issweb_rest_dms (ignora issnet) e um worker local
+# separado roda com WORKER_MODULOS=issnet_rest_dms.
+_MODULOS_PERMITIDOS = [
+    m.strip() for m in os.environ.get("WORKER_MODULOS", "").split(",") if m.strip()
+] or None
 
 
 def processar_execucao(execucao: dict) -> None:
@@ -126,8 +139,10 @@ def loop_principal() -> None:
     qtd_orfas = core.recuperar_execucoes_orfas()
     if qtd_orfas:
         log.warning("%s execução(ões) RODANDO órfã(s) de uma instância anterior do worker — voltaram pra fila", qtd_orfas)
+    if _MODULOS_PERMITIDOS:
+        log.info("WORKER_MODULOS ativo — só processa: %s", ", ".join(_MODULOS_PERMITIDOS))
     while True:
-        execucao = core.reivindicar_proxima_execucao()
+        execucao = core.reivindicar_proxima_execucao(_MODULOS_PERMITIDOS)
         if execucao:
             try:
                 processar_execucao(execucao)

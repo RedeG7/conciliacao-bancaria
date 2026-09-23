@@ -9,8 +9,12 @@ services:
       - POSTGRES_DB=conciliacao
     volumes:
       - pgdata:/var/lib/postgresql/data
-    expose:
-      - "5432"
+    # 127.0.0.1:5432 (nao 0.0.0.0): so alcancavel de dentro do proprio VPS,
+    # nunca da internet - existe pra permitir tunel SSH (-L) de uma maquina
+    # de fora (worker local do issnet, que precisa rodar numa rede que o
+    # Cloudflare do portal nao bloqueie - ver rpa_worker.py WORKER_MODULOS).
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U conciliacao"]
       interval: 5s
@@ -42,6 +46,11 @@ services:
       # Playwright) desabilitou por padrao - sem isso, login por
       # certificado (issnet) falha com "Unsupported TLS certificate".
       - NODE_OPTIONS=--openssl-legacy-provider
+      # issnet_rest_dms FICA DE FORA: o Cloudflare do portal ISS Net Online
+      # bloqueia o IP de datacenter deste VPS mesmo com Chromium headed
+      # (confirmado ao vivo) - esse modulo roda num worker local separado,
+      # numa rede que o Cloudflare nao sinaliza (ver run-worker-issnet-local.ps1).
+      - WORKER_MODULOS=issweb_rest_dms
     depends_on:
       db:
         condition: service_healthy
