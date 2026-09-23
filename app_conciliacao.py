@@ -919,7 +919,7 @@ def _tela_rpa_hub() -> None:
     _periodo_padrao = rpa_registry.preparar_periodo(modulo_id)
     _data_competencia = st.date_input(
         "Competência a executar", value=date(_periodo_padrao["ano"], _periodo_padrao["mes"], 1),
-        key=f"competencia_{modulo_id}",
+        key=f"competencia_{modulo_id}", format="DD/MM/YYYY",
         help="Escolha qualquer dia dentro do mês/ano desejado — só o mês e o ano importam, "
              "o dia é ignorado. Vem pré-preenchido com o mês anterior ao de hoje.",
     )
