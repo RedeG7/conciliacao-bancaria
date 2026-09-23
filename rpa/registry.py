@@ -23,14 +23,14 @@ MODULOS = {
         "titulo": "Fechamento REST/DMS — ISS Web (Senador Canedo/GO)",
         "sistema_credencial": "issweb_senador_canedo",
         "tipo_auth": "senha",
-        "colunas_planilha": ["Código da Empresa", "CNPJ/CPF", "Município"],
+        "colunas_planilha": ["Código da Empresa", "CNPJ/CPF", "Município (opcional)"],
         "municipio_alvo": "SENADOR CANEDO",
     },
     "issnet_rest_dms": {
         "titulo": "Fechamento REST/DMS — ISS Net Online (Goiânia/Ap. de Goiânia)",
         "sistema_credencial": "issnet_goiania_apgyn",
         "tipo_auth": "certificado",
-        "colunas_planilha": ["Código da Empresa", "CNPJ/CPF", "Município"],
+        "colunas_planilha": ["Código da Empresa", "CNPJ/CPF", "Município", "Razão Social (opcional)"],
         "municipio_alvo": "GOIÂNIA / APARECIDA DE GOIÂNIA",
     },
 }

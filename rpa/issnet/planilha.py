@@ -18,6 +18,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 COLUNAS_OBRIGATORIAS = ["Código da Empresa", "CNPJ/CPF", "Município"]
+COLUNA_RAZAO_SOCIAL = "Razão Social"
 MUNICIPIOS_ALVO = {"GOIÂNIA", "APARECIDA DE GOIÂNIA"}
 
 
@@ -60,11 +61,16 @@ def ler_empresas(conteudo: bytes) -> list[dict]:
         if municipio not in MUNICIPIOS_ALVO:
             continue
 
+        razao_social = ""
+        if COLUNA_RAZAO_SOCIAL in mapa:
+            razao_social = str(ws.cell(row=linha, column=mapa[COLUNA_RAZAO_SOCIAL]).value or "").strip()
+
         empresas.append({
             "codigo": str(codigo).strip(),
             "cnpj_cpf": str(ws.cell(row=linha, column=mapa["CNPJ/CPF"]).value or "").strip(),
             "obrigacao": "",
             "municipio": municipio,
+            "razao_social": razao_social,
         })
 
     if not empresas:

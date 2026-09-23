@@ -871,12 +871,57 @@ def _tela_gerenciar_clientes() -> None:
                     st.rerun()
 
 
+_CARACTERES_INVALIDOS_PASTA = str.maketrans({c: "_" for c in '/\\:*?"<>|'})
+
+
+def _contar_arquivos_zip(conteudo: bytes) -> int:
+    """Quantos arquivos tem dentro de um .zip de XMLs — usado só pra mostrar
+    'quantidade de notas baixadas' na tela, sem abrir/extrair nada."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
+            return len([n for n in zf.namelist() if not n.endswith("/")])
+    except zipfile.BadZipFile:
+        return 0
+
+
+def _nome_pasta_empresa(empresa: dict) -> str:
+    """'<código> - <razão social>' (como pede a especificação do issnet) —
+    cai só no código quando não há razão social (ex.: issweb não captura)."""
+    razao = (empresa.get("razao_social") or "").strip()
+    nome = f"{empresa['codigo']} - {razao}" if razao else str(empresa["codigo"])
+    return nome.translate(_CARACTERES_INVALIDOS_PASTA)
+
+
+def _gerar_relatorio_geral(execucao: dict, empresas_exec: list[dict]) -> bytes:
+    """Relatorio_Geral_Processamento.xlsx: uma linha por empresa/obrigação
+    processada na execução, com status, movimento, quantidade de notas
+    baixadas e erro (quando houver) — visão consolidada pra quem só quer
+    conferir o lote sem abrir cada PDF/XML."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Processamento"
+    ws.append(["Código", "Razão Social", "CNPJ/CPF", "Obrigação", "Status", "Movimento", "Notas (XML)", "Erro"])
+    for empresa in empresas_exec:
+        qtd_xml = _contar_arquivos_zip(bytes(empresa["xml_zip"])) if empresa.get("xml_zip") else 0
+        ws.append([
+            empresa["codigo"], empresa.get("razao_social") or "", empresa["cnpj_cpf"],
+            empresa["obrigacao"], empresa["status"], empresa.get("movimento") or "",
+            qtd_xml, empresa.get("erro") or "",
+        ])
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
 def _montar_zip_execucao(execucao: dict, empresas_exec: list[dict]) -> bytes:
     """Monta um .zip só com os arquivos já concluídos da execução, uma
-    pasta por empresa (código) e dentro dela uma subpasta pela competência
-    no formato MMAAAA (ex.: empresa '10', competência 08/2026 -> '10/082026/').
-    PDF e XML (quando houver) do mesmo jeito que a tela oferece pra baixar
-    individualmente — aqui só empacota tudo junto pra baixar de uma vez."""
+    pasta por empresa ('<código> - <razão social>') e dentro dela uma
+    subpasta pela competência no formato MMAAAA (ex.: '10/082026/'). PDF e
+    XML (quando houver) do mesmo jeito que a tela oferece pra baixar
+    individualmente, mais um Relatorio_Geral_Processamento.xlsx na raiz do
+    zip com o resumo de todas as empresas da execução (concluídas ou não)."""
     competencia = execucao.get("competencia") or ""
     pasta_competencia = competencia.replace("/", "") if competencia else "sem-competencia"
 
@@ -885,11 +930,12 @@ def _montar_zip_execucao(execucao: dict, empresas_exec: list[dict]) -> bytes:
         for empresa in empresas_exec:
             if empresa["status"] != rpa_core.STATUS_CONCLUIDO:
                 continue
-            pasta = f"{empresa['codigo']}/{pasta_competencia}"
+            pasta = f"{_nome_pasta_empresa(empresa)}/{pasta_competencia}"
             if empresa.get("pdf"):
                 zf.writestr(f"{pasta}/{empresa['pdf_nome']}", bytes(empresa["pdf"]))
             if empresa.get("xml_zip"):
                 zf.writestr(f"{pasta}/{empresa['xml_zip_nome']}", bytes(empresa["xml_zip"]))
+        zf.writestr("Relatorio_Geral_Processamento.xlsx", _gerar_relatorio_geral(execucao, empresas_exec))
     return buffer.getvalue()
 
 
@@ -938,6 +984,11 @@ def _tela_rpa_hub() -> None:
     tipo_auth = modulo_info.get("tipo_auth", "senha")
     with st.expander("Cadastrar / atualizar credencial"):
         if tipo_auth == "certificado":
+            st.caption(
+                "Só certificado A1 (arquivo .pfx/.p12) — A3 é um token/leitor físico, "
+                "não dá pra usar no worker do servidor. Para A3, feche essa empresa pelo "
+                "navegador da própria máquina onde o leitor está instalado."
+            )
             with st.form(f"credencial_form_{modulo_id}", clear_on_submit=True):
                 cnpj_proc = st.text_input("CPF/CNPJ do titular do certificado")
                 up_certificado = st.file_uploader("Certificado digital A1 (.pfx/.p12)", type=["pfx", "p12"])
@@ -972,6 +1023,7 @@ def _tela_rpa_hub() -> None:
     if not cred:
         st.info("Cadastre a credencial do procurador acima antes de enviar uma planilha.")
     else:
+        st.caption("Colunas esperadas: " + " · ".join(modulo_info["colunas_planilha"]))
         up_planilha = st.file_uploader(
             "Planilha de empresas (.xlsx)", type=["xlsx"], key=f"up_planilha_{modulo_id}",
         )
@@ -1026,14 +1078,22 @@ def _tela_rpa_hub() -> None:
         )
         with st.expander(titulo):
             st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}")
+            _cols_acoes = st.columns(2)
             if concluidas:
                 _pasta_competencia_zip = (execucao.get("competencia") or "sem-competencia").replace("/", "")
-                st.download_button(
+                _cols_acoes[0].download_button(
                     "📦 Baixar tudo (.zip, uma pasta por empresa/competência)",
                     _montar_zip_execucao(execucao, empresas_exec),
                     file_name=f"DMS-XML {_pasta_competencia_zip}.zip",
                     key=f"zip_execucao_{execucao['id']}",
                 )
+            if erros:
+                if _cols_acoes[1].button(
+                    f"🔁 Reprocessar {erros} empresa(s) com erro", key=f"reprocessar_{execucao['id']}",
+                ):
+                    qtd = rpa_core.reprocessar_falhas(execucao["id"])
+                    _flash("flash_rpa_hub", f"✅ {qtd} empresa(s) voltaram para a fila — o worker processa em instantes.")
+                    st.rerun()
             for empresa in empresas_exec:
                 cols = st.columns([1, 2, 1, 1, 2])
                 cols[0].write(empresa["codigo"])
@@ -1046,8 +1106,9 @@ def _tela_rpa_hub() -> None:
                         key=f"pdf_{empresa['id']}",
                     )
                     if empresa.get("xml_zip"):
+                        _qtd_xml = _contar_arquivos_zip(bytes(empresa["xml_zip"]))
                         cols[4].download_button(
-                            "⬇️ XML", bytes(empresa["xml_zip"]), file_name=empresa["xml_zip_nome"],
+                            f"⬇️ XML ({_qtd_xml})", bytes(empresa["xml_zip"]), file_name=empresa["xml_zip_nome"],
                             key=f"xml_{empresa['id']}",
                         )
                 elif empresa["status"] == rpa_core.STATUS_ERRO:

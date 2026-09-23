@@ -99,6 +99,13 @@ def garantir_schema() -> None:
             ADD COLUMN IF NOT EXISTS xml_zip_nome TEXT,
             ADD COLUMN IF NOT EXISTS municipio TEXT
         """)
+        # razao_social: opcional, só o issnet captura da planilha (pra nome
+        # de pasta "21 - EMPRESA ABC" no zip e no relatorio geral, conforme
+        # especificacao) - issweb deixa em branco, mantem so o codigo.
+        conn.execute("""
+            ALTER TABLE rpa_empresas
+            ADD COLUMN IF NOT EXISTS razao_social TEXT
+        """)
         conn.commit()
 
 
@@ -245,11 +252,11 @@ def criar_execucao(
 
         for empresa in empresas:
             conn.execute("""
-                INSERT INTO rpa_empresas (execucao_id, codigo, cnpj_cpf, obrigacao, municipio)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO rpa_empresas (execucao_id, codigo, cnpj_cpf, obrigacao, municipio, razao_social)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (
                 execucao_id, empresa["codigo"], empresa["cnpj_cpf"], empresa["obrigacao"],
-                empresa.get("municipio") or None,
+                empresa.get("municipio") or None, empresa.get("razao_social") or None,
             ))
 
         conn.commit()
@@ -288,6 +295,25 @@ def listar_empresas(execucao_id: int) -> list[dict]:
             "SELECT * FROM rpa_empresas WHERE execucao_id = %s ORDER BY id", (execucao_id,)
         ).fetchall()
     return linhas
+
+
+def reprocessar_falhas(execucao_id: int) -> int:
+    """Volta pra fila (status PENDENTE) só as empresas que ficaram ERRO
+    nessa execução, e a execução em si (senão o worker nunca pega ela de
+    novo — reivindicar_proxima_execucao só olha status PENDENTE). Empresas
+    já CONCLUIDO não são tocadas. Retorna quantas linhas voltaram pra fila."""
+    with auth.conectar() as conn:
+        linhas = conn.execute(
+            "UPDATE rpa_empresas SET status = %s, erro = NULL WHERE execucao_id = %s AND status = %s RETURNING id",
+            (STATUS_PENDENTE, execucao_id, STATUS_ERRO),
+        ).fetchall()
+        if linhas:
+            conn.execute(
+                "UPDATE rpa_execucoes SET status = %s, concluido_em = NULL WHERE id = %s",
+                (STATUS_PENDENTE, execucao_id),
+            )
+        conn.commit()
+    return len(linhas)
 
 
 # ---------------------------------------------------------------------------

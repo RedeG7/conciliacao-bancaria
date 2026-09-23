@@ -216,7 +216,15 @@ def exportar_xml_competencia(page: Page, data_inicial: str, data_final: str) -> 
     o campo 'Data Competência Inicial' NÃO aceitou digitação direta na
     exploração manual (só o datepicker) — aqui usamos fill(), que dispara
     os eventos corretos via DOM e deve funcionar mesmo onde o clique manual
-    simulado falhou; ainda assim, validar no primeiro run real."""
+    simulado falhou; ainda assim, validar no primeiro run real.
+
+    LIMITAÇÃO CONHECIDA: a especificação pede XMLs de notas emitidas E
+    recebidas separados (pastas XML_Emitidas/XML_Recebidas). Esta função
+    baixa só UM zip (a exploração manual não confirmou se essa grade já
+    mistura os dois sentidos ou é só um lado) — separar direito exige achar
+    o filtro real de emitida/recebida na tela e validar ao vivo contra o
+    portal, não dá pra adivinhar o seletor daqui. Por ora entrega tudo num
+    zip só (xml_zip_nome sem sufixo Emitidas/Recebidas)."""
     frame = _frame(page)
     _abrir_menu(page, "Nota Eletrônica", "Consultar Nota Eletrônica")
 
