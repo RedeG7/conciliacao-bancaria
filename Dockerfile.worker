@@ -19,14 +19,15 @@ RUN pip install --no-cache-dir -r requirements-worker.txt \
 # garantia contra Cloudflare, mas headless comprovadamente nao funciona
 # nesse portal.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends xvfb xauth \
+    && apt-get install -y --no-install-recommends xvfb \
     && rm -rf /var/lib/apt/lists/*
 
-COPY auth.py rpa_worker.py ./
+COPY auth.py rpa_worker.py entrypoint-worker.sh ./
 COPY rpa/ ./rpa/
+RUN chmod +x entrypoint-worker.sh
 
 # Sem estado local: fila e credenciais ficam no Postgres (DATABASE_URL) e o
 # PDF final e gravado direto no banco - nao ha volume nem porta exposta
 # (o worker so fala com o Postgres, nunca recebe HTTP).
 
-ENTRYPOINT ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1280x1024x24", "python", "rpa_worker.py"]
+ENTRYPOINT ["./entrypoint-worker.sh"]
