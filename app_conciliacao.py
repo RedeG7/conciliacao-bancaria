@@ -960,6 +960,90 @@ def _montar_zip_execucao(execucao: dict, empresas_exec: list[dict]) -> bytes:
     return buffer.getvalue()
 
 
+def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usuario: str) -> None:
+    """Fluxo de apoio pra rotinas ainda não automatizadas (ver
+    modulo_info['automatizado'] em rpa/registry.py): não roda nada
+    sozinha - só reaproveita rpa_execucoes/rpa_empresas pra guardar a
+    lista de empresas da planilha do mês, com link do portal pra abrir
+    numa aba separada, e a pessoa marca cada empresa como feita à mão."""
+    st.warning(
+        f"⚠️ **Esta rotina ainda roda por automação assistida (manual)** — não existe worker "
+        f"processando sozinho.\n\n{modulo_info.get('motivo_manual', '')}"
+    )
+
+    if modulo_id == "issnet_rest_dms":
+        from rpa.issnet.urls import PORTAL_URLS
+        st.markdown("**Abrir o portal:**")
+        cols_link = st.columns(len(PORTAL_URLS))
+        for col, (municipio, url) in zip(cols_link, PORTAL_URLS.items()):
+            col.link_button(f"🔗 {municipio.title()}", url, use_container_width=True)
+
+    st.divider()
+    st.subheader("Empresas do mês")
+    _periodo_padrao = rpa_registry.preparar_periodo(modulo_id)
+    _data_competencia = st.date_input(
+        "Competência", value=date(_periodo_padrao["ano"], _periodo_padrao["mes"], 1),
+        key=f"competencia_manual_{modulo_id}", format="DD/MM/YYYY",
+    )
+    competencia_escolhida = f"{_data_competencia.month:02d}/{_data_competencia.year}"
+
+    up_planilha = st.file_uploader(
+        "Planilha de empresas (.xlsx)", type=["xlsx"], key=f"up_planilha_manual_{modulo_id}",
+    )
+    if up_planilha:
+        conteudo = up_planilha.getvalue()
+        try:
+            empresas = rpa_registry.ler_empresas(modulo_id, conteudo)
+        except Exception as exc:
+            st.error(str(exc))
+        else:
+            st.success(f"{len(empresas)} empresa(s) encontradas na planilha.")
+            if st.button("📋 Criar lista de controle", type="primary"):
+                execucao_id = rpa_core.criar_execucao(
+                    escritorio_id, modulo_id, conteudo, up_planilha.name, usuario, empresas,
+                    competencia_escolhida,
+                )
+                _flash(
+                    "flash_rpa_manual",
+                    f"✅ Lista #{execucao_id} criada — {len(empresas)} empresa(s), competência {competencia_escolhida}.",
+                )
+                st.rerun()
+
+    st.divider()
+    _flash("flash_rpa_manual")
+    st.subheader("Listas de controle")
+    execucoes = rpa_core.listar_execucoes(escritorio_id, modulo_id)
+    if not execucoes:
+        st.info("Nenhuma lista criada ainda para esta rotina.")
+        return
+
+    for execucao in execucoes:
+        empresas_exec = rpa_core.listar_empresas(execucao["id"])
+        concluidas = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_CONCLUIDO)
+        _competencia_exec = f" · competência {execucao['competencia']}" if execucao.get("competencia") else ""
+        titulo = (
+            f"📋 Lista #{execucao['id']} — {execucao['criado_em']:%d/%m/%Y %H:%M}{_competencia_exec} "
+            f"({concluidas}/{len(empresas_exec)} feitas)"
+        )
+        with st.expander(titulo):
+            st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}")
+            for empresa in empresas_exec:
+                feito = empresa["status"] == rpa_core.STATUS_CONCLUIDO
+                cols = st.columns([1, 2, 2, 2, 1])
+                cols[0].write(empresa["codigo"])
+                cols[1].write(empresa["cnpj_cpf"])
+                cols[2].write(empresa.get("municipio") or "—")
+                cols[3].write("✅ Feito" if feito else "⏳ Pendente")
+                if feito:
+                    if cols[4].button("↩️", key=f"desfazer_manual_{empresa['id']}", help="Desfazer"):
+                        rpa_core.marcar_empresa_status(empresa["id"], rpa_core.STATUS_PENDENTE)
+                        st.rerun()
+                else:
+                    if cols[4].button("✔️", key=f"concluir_manual_{empresa['id']}", help="Marcar como feito"):
+                        rpa_core.marcar_empresa_status(empresa["id"], rpa_core.STATUS_CONCLUIDO)
+                        st.rerun()
+
+
 def _tela_rpa_hub() -> None:
     """Hub de RPAs do escritório: cadastro de credenciais de procurador,
     upload de planilha e acompanhamento das execuções, por módulo (ISS Web
@@ -984,10 +1068,7 @@ def _tela_rpa_hub() -> None:
     sistema = modulo_info["sistema_credencial"]
 
     if not modulo_info.get("automatizado", True):
-        st.warning(
-            f"⚠️ **Esta rotina ainda roda por automação assistida (manual)**, não pelo worker.\n\n"
-            f"{modulo_info.get('motivo_manual', '')}"
-        )
+        _tela_rpa_manual(modulo_id, modulo_info, escritorio_id, usuario)
         return
 
     _periodo_padrao = rpa_registry.preparar_periodo(modulo_id)

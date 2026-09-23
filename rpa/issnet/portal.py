@@ -41,15 +41,12 @@ import tempfile
 
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
+from rpa.issnet.urls import PORTAL_URLS
+
 TIMEOUT_PADRAO_MS = 15_000
 TIMEOUT_CURTO_MS = 4_000
 
 CERTIFICADO_ORIGIN = "https://www.issnetonline.com.br"
-
-PORTAL_URLS = {
-    "GOIÂNIA": "https://www.issnetonline.com.br/goiania/online/login/login.aspx",
-    "APARECIDA DE GOIÂNIA": "https://www.issnetonline.com.br/aparecida/online/login/login.aspx",
-}
 
 
 class ErroPortal(Exception):
