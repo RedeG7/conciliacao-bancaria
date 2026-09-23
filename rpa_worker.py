@@ -56,7 +56,12 @@ def processar_execucao(execucao: dict) -> None:
     empresas = core.listar_empresas_pendentes(execucao_id)
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        # headless=False (rodando dentro de um Xvfb - ver Dockerfile.worker):
+        # confirmado ao vivo que o issnet tem protecao Cloudflare que trava
+        # pra sempre com Chromium headless=True. headed reduz o risco de
+        # bloqueio (sem garantia total contra Cloudflare); issweb também
+        # roda assim, sem problema conhecido nesse modo.
+        browser = pw.chromium.launch(headless=False)
         context = registry.criar_contexto(modulo, browser, credencial)
         page = context.new_page()
 

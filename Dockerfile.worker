@@ -1,4 +1,4 @@
-# Imagem do worker de RPA (Playwright headless) - RedeG7
+# Imagem do worker de RPA (Playwright) - RedeG7
 #
 # Separada da imagem do app (Dockerfile) de proposito: o app Streamlit fica
 # leve e rapido de re-deployar, e so essa imagem carrega o Chromium (~300MB
@@ -11,6 +11,17 @@ COPY requirements-worker.txt .
 RUN pip install --no-cache-dir -r requirements-worker.txt \
     && playwright install --with-deps chromium
 
+# xvfb: display virtual pra rodar Chromium com headless=False mesmo sem
+# tela de verdade no servidor - confirmado ao vivo que o ISS Net Online
+# (issnet) tem protecao Cloudflare que bloqueia Chromium headless=True
+# (fica preso pra sempre na tela "Performing security verification",
+# nunca libera). headed com Xvfb tem mais chance de passar - nao ha
+# garantia contra Cloudflare, mas headless comprovadamente nao funciona
+# nesse portal.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY auth.py rpa_worker.py ./
 COPY rpa/ ./rpa/
 
@@ -18,4 +29,4 @@ COPY rpa/ ./rpa/
 # PDF final e gravado direto no banco - nao ha volume nem porta exposta
 # (o worker so fala com o Postgres, nunca recebe HTTP).
 
-ENTRYPOINT ["python", "rpa_worker.py"]
+ENTRYPOINT ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1280x1024x24", "python", "rpa_worker.py"]
