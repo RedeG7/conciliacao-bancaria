@@ -323,6 +323,31 @@ def reprocessar_falhas(execucao_id: int) -> int:
     return len(linhas)
 
 
+def recuperar_execucoes_orfas() -> int:
+    """Chamado uma vez no início do worker: qualquer execução ainda
+    RODANDO nesse ponto só pode ser de uma instância anterior do worker
+    que morreu no meio (deploy, crash, restart do container) - nada mais
+    grava RODANDO além do próprio worker em execução. Volta essa execução
+    e suas empresas RODANDO/PENDENTE pra fila, pra serem tentadas nesta
+    nova instância. Empresas já CONCLUIDO/ERRO não são tocadas. Retorna
+    quantas execuções foram recuperadas."""
+    with auth.conectar() as conn:
+        execucoes = conn.execute(
+            "SELECT id FROM rpa_execucoes WHERE status = %s", (STATUS_RODANDO,)
+        ).fetchall()
+        for execucao in execucoes:
+            conn.execute(
+                "UPDATE rpa_empresas SET status = %s, erro = NULL WHERE execucao_id = %s AND status IN (%s, %s)",
+                (STATUS_PENDENTE, execucao["id"], STATUS_RODANDO, STATUS_PENDENTE),
+            )
+            conn.execute(
+                "UPDATE rpa_execucoes SET status = %s WHERE id = %s",
+                (STATUS_PENDENTE, execucao["id"]),
+            )
+        conn.commit()
+    return len(execucoes)
+
+
 # ---------------------------------------------------------------------------
 # Usadas só pelo worker
 # ---------------------------------------------------------------------------

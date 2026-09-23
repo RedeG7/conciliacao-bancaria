@@ -118,6 +118,9 @@ def loop_principal() -> None:
     # não pode depender de o app já ter criado essas tabelas.
     auth.garantir_schema()
     core.garantir_schema()
+    qtd_orfas = core.recuperar_execucoes_orfas()
+    if qtd_orfas:
+        log.warning("%s execução(ões) RODANDO órfã(s) de uma instância anterior do worker — voltaram pra fila", qtd_orfas)
     while True:
         execucao = core.reivindicar_proxima_execucao()
         if execucao:
@@ -125,13 +128,14 @@ def loop_principal() -> None:
                 processar_execucao(execucao)
             except Exception as exc:
                 log.exception("Execução %s: erro inesperado no worker (execução abortada)", execucao["id"])
-                # Sem isso, empresas que nem chegaram a ser tentadas (erro
-                # antes do loop por empresa, ex.: certificado/contexto do
-                # navegador) ficam presas em PENDENTE pra sempre - a
-                # execução já não está mais PENDENTE (não seria pega de
-                # novo) e "Reprocessar" só aparece pra empresas com ERRO.
-                for empresa in core.listar_empresas_pendentes(execucao["id"]):
-                    core.atualizar_empresa(empresa["id"], status=core.STATUS_ERRO, erro=str(exc))
+                # Sem isso, empresas que nem chegaram a ser tentadas
+                # (PENDENTE) ou que estavam sendo processadas na hora do
+                # crash (RODANDO) ficam presas pra sempre - a execução já
+                # não está mais PENDENTE (não seria pega de novo) e
+                # "Reprocessar" só aparece pra empresas com ERRO.
+                for empresa in core.listar_empresas(execucao["id"]):
+                    if empresa["status"] in (core.STATUS_PENDENTE, core.STATUS_RODANDO):
+                        core.atualizar_empresa(empresa["id"], status=core.STATUS_ERRO, erro=str(exc))
                 core.marcar_execucao_concluida(execucao["id"], competencia="", status=core.STATUS_ERRO)
         else:
             time.sleep(INTERVALO_POLLING_S)
