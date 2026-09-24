@@ -249,22 +249,32 @@ def voltar_para_empresas(win) -> None:
         raise ErroAttended("[voltar_para_empresas] não confirmou volta pra tela Empresas") from exc
 
 
+def _achar_item_menu(win, texto: str, timeout: float):
+    """Busca um ListItem do menu lateral por SUBSTRING (não título exato) -
+    mesmo motivo da correção em selecionar_empresa: itens de menu costumam
+    ter um glifo de ícone colado no nome acessível (ver voltar_para_empresas),
+    então título EXATO falha de forma inconsistente. Faz polling porque o
+    item só aparece depois que a página da empresa termina de carregar."""
+    prazo = time.time() + timeout
+    while time.time() < prazo:
+        candidatos = [i for i in win.descendants(control_type="ListItem") if texto in i.window_text()]
+        if candidatos:
+            return candidatos[0]
+        time.sleep(0.3)
+    return None
+
+
 def abrir_livro_fiscal(win) -> None:
-    """Clica em Livro Fiscal > Emitir Livro Fiscal no menu lateral -
-    confirmado ao vivo."""
-    item = win.child_window(title="Livro Fiscal", control_type="ListItem")
-    try:
-        item.wait("exists", timeout=TIMEOUT_PADRAO_S)
-    except PywinautoTimeoutError as exc:
-        raise ErroAttended("[menu] 'Livro Fiscal' não encontrado") from exc
+    """Clica em Livro Fiscal > Emitir Livro Fiscal no menu lateral."""
+    item = _achar_item_menu(win, "Livro Fiscal", TIMEOUT_PADRAO_S)
+    if item is None:
+        raise ErroAttended("[menu] 'Livro Fiscal' não encontrado")
     item.click_input()
     time.sleep(1)
 
-    sub = win.child_window(title="Emitir Livro Fiscal", control_type="ListItem")
-    try:
-        sub.wait("exists", timeout=TIMEOUT_CURTO_S)
-    except PywinautoTimeoutError as exc:
-        raise ErroAttended("[menu] 'Emitir Livro Fiscal' não encontrado") from exc
+    sub = _achar_item_menu(win, "Emitir Livro Fiscal", TIMEOUT_CURTO_S)
+    if sub is None:
+        raise ErroAttended("[menu] 'Emitir Livro Fiscal' não encontrado")
     sub.click_input()
     time.sleep(1.5)
 
@@ -291,12 +301,20 @@ def marcar_tipo_servico(win, tipo_servico: str) -> None:
     TESTADO - precisa clicar no rádio 'Serviços Contratados')."""
     if tipo_servico == "prestados":
         return  # já vem selecionado por padrão, confirmado ao vivo
-    radio = win.child_window(title="Serviços Contratados", control_type="RadioButton")
-    try:
-        radio.wait("exists", timeout=TIMEOUT_CURTO_S)
-        radio.click_input()
-    except PywinautoTimeoutError as exc:
-        raise ErroAttended("[livro_fiscal] rádio 'Serviços Contratados' não encontrado") from exc
+    prazo = time.time() + TIMEOUT_CURTO_S
+    radio = None
+    while time.time() < prazo:
+        candidatos = [
+            r for r in win.descendants(control_type="RadioButton")
+            if "Serviços Contratados" in r.window_text()
+        ]
+        if candidatos:
+            radio = candidatos[0]
+            break
+        time.sleep(0.3)
+    if radio is None:
+        raise ErroAttended("[livro_fiscal] rádio 'Serviços Contratados' não encontrado")
+    radio.click_input()
     time.sleep(0.5)
 
 
