@@ -1,0 +1,61 @@
+FECHAMENTO REST/DMS — ISS NET ONLINE (Goiânia/Aparecida de Goiânia)
+=====================================================================
+
+O portal do ISS Net Online bloqueia navegadores controlados por automação
+(Playwright/CDP) via Cloudflare. Este script usa outro mecanismo — Windows
+UI Automation — que só funciona DEPOIS que uma pessoa loga manualmente no
+portal (certificado digital, qualquer verificação que aparecer). O script
+não faz login sozinho: ele só mecaniza os cliques repetitivos de gerar e
+salvar os PDFs/XMLs de cada empresa, dentro da MESMA janela que você já
+autenticou.
+
+INSTALAÇÃO (uma vez só, nesta máquina)
+---------------------------------------
+Pré-requisitos: Python 3.11+ instalado (baixe em python.org se não tiver),
+Microsoft Edge instalado.
+
+1. Extraia esta pasta em algum lugar fixo, ex.: C:\attended_worker
+2. Abra o PowerShell nessa pasta e rode:
+
+   python -m venv .venv
+   .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+USO (toda vez que for fechar o mês)
+--------------------------------------
+1. Abra o Edge com a flag de acessibilidade (não é o atalho normal do
+   navegador — sem essa flag o script não enxerga a página):
+
+   Start-Process msedge -ArgumentList "--force-renderer-accessibility", "https://www.issnetonline.com.br/goiania/online/login/login.aspx"
+
+   (troque "goiania" por "aparecida" conforme o município da empresa)
+
+2. Faça login MANUALMENTE nessa janela: clique em "Logar com certificado
+   digital", escolha o certificado, resolva qualquer verificação que
+   aparecer. O script não participa dessa etapa.
+
+3. Deixe essa janela do Edge em primeiro plano e NÃO mexa em outro app
+   enquanto o script roda (ele clica em coordenadas/elementos da tela —
+   se você trocar de janela no meio, quebra).
+
+4. Rode o processamento (planilha no mesmo layout do modelo baixável no
+   Hub — Código da Empresa, CNPJ/CPF, Município, Razão Social opcional):
+
+   cd C:\attended_worker
+   .venv\Scripts\python.exe issnet_attended.py processar-planilha "CAMINHO_DA_PLANILHA.xlsx" "PASTA_ONDE_SALVAR"
+
+   A pasta de destino é organizada automaticamente como:
+   PASTA_ONDE_SALVAR\{código da empresa}\{competência MMAAAA}\arquivo.pdf
+
+5. No final aparece um resumo (OK/ERRO por empresa). Pra reprocessar só
+   uma empresa específica:
+
+   .venv\Scripts\python.exe issnet_attended.py testar-empresa "CNPJ" "CODIGO" "PASTA_ONDE_SALVAR"
+
+LIMITAÇÕES CONHECIDAS
+------------------------
+- Exportar XML (quando há movimento) ainda não foi implementado/testado
+  neste mecanismo — só o PDF do Livro Fiscal (DMS e REST).
+- Sessão do portal expira depois de um tempo parado — se aparecer erro de
+  "campo não encontrado", provavelmente precisa logar de novo.
+- O clique no botão "Gerar" é por coordenada da tela — se a janela do Edge
+  estiver com zoom/tamanho muito diferente do padrão, pode errar o alvo.

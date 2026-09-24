@@ -973,6 +973,28 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
 
     if modulo_id == "issnet_rest_dms":
         from rpa.issnet.urls import PORTAL_URLS
+
+        st.markdown("**Script de automação assistida (roda no seu PC)**")
+        st.caption(
+            "O Cloudflare do portal bloqueia navegador controlado por automação de servidor — "
+            "esse script mecaniza os cliques DEPOIS que você loga manualmente (certificado). "
+            "Baixe, extraia e siga o LEIA-ME.txt dentro do pacote."
+        )
+        _pasta_attended = Path(__file__).parent / "attended_worker"
+        _zip_attended = io.BytesIO()
+        with zipfile.ZipFile(_zip_attended, "w", zipfile.ZIP_DEFLATED) as zf:
+            for _nome_arquivo in ["issnet_attended.py", "requirements.txt", "LEIA-ME.txt"]:
+                _caminho = _pasta_attended / _nome_arquivo
+                if _caminho.exists():
+                    zf.write(_caminho, arcname=_nome_arquivo)
+        st.download_button(
+            "📥 Baixar script de automação (.zip)",
+            _zip_attended.getvalue(),
+            file_name="issnet_attended.zip",
+            type="primary",
+        )
+
+        st.divider()
         st.markdown("**Abrir o portal:**")
         cols_link = st.columns(len(PORTAL_URLS))
         for col, (municipio, url) in zip(cols_link, PORTAL_URLS.items()):

@@ -1,0 +1,10 @@
+# Dependencias do script attended do ISS Net Online (issnet_attended.py).
+# So roda no Windows (pywinauto usa a API de UI Automation do proprio SO).
+pyautogui>=0.9,<1
+pygetwindow>=0.0.9,<1
+pywinauto>=0.6.9,<1
+pillow>=12,<13
+psycopg[binary]>=3.1,<4
+cryptography>=42,<44
+openpyxl>=3.1,<4
+pdfplumber>=0.11,<1
