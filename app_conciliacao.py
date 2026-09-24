@@ -978,6 +978,23 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
         for col, (municipio, url) in zip(cols_link, PORTAL_URLS.items()):
             col.link_button(f"🔗 {municipio.title()}", url, use_container_width=True)
 
+        st.divider()
+        st.markdown("**Pasta onde os arquivos são salvos (script attended local)**")
+        _escritorio_atual = auth.carregar_escritorios().get(escritorio_id, {})
+        with st.form(f"pasta_raiz_{modulo_id}_form"):
+            _pasta_raiz = st.text_input(
+                "Pasta raiz no PC que roda o script",
+                value=_escritorio_atual.get("pasta_raiz_local", ""),
+                placeholder=r"C:\Prefeituras",
+                help="Dentro dela, cada empresa vira uma pasta com o código (da planilha) e, "
+                     "dentro dessa, uma subpasta com a competência (ex.: C:\\Prefeituras\\320\\082026\\).",
+            )
+            _salvar_pasta = st.form_submit_button("💾 Salvar pasta")
+        if _salvar_pasta:
+            auth.definir_pasta_raiz_local(escritorio_id, _pasta_raiz)
+            _flash("flash_rpa_manual", "✅ Pasta raiz salva.")
+            st.rerun()
+
     st.divider()
     st.subheader("Empresas do mês")
     _periodo_padrao = rpa_registry.preparar_periodo(modulo_id)

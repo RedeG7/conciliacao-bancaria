@@ -104,6 +104,12 @@ def garantir_schema() -> None:
         # camadas, ver _apps_permitidos_efetivos em app_conciliacao.py).
         conn.execute("ALTER TABLE escritorios ADD COLUMN IF NOT EXISTS apps_permitidos TEXT[]")
         conn.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS apps_permitidos TEXT[]")
+        # pasta_raiz_local: caminho no PC de quem roda o fluxo attended (ver
+        # attended_worker/) onde os PDFs/XMLs baixados manualmente/attended
+        # sao organizados em {pasta_raiz}/{codigo}/{competencia}/ - so faz
+        # sentido pra quem roda o script localmente, nao e usado pelo worker
+        # em nuvem (esse guarda no banco, nao em disco).
+        conn.execute("ALTER TABLE escritorios ADD COLUMN IF NOT EXISTS pasta_raiz_local TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sessoes (
                 token TEXT PRIMARY KEY,
@@ -266,6 +272,7 @@ def carregar_escritorios() -> Dict[str, dict]:
         l["id"]: {
             "nome": l["nome"], "criado_em": l["criado_em"].isoformat(),
             "apps_permitidos": l.get("apps_permitidos") or [],
+            "pasta_raiz_local": l.get("pasta_raiz_local") or "",
         }
         for l in linhas
     }
@@ -493,5 +500,17 @@ def definir_apps_usuario(usuario: str, apps: list) -> None:
         conn.execute(
             "UPDATE usuarios SET apps_permitidos = %s WHERE usuario = %s",
             (apps or None, usuario),
+        )
+        conn.commit()
+
+
+def definir_pasta_raiz_local(escritorio_id: str, pasta: str) -> None:
+    """Caminho no PC de quem roda o fluxo attended (ver attended_worker/)
+    onde os arquivos baixados manualmente/attended sao organizados em
+    {pasta_raiz}/{codigo}/{competencia}/."""
+    with _conectar() as conn:
+        conn.execute(
+            "UPDATE escritorios SET pasta_raiz_local = %s WHERE id = %s",
+            (pasta.strip() or None, escritorio_id),
         )
         conn.commit()
