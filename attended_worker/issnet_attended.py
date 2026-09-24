@@ -452,12 +452,209 @@ def salvar_pdf_popup(caminho_destino: Path) -> None:
 def tem_movimento(caminho_pdf: Path) -> bool:
     """Confirmado ao vivo: PDF sem movimento tem a frase exata 'não teve
     movimento econômico tributável' na página 2. Ausência dessa frase =
-    tem movimento (heurística por exclusão - nunca vi o caso positivo de
-    verdade ainda, validar quando aparecer uma empresa com movimento)."""
+    tem movimento (heurística por exclusão)."""
     import pdfplumber
     with pdfplumber.open(caminho_pdf) as pdf:
         texto = "\n".join(pagina.extract_text() or "" for pagina in pdf.pages)
     return not _RE_SEM_MOVIMENTO.search(texto)
+
+
+# ---------------------------------------------------------------------------
+# Nota Eletrônica: exportar XML da competência (empresa COM movimento)
+# ---------------------------------------------------------------------------
+
+def _achar_por_postback(win, trecho: str, tipo: str = "Hyperlink"):
+    """Acha um elemento pelo trecho do javascript:__doPostBack(...) REAL
+    (propriedade legacy 'Value', exposta pelo controle ASP.NET) em vez do
+    texto visível - confirmado ao vivo como o jeito mais confiável de
+    identificar ícones que só têm um glifo de fonte como texto acessível
+    (não dá pra procurar "Exportar XML" no texto - o texto É só um
+    glifo, ex. '\\uea72'). O nome do controle no postback (ex.
+    'btnExportarTodosXml') é estável porque é gerado pelo ASP.NET a
+    partir do ID do controle no servidor, não muda com sessão/dados."""
+    for el in win.descendants(control_type=tipo):
+        try:
+            valor = el.legacy_properties().get("Value", "")
+        except Exception:
+            continue
+        if trecho in valor:
+            return el
+    return None
+
+
+def abrir_consultar_nota_eletronica(win) -> None:
+    """Clica em Nota Eletrônica > Consultar Nota Eletrônica no menu
+    lateral - confirmado ao vivo.
+
+    NÃO usa _achar_item_menu aqui: "Nota Eletrônica" é substring tanto de
+    "Nova Nota Eletrônica" quanto de "Consultar Nota Eletrônica" (os dois
+    itens filhos), então a busca de _achar_item_menu (Hyperlink por
+    substring primeiro) acharia um item FILHO errado antes de qualquer
+    Hyperlink do item pai (que nem existe - só o ListItem pai é
+    clicável). Usa startswith no ListItem pai (só ele começa exatamente
+    com "Nota Eletrônica") e depois match EXATO no Hyperlink filho certo
+    (sem ambiguidade, já que os dois nomes de filho são diferentes um do
+    outro quando comparados por igualdade)."""
+    prazo = time.time() + TIMEOUT_PADRAO_S
+    pai = None
+    while time.time() < prazo:
+        candidatos = [
+            i for i in win.descendants(control_type="ListItem")
+            if i.window_text().strip().startswith("Nota Eletrônica")
+        ]
+        if candidatos:
+            pai = candidatos[0]
+            break
+        time.sleep(0.3)
+    if pai is None:
+        raise ErroAttended("[menu] 'Nota Eletrônica' não encontrado")
+    pai.click_input()
+    time.sleep(1)
+
+    prazo = time.time() + TIMEOUT_CURTO_S
+    sub = None
+    while time.time() < prazo:
+        candidatos = [h for h in win.descendants(control_type="Hyperlink") if h.window_text() == "Consultar Nota Eletrônica"]
+        if candidatos:
+            sub = candidatos[0]
+            break
+        time.sleep(0.3)
+    if sub is None:
+        raise ErroAttended("[menu] 'Consultar Nota Eletrônica' não encontrado")
+    sub.click_input()
+    time.sleep(2)
+
+
+def exportar_xml_competencia(win, data_inicial: str, data_final: str, caminho_destino: Path) -> bool:
+    """Nota Eletrônica > Consultar Nota Eletrônica > expande "Filtros
+    Adicionais" > preenche Data Competência Inicial/Final > Localizar >
+    clica no ícone "Exportar todas as notas em XML" do cabeçalho da
+    grade > "Salvar como" no prompt de download do Edge > digita o
+    caminho completo. Tudo achado por UIA (postback real dos botões, não
+    coordenada nem glifo de ícone) - confirmado ao vivo, com XML real
+    validado (59 notas, formato ABRASF NFSe padrão).
+
+    Retorna True se salvou algum arquivo, False se a busca não achou
+    nenhuma nota nessa competência (não é erro - só não tem nada pra
+    exportar; PODE acontecer mesmo com "tem_movimento()" True, já que
+    aquela checagem é sobre o PDF do Livro Fiscal, uma fonte diferente).
+
+    LIMITE CONFIRMADO AO VIVO: a busca por data aceita no máximo 31 dias
+    entre inicial e final - uma competência de um mês só (a mesma janela
+    usada no Livro Fiscal) sempre respeita isso."""
+    import pyautogui
+
+    # acomodação extra: confirmado ao vivo que, logo depois do popup do
+    # PDF do Livro Fiscal fechar (salvar_pdf_popup), a página principal
+    # demora um pouco mais que o normal pra reagir a cliques - sem essa
+    # pausa, o primeiro clique em "Localizar" mais adiante às vezes não
+    # tinha efeito nenhum (nem grade, nem diálogo de erro).
+    time.sleep(2)
+
+    abrir_consultar_nota_eletronica(win)
+
+    seta_filtros = _achar_por_postback(win, "imbArrow")
+    if seta_filtros is None:
+        raise ErroAttended("[exportar_xml] 'Filtros Adicionais' não encontrado")
+    try:
+        seta_filtros.invoke()
+    except Exception:
+        seta_filtros.click_input()
+    time.sleep(1)
+
+    campo_ini = _achar_edit_por_rotulo(win, "Data Competência Inicial")
+    campo_ini.click_input()
+    campo_ini.type_keys("^a{DELETE}", pause=0.02)
+    campo_ini.type_keys(data_inicial, with_spaces=True)
+
+    campo_fim = _achar_edit_por_rotulo(win, "Data Competência Final")
+    campo_fim.click_input()
+    campo_fim.type_keys("^a{DELETE}", pause=0.02)
+    campo_fim.type_keys(data_final, with_spaces=True)
+    time.sleep(0.3)
+
+    def _resultado_pronto():
+        """Retorna ('vazio', None) se o diálogo 'Nenhum registro' apareceu,
+        ('achou', botao) se a grade carregou (botão Exportar Todos XML
+        presente), ou (None, None) se ainda não reagiu."""
+        btn_ok = [b for b in win.descendants(control_type="Button") if "OK" in b.window_text()]
+        if btn_ok:
+            return "vazio", btn_ok[0]
+        botao = _achar_por_postback(win, "btnExportarTodosXml")
+        if botao is not None:
+            return "achou", botao
+        return None, None
+
+    # CAUSA RAIZ CONFIRMADA AO VIVO (depois de bastante investigação): o
+    # clique em "Localizar" via click_input() (clique de mouse simulado
+    # numa coordenada de tela) simplesmente não tinha efeito nenhum quando
+    # essa função rodava logo depois do fluxo do Livro Fiscal (seleciona
+    # empresa -> gera PDF -> salva -> só então chega aqui) - mas a MESMA
+    # chamada funcionava sempre que testada isolada. A diferença real era
+    # o MECANISMO do clique, não timing/foco/polling (tentei de tudo:
+    # focar a janela, esperar mais, não fazer polling, buscar a janela de
+    # novo a cada tentativa - nada disso resolveu sozinho). O que
+    # resolveu foi trocar pra invoke() (UIA InvokePattern - dispara a
+    # ação do controle direto pela API de acessibilidade, sem depender de
+    # coordenada de tela/scroll/foco do SO). Mantém click_input() como
+    # fallback só por segurança, caso o elemento não suporte invoke().
+    situacao, elemento = None, None
+    for tentativa in range(3):
+        win = conectar_janela()
+        btn_localizar = _achar_por_postback(win, "btnLocalizar2")
+        if btn_localizar is None:
+            raise ErroAttended("[exportar_xml] botão 'Localizar' não encontrado")
+        try:
+            btn_localizar.invoke()
+        except Exception:
+            btn_localizar.click_input()
+        time.sleep(8)
+        situacao, elemento = _resultado_pronto()
+        if situacao:
+            break
+
+    if situacao == "vazio":
+        elemento.click_input()
+        time.sleep(1)
+        return False
+    if situacao != "achou":
+        raise ErroAttended("[exportar_xml] busca não respondeu (nem grade nem 'nenhum registro')")
+
+    btn_exportar = elemento
+    try:
+        btn_exportar.invoke()
+    except Exception:
+        btn_exportar.click_input()
+    time.sleep(3)
+
+    d = Desktop(backend="uia")
+    janela_pai = None
+    prazo = time.time() + TIMEOUT_PADRAO_S
+    while time.time() < prazo:
+        candidatos = d.windows(title_re=r".*(Empresas|ISSNet On-Line|Nota Eletr).*Edge.*")
+        botoes = []
+        if candidatos:
+            janela_pai = candidatos[0]
+            botoes = [b for b in janela_pai.descendants(control_type="Button") if b.window_text().strip() == "Salvar como"]
+        if botoes:
+            botoes[0].click_input()
+            break
+        time.sleep(0.5)
+    else:
+        raise ErroAttended("[exportar_xml] prompt de download (Salvar como) não apareceu a tempo")
+    time.sleep(2)
+
+    caminho_destino.parent.mkdir(parents=True, exist_ok=True)
+    pyautogui.hotkey("ctrl", "a")
+    time.sleep(0.2)
+    pyautogui.typewrite(str(caminho_destino), interval=0.01)
+    time.sleep(0.3)
+    pyautogui.press("enter")
+    time.sleep(2)
+
+    if not caminho_destino.exists():
+        raise ErroAttended(f"[exportar_xml] arquivo não apareceu em {caminho_destino} após salvar")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -497,12 +694,12 @@ def processar_empresa(
     arquivos.append(pdf_dms)
 
     if tem_movimento(pdf_dms):
-        # TODO (não testado ao vivo): exportar_xml_competencia ainda não
-        # foi escrita pra este mecanismo - ver rpa/issnet/portal.py (versão
-        # Playwright) pra referência do fluxo (Nota Eletrônica > Consultar
-        # Nota Eletrônica > Filtros Adicionais > Data Competência > botão
-        # "Exportar todas as notas em XML" no canto da grade).
-        return {"movimento": "DMS com movimento — XML ainda não implementado neste mecanismo", "arquivos": arquivos}
+        xml_zip = pasta_empresa / f"{codigo} XML {competencia_arquivo}.zip"
+        exportou = exportar_xml_competencia(win, data_inicial, data_final, xml_zip)
+        if exportou:
+            arquivos.append(xml_zip)
+            return {"movimento": "DMS com movimento — XML exportado", "arquivos": arquivos}
+        return {"movimento": "DMS com movimento — mas nenhuma nota encontrada na competência pra exportar XML", "arquivos": arquivos}
 
     # sem movimento no DMS -> processa REST (Serviços Contratados) também,
     # mesma regra de negócio do worker Playwright original.
@@ -704,11 +901,16 @@ def processar_execucao_hub(escritorio_id: str, pasta_raiz: Path) -> None:
                     comp["data_inicial"], comp["data_final"],
                     competencia_pasta, comp["mm_aaaa_arquivo"],
                 )
-                pdf_bytes = resultado["arquivos"][-1].read_bytes() if resultado["arquivos"] else None
-                pdf_nome = resultado["arquivos"][-1].name if resultado["arquivos"] else ""
+                arquivos_pdf = [a for a in resultado["arquivos"] if a.suffix.lower() == ".pdf"]
+                arquivos_xml = [a for a in resultado["arquivos"] if a.suffix.lower() == ".zip"]
+                pdf_bytes = arquivos_pdf[-1].read_bytes() if arquivos_pdf else None
+                pdf_nome = arquivos_pdf[-1].name if arquivos_pdf else ""
+                xml_bytes = arquivos_xml[-1].read_bytes() if arquivos_xml else None
+                xml_nome = arquivos_xml[-1].name if arquivos_xml else ""
                 rpa_core.atualizar_empresa(
                     empresa["id"], status=rpa_core.STATUS_CONCLUIDO,
                     movimento=resultado["movimento"], pdf=pdf_bytes, pdf_nome=pdf_nome,
+                    xml_zip=xml_bytes, xml_zip_nome=xml_nome,
                 )
                 print(f"  OK — {resultado['movimento']} (sincronizado com o Hub)")
                 alguma_concluida = True

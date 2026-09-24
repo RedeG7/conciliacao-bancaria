@@ -89,8 +89,13 @@ Passos (uma vez só, por máquina):
 
 LIMITAÇÕES CONHECIDAS
 ------------------------
-- Exportar XML (quando há movimento) ainda não foi implementado/testado
-  neste mecanismo — só o PDF do Livro Fiscal (DMS e REST).
+- Quando a empresa TEM movimento no DMS, o programa exporta o XML de todas
+  as notas da competência automaticamente (Nota Eletrônica > Consultar
+  Nota Eletrônica > Filtros Adicionais > Data Competência > "Exportar
+  todas as notas em XML"), salvo como um .zip na mesma pasta do PDF. Se a
+  busca não achar nenhuma nota nessa competência (raro, mas pode
+  acontecer), o programa só avisa e segue pra próxima empresa - não é
+  erro.
 - Sessão do portal expira depois de um tempo parado — se aparecer erro de
   "campo não encontrado", provavelmente precisa logar de novo.
 - O clique no botão "Gerar" tenta achar o botão pelo texto primeiro; só usa
