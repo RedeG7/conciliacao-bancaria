@@ -181,8 +181,19 @@ def voltar_para_empresas(win) -> None:
     vivo. O texto acessível desse botão vem com um glifo de ícone colado
     na frente (ex.: '\\uee53IS Engenharia...'), por isso usa title_re
     genérico em vez de tentar casar o nome exato da empresa (que muda a
-    cada chamada)."""
-    botoes = win.descendants(control_type="Button")
+    cada chamada).
+
+    IMPORTANTE: a busca é restrita ao Document (conteúdo da página via
+    _tela_documento), NUNCA ao win inteiro - win.descendants() também
+    devolve botões do CHROME do navegador (barra de abas, "Fechar guia"
+    etc.), que ficam bem no topo da janela como a área da página. Se a
+    busca pegasse o win inteiro e o botão certo não fosse o primeiro da
+    lista, dava pra clicar sem querer no botão de fechar a aba/janela -
+    suspeita forte de um bug relatado (empresa selecionada, fluxo seguinte
+    falha, PÁGINA FECHA) quando processar_empresa lança erro antes de
+    abrir_livro_fiscal e o fallback aqui pega o botão errado."""
+    doc = _tela_documento(win)
+    botoes = doc.descendants(control_type="Button")
     # o botão da empresa fica na faixa superior da página (mesma área do
     # "Competência: ..." e "Sair"), com texto não-vazio que não é nenhum
     # desses rótulos fixos - identifica por eliminação em vez de regex de
