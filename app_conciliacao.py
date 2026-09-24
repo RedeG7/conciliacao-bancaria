@@ -993,15 +993,20 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
         _pasta_attended = Path(__file__).parent / "attended_worker"
         _zip_attended = io.BytesIO()
         with zipfile.ZipFile(_zip_attended, "w", zipfile.ZIP_DEFLATED) as zf:
-            for _nome_arquivo in ["issnet_attended.py", "requirements.txt", "LEIA-ME.txt"]:
+            for _nome_arquivo in ["dist/issnet_attended.exe", "LEIA-ME.txt"]:
                 _caminho = _pasta_attended / _nome_arquivo
                 if _caminho.exists():
-                    zf.write(_caminho, arcname=_nome_arquivo)
+                    zf.write(_caminho, arcname=Path(_nome_arquivo).name)
         st.download_button(
             "📥 Baixar script de automação (.zip)",
             _zip_attended.getvalue(),
             file_name="issnet_attended.zip",
             type="primary",
+        )
+        st.caption(
+            "O .zip traz um .exe pronto — não precisa instalar Python. O Windows pode avisar "
+            "'aplicativo desconhecido' (SmartScreen) por não ter certificado de editor; clique em "
+            "'Mais informações' → 'Executar assim mesmo'."
         )
 
         st.divider()

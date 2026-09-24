@@ -11,3 +11,5 @@ _demo_input/
 .deploy_keys/
 .backups/
 docker-compose.override.yml
+attended_worker/build/
+attended_worker/*.spec

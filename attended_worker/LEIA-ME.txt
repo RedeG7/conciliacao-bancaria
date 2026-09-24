@@ -2,28 +2,29 @@ FECHAMENTO REST/DMS — ISS NET ONLINE (Goiânia/Aparecida de Goiânia)
 =====================================================================
 
 O portal do ISS Net Online bloqueia navegadores controlados por automação
-(Playwright/CDP) via Cloudflare. Este script usa outro mecanismo — Windows
+(Playwright/CDP) via Cloudflare. Este programa usa outro mecanismo — Windows
 UI Automation — que só funciona DEPOIS que uma pessoa loga manualmente no
-portal (certificado digital, qualquer verificação que aparecer). O script
-não faz login sozinho: ele só mecaniza os cliques repetitivos de gerar e
-salvar os PDFs/XMLs de cada empresa, dentro da MESMA janela que você já
-autenticou.
+portal (certificado digital, qualquer verificação que aparecer). Ele não
+faz login sozinho: só mecaniza os cliques repetitivos de gerar e salvar os
+PDFs/XMLs de cada empresa, dentro da MESMA janela que você já autenticou.
 
 INSTALAÇÃO (uma vez só, nesta máquina)
 ---------------------------------------
-Pré-requisitos: Python 3.11+ instalado (baixe em python.org se não tiver),
-Microsoft Edge instalado.
+Nenhuma — é um único arquivo (issnet_attended.exe), não precisa instalar
+Python nem nada mais. Só extraia esta pasta em algum lugar fixo, ex.:
+C:\attended_worker
 
-1. Extraia esta pasta em algum lugar fixo, ex.: C:\attended_worker
-2. Abra o PowerShell nessa pasta e rode:
+Pré-requisito: Microsoft Edge instalado (já vem no Windows).
 
-   python -m venv .venv
-   .venv\Scripts\python.exe -m pip install -r requirements.txt
+Na primeira vez que rodar, o Windows pode mostrar um aviso do SmartScreen
+("O Windows protegeu o computador" / "aplicativo desconhecido") porque o
+.exe não tem certificado de editor pago. Clique em "Mais informações" e
+depois em "Executar assim mesmo".
 
 USO (toda vez que for fechar o mês)
 --------------------------------------
 1. Abra o Edge com a flag de acessibilidade (não é o atalho normal do
-   navegador — sem essa flag o script não enxerga a página):
+   navegador — sem essa flag o programa não enxerga a página):
 
    Start-Process msedge -ArgumentList "--force-renderer-accessibility", "https://www.issnetonline.com.br/goiania/online/login/login.aspx"
 
@@ -31,10 +32,10 @@ USO (toda vez que for fechar o mês)
 
 2. Faça login MANUALMENTE nessa janela: clique em "Logar com certificado
    digital", escolha o certificado, resolva qualquer verificação que
-   aparecer. O script não participa dessa etapa.
+   aparecer. O programa não participa dessa etapa.
 
 3. Deixe essa janela do Edge em primeiro plano e NÃO mexa em outro app
-   enquanto o script roda (ele clica em coordenadas/elementos da tela —
+   enquanto o programa roda (ele clica em coordenadas/elementos da tela —
    se você trocar de janela no meio, quebra).
 
 4. Rode o processamento - dois modos:
@@ -46,11 +47,11 @@ USO (toda vez que for fechar o mês)
    Hub, igual um módulo automatizado de verdade:
 
    cd C:\attended_worker
-   .venv\Scripts\python.exe issnet_attended.py processar-hub "ID_DO_ESCRITORIO" "PASTA_ONDE_SALVAR"
+   issnet_attended.exe processar-hub "ID_DO_ESCRITORIO" "PASTA_ONDE_SALVAR"
 
    MODO OFFLINE (sem sincronizar nada, só gera os arquivos localmente):
 
-   .venv\Scripts\python.exe issnet_attended.py processar-planilha "CAMINHO_DA_PLANILHA.xlsx" "PASTA_ONDE_SALVAR"
+   issnet_attended.exe processar-planilha "CAMINHO_DA_PLANILHA.xlsx" "PASTA_ONDE_SALVAR"
 
    Nos dois casos, a pasta de destino é organizada automaticamente como:
    PASTA_ONDE_SALVAR\{código da empresa}\{competência MMAAAA}\arquivo.pdf
@@ -58,18 +59,18 @@ USO (toda vez que for fechar o mês)
 5. No final aparece um resumo (OK/ERRO por empresa). Pra reprocessar só
    uma empresa específica (não sincroniza com o Hub, só testa):
 
-   .venv\Scripts\python.exe issnet_attended.py testar-empresa "CNPJ" "CODIGO" "PASTA_ONDE_SALVAR"
+   issnet_attended.exe testar-empresa "CNPJ" "CODIGO" "PASTA_ONDE_SALVAR"
 
 SINCRONIZAÇÃO COM O HUB (modo "processar-hub")
 --------------------------------------------------
 Só funciona na máquina que tem a chave SSH de deploy do escritório (fala
-com o super admin se não tiver) - sem ela, o script recusa com uma
+com o super admin se não tiver) - sem ela, o programa recusa com uma
 mensagem clara, não trava escondido. Passos (uma vez só):
 
 1. Copie a pasta ".deploy_keys" (com a chave "homehost_deploy") pra ficar
    como pasta IRMÃ desta ("attended_worker"), ex.:
      C:\algumlugar\.deploy_keys\homehost_deploy
-     C:\algumlugar\attended_worker\issnet_attended.py
+     C:\algumlugar\attended_worker\issnet_attended.exe
 
 2. Gere attended_worker\prod.env com as credenciais de produção (peça o
    comando pro super admin - ele lê um arquivo .env no VPS via SSH, nunca
@@ -77,7 +78,7 @@ mensagem clara, não trava escondido. Passos (uma vez só):
 
 3. A licença de uso desse modo pode ser ligada/desligada a qualquer
    momento pelo super admin, em Gerenciar Escritórios no Hub. Se estiver
-   desligada, o script para com uma mensagem clara antes de fazer
+   desligada, o programa para com uma mensagem clara antes de fazer
    qualquer coisa.
 
 LIMITAÇÕES CONHECIDAS

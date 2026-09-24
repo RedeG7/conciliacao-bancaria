@@ -71,6 +71,14 @@ from pathlib import Path
 from pywinauto import Desktop
 from pywinauto.timings import TimeoutError as PywinautoTimeoutError
 
+# titulos de janela do navegador as vezes trazem caracteres invisiveis
+# (ex.: zero-width space) que o console do Windows nao imprime na
+# codificacao padrao (cp1252) - sem isso, o script (principalmente o .exe
+# empacotado) crasha com UnicodeEncodeError so por causa de um print().
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # pra importar rpa.issnet.competencia
 
 TIMEOUT_PADRAO_S = 15
