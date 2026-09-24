@@ -86,5 +86,7 @@ LIMITAÇÕES CONHECIDAS
   neste mecanismo — só o PDF do Livro Fiscal (DMS e REST).
 - Sessão do portal expira depois de um tempo parado — se aparecer erro de
   "campo não encontrado", provavelmente precisa logar de novo.
-- O clique no botão "Gerar" é por coordenada da tela — se a janela do Edge
-  estiver com zoom/tamanho muito diferente do padrão, pode errar o alvo.
+- O clique no botão "Gerar" tenta achar o botão pelo texto primeiro; só usa
+  coordenada da tela como último recurso (janela é maximizada
+  automaticamente pra deixar isso mais previsível, mas zoom do navegador
+  muito diferente do padrão ainda pode errar o alvo).

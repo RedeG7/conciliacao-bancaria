@@ -34,11 +34,13 @@ Ltda", Goiânia, competência 08/2026):
   - PDF abre num popup novo (about:blank -> navega para
     Relatorios/ReportManager.aspx) - no Edge renderiza corretamente (no
     Chrome ficou em branco, bug conhecido do usuário nesse navegador/portal
-    - por isso o script pressupõe Edge). Salvar: ícone de salvar no canto
-    superior direito da toolbar do visualizador de PDF do Edge (também por
-    coordenada), abre "Salvar como" nativo do Windows - digitar o caminho
+    - por isso o script pressupõe Edge). Salvar: Ctrl+S no visualizador de
+    PDF do Edge abre "Salvar como" nativo do Windows - digitar o caminho
     completo no campo "Nome" funciona e cria o arquivo direto, sem precisar
-    navegar pastas na mão.
+    navegar pastas na mão. (Versão anterior clicava por coordenada no ícone
+    de salvar da toolbar - trocado por Ctrl+S porque uma coordenada fixa
+    calculada numa tela podia cair em outro lugar, inclusive perto do botão
+    de fechar da janela, em telas com resolução diferente.)
   - Texto extraído do PDF gerado (pdfplumber) pra empresa SEM movimento
     contém a frase exata "não teve movimento econômico tributável" na
     página 2 (ver _tem_movimento) - mais confiável que tentar ler "Total
@@ -112,6 +114,11 @@ def conectar_janela():
             win.wait("exists", timeout=2)
             win.set_focus()
             time.sleep(0.3)
+            try:
+                win.maximize()  # geometria consistente p/ os cliques por coordenada, qualquer que seja a tela do usuário
+                time.sleep(0.3)
+            except Exception:
+                pass
             return win
         except PywinautoTimeoutError:
             continue
@@ -268,11 +275,25 @@ def preencher_datas_livro_fiscal(win, data_inicial: str, data_final: str) -> Non
 
 
 def clicar_gerar_por_coordenada(win) -> None:
-    """FRÁGIL (ver docstring do módulo): não achei o botão 'Gerar' de forma
-    confiável via UIA, funcionou por coordenada calculada a partir do
-    retângulo dos campos de data (o botão fica ~70px abaixo deles,
-    horizontalmente entre Data Inicial e Data Final). Se quebrar, é o
-    primeiro lugar a olhar."""
+    """Tenta achar o botão 'Gerar' por texto primeiro (robusto, independe da
+    tela do usuário); só cai pro clique por COORDENADA (frágil - ver
+    docstring do módulo) se não achar. A janela já é maximizada em
+    conectar_janela(), então a coordenada de fallback fica mais previsível
+    entre máquinas diferentes - mas ainda pode errar se a resolução for
+    muito diferente da usada nos testes (1920x1080)."""
+    for tipo in ("Button", "Hyperlink", "ListItem", "Text"):
+        try:
+            candidatos = [
+                el for el in win.descendants(control_type=tipo)
+                if "gerar" in el.window_text().strip().lower()
+            ]
+        except Exception:
+            candidatos = []
+        if candidatos:
+            candidatos[0].click_input()
+            time.sleep(3)
+            return
+
     import pyautogui
     edits = win.descendants(control_type="Edit")
     campo_inicial = edits[3]
@@ -288,12 +309,16 @@ def clicar_gerar_por_coordenada(win) -> None:
 # ---------------------------------------------------------------------------
 
 def salvar_pdf_popup(caminho_destino: Path) -> None:
-    """AINDA MAIS FRÁGIL: espera o popup do PDF abrir, maximiza, clica no
-    ícone de salvar da toolbar do visualizador (coordenada fixa, calculada
-    ao vivo pra essa resolução/DPI específica), digita o caminho completo
-    no campo Nome do 'Salvar como' nativo do Windows e confirma.
-    Confirmado ao vivo uma vez (Edge). NÃO testado em resoluções/escalas
-    de tela diferentes desta."""
+    """Espera o popup do PDF abrir, maximiza e usa Ctrl+S (atalho nativo do
+    visualizador de PDF do Edge) pra abrir o 'Salvar como' - evita clique
+    por coordenada no ícone da toolbar (o ponto mais arriscado da versão
+    anterior: uma coordenada fixa perto do canto da janela podia acertar o
+    botão de FECHAR em telas com resolução diferente da usada nos testes,
+    o que explicaria o navegador fechando sozinho). Digita o caminho
+    completo no campo Nome do 'Salvar como' nativo do Windows e confirma.
+    Confirmado ao vivo uma vez (Edge, clique por coordenada); Ctrl+S ainda
+    não testado ao vivo por este script, mas é o atalho padrão do
+    visualizador de PDF do Edge."""
     import pyautogui
 
     d = Desktop(backend="uia")
@@ -310,10 +335,10 @@ def salvar_pdf_popup(caminho_destino: Path) -> None:
 
     popup.maximize()
     time.sleep(2)
+    popup.set_focus()
+    time.sleep(0.3)
 
-    # icone de salvar: confirmado ao vivo em (1491, 201) pra maximizado em
-    # 1920x1080 - se a resolução for diferente, ISSO QUEBRA.
-    pyautogui.click(1491, 201)
+    pyautogui.hotkey("ctrl", "s")
     time.sleep(2)
 
     caminho_destino.parent.mkdir(parents=True, exist_ok=True)
