@@ -13,3 +13,4 @@ _demo_input/
 docker-compose.override.yml
 attended_worker/build/
 attended_worker/*.spec
+issnet_attended_config.json

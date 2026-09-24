@@ -21,51 +21,53 @@ Na primeira vez que rodar, o Windows pode mostrar um aviso do SmartScreen
 .exe não tem certificado de editor pago. Clique em "Mais informações" e
 depois em "Executar assim mesmo".
 
-USO (toda vez que for fechar o mês)
---------------------------------------
-1. Abra o Edge com a flag de acessibilidade (não é o atalho normal do
-   navegador — sem essa flag o programa não enxerga a página):
+USO NORMAL — COM JANELA (recomendado, sem terminal)
+------------------------------------------------------
+1. Dê duplo clique em issnet_attended.exe. Abre uma janela com 3 passos:
 
-   Start-Process msedge -ArgumentList "--force-renderer-accessibility", "https://www.issnetonline.com.br/goiania/online/login/login.aspx"
+   1. Escolha o Município e clique em "Abrir portal no Edge" — o programa
+      abre o Edge já na página certa. Faça login MANUALMENTE (certificado
+      digital, resolva qualquer verificação que aparecer). Deixe essa
+      janela do Edge em primeiro plano, sem trocar de aplicativo, até o
+      processamento terminar.
 
-   (troque "goiania" por "aparecida" conforme o município da empresa)
+   2. Escolha de onde vêm as empresas: "Planilha local (.xlsx)" (clique em
+      "Procurar..." e selecione o arquivo) ou "Sincronizar com o Hub"
+      (avançado — ver seção abaixo, precisa de configuração extra).
 
-2. Faça login MANUALMENTE nessa janela: clique em "Logar com certificado
-   digital", escolha o certificado, resolva qualquer verificação que
-   aparecer. O programa não participa dessa etapa.
+   3. Escolha a pasta onde salvar os PDFs (clique em "Procurar...").
 
-3. Deixe essa janela do Edge em primeiro plano e NÃO mexa em outro app
-   enquanto o programa roda (ele clica em coordenadas/elementos da tela —
-   se você trocar de janela no meio, quebra).
+2. Clique em "Iniciar processamento". O andamento aparece ao vivo na caixa
+   de texto da própria janela; no final mostra um resumo (OK/ERRO por
+   empresa).
 
-4. Rode o processamento - dois modos:
+   A pasta de destino é organizada automaticamente como:
+   PASTA_ESCOLHIDA\{código da empresa}\{competência MMAAAA}\arquivo.pdf
 
-   MODO SINCRONIZADO COM O HUB (recomendado, só na máquina do escritório
-   que tem acesso ao VPS - ver "SINCRONIZAÇÃO COM O HUB" abaixo): pega a
-   lista de empresas que você já subiu na tela do Hub e devolve pra lá o
-   status e os PDFs de cada uma - aparecem como botão de download no
-   Hub, igual um módulo automatizado de verdade:
+   As escolhas ficam salvas (issnet_attended_config.json, na mesma pasta
+   do .exe) — na próxima vez já vêm preenchidas.
+
+USO AVANÇADO — LINHA DE COMANDO (automação/scripts, sem janela)
+--------------------------------------------------------------------
+Os mesmos modos acima também podem ser chamados direto pelo terminal
+(PowerShell), sem abrir a janela — útil pra quem já tem o hábito ou quer
+automatizar:
 
    cd C:\attended_worker
-   issnet_attended.exe processar-hub "ID_DO_ESCRITORIO" "PASTA_ONDE_SALVAR"
-
-   MODO OFFLINE (sem sincronizar nada, só gera os arquivos localmente):
-
    issnet_attended.exe processar-planilha "CAMINHO_DA_PLANILHA.xlsx" "PASTA_ONDE_SALVAR"
-
-   Nos dois casos, a pasta de destino é organizada automaticamente como:
-   PASTA_ONDE_SALVAR\{código da empresa}\{competência MMAAAA}\arquivo.pdf
-
-5. No final aparece um resumo (OK/ERRO por empresa). Pra reprocessar só
-   uma empresa específica (não sincroniza com o Hub, só testa):
-
+   issnet_attended.exe processar-hub "ID_DO_ESCRITORIO" "PASTA_ONDE_SALVAR"
    issnet_attended.exe testar-empresa "CNPJ" "CODIGO" "PASTA_ONDE_SALVAR"
 
-SINCRONIZAÇÃO COM O HUB (modo "processar-hub")
---------------------------------------------------
-Só funciona na máquina que tem a chave SSH de deploy do escritório (fala
-com o super admin se não tiver) - sem ela, o programa recusa com uma
-mensagem clara, não trava escondido. Passos (uma vez só):
+Nesse modo o login manual no portal também é necessário antes de rodar.
+
+SINCRONIZAÇÃO COM O HUB (modo "processar-hub" / opção "Sincronizar com o Hub")
+------------------------------------------------------------------------------
+Pega a lista de empresas que você já subiu na tela do Hub e devolve pra lá
+o status e os PDFs de cada uma - aparecem como botão de download no Hub,
+igual um módulo automatizado de verdade. Só funciona na máquina que tem a
+chave SSH de deploy do escritório (fala com o super admin se não tiver) -
+sem ela, o programa recusa com uma mensagem clara, não trava escondido.
+Passos (uma vez só, por máquina):
 
 1. Copie a pasta ".deploy_keys" (com a chave "homehost_deploy") pra ficar
    como pasta IRMÃ desta ("attended_worker"), ex.:

@@ -631,14 +631,17 @@ def processar_execucao_hub(escritorio_id: str, pasta_raiz: Path) -> None:
         tunel.terminate()
 
 
-if __name__ == "__main__":
+def main_cli() -> None:
+    """Modo linha de comando (sem interface gráfica) - usado por gui.py
+    quando roda com argumentos reconhecidos, e também disponível chamando
+    este arquivo direto (uso avançado/automação/debug)."""
     if len(sys.argv) > 2 and sys.argv[1] == "processar-hub":
         processar_execucao_hub(sys.argv[2], Path(sys.argv[3] if len(sys.argv) > 3 else r"C:\Prefeituras"))
-        sys.exit(0)
+        return
 
     if len(sys.argv) > 2 and sys.argv[1] == "processar-planilha":
         processar_planilha(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else r"C:\Prefeituras"))
-        sys.exit(0)
+        return
 
     win = conectar_janela()
     print("Janela conectada:", win.window_text())
@@ -655,3 +658,7 @@ if __name__ == "__main__":
             comp["mm_aaaa_arquivo"].replace(" ", ""), comp["mm_aaaa_arquivo"],
         )
         print("Resultado:", resultado)
+
+
+if __name__ == "__main__":
+    main_cli()

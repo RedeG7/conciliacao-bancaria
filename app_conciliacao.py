@@ -987,8 +987,9 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
         st.markdown("**Script de automação assistida (roda no seu PC)**")
         st.caption(
             "O Cloudflare do portal bloqueia navegador controlado por automação de servidor — "
-            "esse script mecaniza os cliques DEPOIS que você loga manualmente (certificado). "
-            "Baixe, extraia e siga o LEIA-ME.txt dentro do pacote."
+            "esse programa mecaniza os cliques DEPOIS que você loga manualmente (certificado). "
+            "Baixe, extraia e dê duplo clique no .exe: abre uma janela onde você escolhe o "
+            "município, faz login no portal e informa a planilha/pasta — sem precisar de terminal."
         )
         _pasta_attended = Path(__file__).parent / "attended_worker"
         _zip_attended = io.BytesIO()
