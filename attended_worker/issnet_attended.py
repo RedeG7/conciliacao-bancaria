@@ -162,7 +162,18 @@ def esta_na_tela_empresas(win) -> bool:
 
 def selecionar_empresa(win, cnpj_cpf: str, codigo: str) -> None:
     """Na tela Empresas: busca por CNPJ/CPF e clica no ✓ (Selecione) da
-    linha correspondente. Confirmado ao vivo."""
+    linha correspondente.
+
+    A busca da linha usava child_window(title=cnpj_cpf, ...) - título
+    EXATO igual ao CNPJ. Bug confirmado ao vivo: isso falha com
+    "não encontrada na busca" mesmo quando a empresa aparece certinho na
+    grade (ex.: CNPJ 97.536.283/0001-22, visível na primeira página sem
+    nem precisar de busca) - o nome acessível (Name) da linha na grade
+    provavelmente concatena mais coisa além do CNPJ puro (nome da
+    empresa, inscrição etc.), então a igualdade exata nunca bate. Troca
+    pra busca por SUBSTRING entre todos os DataItem da janela, com
+    polling (mais tolerante a variação de formatação e ao tempo do
+    postback da busca)."""
     campo_busca = _achar_edit_por_rotulo(win, "CPF / CNPJ")
     campo_busca.click_input()
     campo_busca.type_keys("^a{DELETE}", pause=0.02)
@@ -170,11 +181,16 @@ def selecionar_empresa(win, cnpj_cpf: str, codigo: str) -> None:
     campo_busca.type_keys("{ENTER}")
     time.sleep(2)
 
-    linha_alvo = win.child_window(title=cnpj_cpf, control_type="DataItem")
-    try:
-        linha_alvo.wait("exists", timeout=TIMEOUT_PADRAO_S)
-    except PywinautoTimeoutError as exc:
-        raise ErroAttended(f"[selecionar_empresa] empresa {codigo} ({cnpj_cpf}) não encontrada na busca") from exc
+    linha_alvo = None
+    prazo = time.time() + TIMEOUT_PADRAO_S
+    while time.time() < prazo:
+        candidatas = [d for d in win.descendants(control_type="DataItem") if cnpj_cpf in d.window_text()]
+        if candidatas:
+            linha_alvo = candidatas[0]
+            break
+        time.sleep(0.5)
+    if linha_alvo is None:
+        raise ErroAttended(f"[selecionar_empresa] empresa {codigo} ({cnpj_cpf}) não encontrada na busca")
     rect_linha = linha_alvo.rectangle()
 
     hyperlinks = win.descendants(control_type="Hyperlink")
