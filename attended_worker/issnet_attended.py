@@ -161,37 +161,41 @@ def esta_na_tela_empresas(win) -> bool:
 
 
 def selecionar_empresa(win, cnpj_cpf: str, codigo: str) -> None:
-    """Na tela Empresas: busca por CNPJ/CPF e clica no ✓ (Selecione) da
-    linha correspondente.
+    """Na tela Empresas: digita o CNPJ/CPF no campo de busca e pressiona
+    Enter.
 
-    A busca da linha usava child_window(title=cnpj_cpf, ...) - título
-    EXATO igual ao CNPJ. Bug confirmado ao vivo: isso falha com
-    "não encontrada na busca" mesmo quando a empresa aparece certinho na
-    grade (ex.: CNPJ 97.536.283/0001-22, visível na primeira página sem
-    nem precisar de busca) - o nome acessível (Name) da linha na grade
-    provavelmente concatena mais coisa além do CNPJ puro (nome da
-    empresa, inscrição etc.), então a igualdade exata nunca bate. Troca
-    pra busca por SUBSTRING entre todos os DataItem da janela, com
-    polling (mais tolerante a variação de formatação e ao tempo do
-    postback da busca)."""
+    DESCOBERTA CONFIRMADA AO VIVO (com inspeção direta da árvore UIA):
+    quando a busca resulta em EXATAMENTE UMA empresa, o próprio portal
+    navega direto pra dentro dela sozinho (medido: ~5s depois do Enter) -
+    NÃO existe nenhum botão "Selecione" pra clicar nesse caso, porque a
+    tela Empresas (com a grade/DataItem) já nem existe mais nesse ponto.
+    Essa era a causa raiz de dois bugs anteriores ("empresa não
+    encontrada na busca" mesmo com o CNPJ certo, e o fluxo não seguir
+    pra Livro Fiscal): o código antigo ficava esperando uma linha de
+    grade que nunca ia aparecer, porque a página já tinha navegado.
+
+    Mantém como FALLBACK a lógica antiga (achar a linha na grade e
+    clicar no ✓) pro caso da busca retornar mais de um resultado (aí sim
+    continua na tela Empresas com uma grade de verdade pra escolher)."""
     campo_busca = _achar_edit_por_rotulo(win, "CPF / CNPJ")
     campo_busca.click_input()
     campo_busca.type_keys("^a{DELETE}", pause=0.02)
     campo_busca.type_keys(cnpj_cpf.replace("{", "{{").replace("}", "}}"), with_spaces=True)
     campo_busca.type_keys("{ENTER}")
-    time.sleep(2)
 
-    linha_alvo = None
     prazo = time.time() + TIMEOUT_PADRAO_S
     while time.time() < prazo:
-        candidatas = [d for d in win.descendants(control_type="DataItem") if cnpj_cpf in d.window_text()]
-        if candidatas:
-            linha_alvo = candidatas[0]
-            break
+        if not esta_na_tela_empresas(win):
+            return  # navegou sozinho pra dentro da empresa - nada mais a fazer
         time.sleep(0.5)
-    if linha_alvo is None:
+
+    # ainda na tela Empresas depois do prazo -> a busca não navegou
+    # sozinha (provavelmente mais de um resultado) - tenta achar a linha
+    # certa na grade e clicar no botão Selecione dela.
+    candidatas = [d for d in win.descendants(control_type="DataItem") if cnpj_cpf in d.window_text()]
+    if not candidatas:
         raise ErroAttended(f"[selecionar_empresa] empresa {codigo} ({cnpj_cpf}) não encontrada na busca")
-    rect_linha = linha_alvo.rectangle()
+    rect_linha = candidatas[0].rectangle()
 
     hyperlinks = win.descendants(control_type="Hyperlink")
     candidatos = [h for h in hyperlinks if abs(h.rectangle().top - rect_linha.top) < 15]
@@ -254,10 +258,27 @@ def _achar_item_menu(win, texto: str, timeout: float):
     mesmo motivo da correção em selecionar_empresa: itens de menu costumam
     ter um glifo de ícone colado no nome acessível (ver voltar_para_empresas),
     então título EXATO falha de forma inconsistente. Faz polling porque o
-    item só aparece depois que a página da empresa termina de carregar."""
+    item só aparece depois que a página da empresa termina de carregar.
+
+    Inspeção ao vivo da árvore UIA revelou dois detalhes importantes:
+    1) O ListItem "Emitir Livro Fiscal" tem um Hyperlink FILHO com o
+       mesmo texto - é esse Hyperlink que tem o clique de navegação de
+       verdade; clicar no ListItem pai não navegava (ficava só marcado/
+       destacado, sem trocar o conteúdo da página). Por isso a busca
+       tenta Hyperlink primeiro.
+    2) O ListItem "Livro Fiscal" (item pai, que só expande/recolhe)
+       concatena o texto dos filhos no próprio window_text() (ex.:
+       "Livro FiscalEmitir Livro Fiscal"), então uma busca por substring
+       simples de "Emitir Livro Fiscal" batia ERRADO nesse ListItem pai
+       também (falso positivo) e ficava clicando nele de novo em vez do
+       item filho - por isso o fallback pra ListItem usa startswith, que
+       distingue as duas strings corretamente."""
     prazo = time.time() + timeout
     while time.time() < prazo:
-        candidatos = [i for i in win.descendants(control_type="ListItem") if texto in i.window_text()]
+        links = [h for h in win.descendants(control_type="Hyperlink") if texto in h.window_text()]
+        if links:
+            return links[0]
+        candidatos = [i for i in win.descendants(control_type="ListItem") if i.window_text().strip().startswith(texto)]
         if candidatos:
             return candidatos[0]
         time.sleep(0.3)
@@ -372,36 +393,45 @@ def clicar_gerar_por_coordenada(win) -> None:
 # ---------------------------------------------------------------------------
 
 def salvar_pdf_popup(caminho_destino: Path) -> None:
-    """Espera o popup do PDF abrir, maximiza e usa Ctrl+S (atalho nativo do
-    visualizador de PDF do Edge) pra abrir o 'Salvar como' - evita clique
-    por coordenada no ícone da toolbar (o ponto mais arriscado da versão
-    anterior: uma coordenada fixa perto do canto da janela podia acertar o
-    botão de FECHAR em telas com resolução diferente da usada nos testes,
-    o que explicaria o navegador fechando sozinho). Digita o caminho
-    completo no campo Nome do 'Salvar como' nativo do Windows e confirma.
-    Confirmado ao vivo uma vez (Edge, clique por coordenada); Ctrl+S ainda
-    não testado ao vivo por este script, mas é o atalho padrão do
-    visualizador de PDF do Edge."""
+    """Espera o popup do PDF abrir e clica no botão "Salvar" da toolbar do
+    visualizador (achado por UIA, não por coordenada nem atalho de
+    teclado - confirmado ao vivo).
+
+    HISTÓRICO (pra não repetir as duas tentativas que não funcionaram):
+    1) Clique por coordenada fixa no ícone - arriscado, quebra se a
+       resolução/posição da janela mudar (podia até acertar o botão de
+       FECHAR da janela em vez do ícone certo).
+    2) Ctrl+S - testado ao vivo e NÃO abre o 'Salvar como': o atalho real
+       desse visualizador é Ctrl+B, não Ctrl+S (confirmado inspecionando a
+       árvore UIA: o botão se chama "Salvar (Ctrl+B)"). Ctrl+S deixava a
+       página em branco (mesmo bug de renderização já visto no Chrome,
+       aqui disparado de outra forma).
+    O que funciona: achar o Button cujo texto contém "Salvar" e clicar
+    nele diretamente - não precisa maximizar a janela nem saber o atalho."""
     import pyautogui
 
     d = Desktop(backend="uia")
     popup = None
     for _ in range(20):
-        try:
-            popup = d.window(title_re=r".*ReportManager.*")
-            popup.wait("exists", timeout=1)
+        candidatos = d.windows(title_re=r".*ReportManager.*")
+        if candidatos:
+            # pode sobrar mais de um popup (ex.: um anterior que não
+            # fechou por causa de erro/timeout numa empresa passada) -
+            # d.window() quebra com ElementAmbiguousError nesse caso;
+            # usa sempre o ÚLTIMO (mais recente) e não trata isso como
+            # erro, já que é esperado em execuções longas com várias
+            # empresas.
+            popup = candidatos[-1]
             break
-        except PywinautoTimeoutError:
-            time.sleep(0.5)
+        time.sleep(0.5)
     if popup is None:
         raise ErroAttended("[salvar_pdf] popup do PDF (ReportManager) não abriu a tempo")
 
-    popup.maximize()
-    time.sleep(2)
-    popup.set_focus()
-    time.sleep(0.3)
-
-    pyautogui.hotkey("ctrl", "s")
+    time.sleep(1.5)
+    botoes_salvar = [b for b in popup.descendants(control_type="Button") if "Salvar" in b.window_text()]
+    if not botoes_salvar:
+        raise ErroAttended("[salvar_pdf] botão 'Salvar' não encontrado na toolbar do visualizador")
+    botoes_salvar[0].click_input()
     time.sleep(2)
 
     caminho_destino.parent.mkdir(parents=True, exist_ok=True)
