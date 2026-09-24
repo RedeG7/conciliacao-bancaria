@@ -29,7 +29,11 @@ USO NORMAL — COM JANELA (recomendado, sem terminal)
       abre o Edge já na página certa. Faça login MANUALMENTE (certificado
       digital, resolva qualquer verificação que aparecer). Deixe essa
       janela do Edge em primeiro plano, sem trocar de aplicativo, até o
-      processamento terminar.
+      processamento terminar. IMPORTANTE: antes de clicar em "Iniciar
+      processamento", certifique-se de estar na tela "Empresas" (a
+      listagem com o campo de busca "CPF / CNPJ") — não deixe aberto
+      dentro de uma empresa específica nem em Nota Eletrônica, senão o
+      programa para logo na primeira empresa com um erro claro.
 
    2. Escolha de onde vêm as empresas: "Planilha local (.xlsx)" (clique em
       "Procurar..." e selecione o arquivo) ou "Sincronizar com o Hub"

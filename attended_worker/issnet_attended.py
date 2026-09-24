@@ -150,6 +150,16 @@ def _achar_edit_por_rotulo(win, rotulo: str):
     return candidatos[0]
 
 
+def esta_na_tela_empresas(win) -> bool:
+    """Confere se a página atual é a listagem 'Empresas' (tem o campo de
+    busca 'CPF / CNPJ') - usado pra falhar rápido e com mensagem clara
+    logo no início do lote, em vez de repetir o mesmo erro cripticamente
+    pra cada empresa da planilha quando a janela começa em outra página
+    (ex.: dentro de uma empresa específica, em Nota Eletrônica etc)."""
+    statics = win.descendants(control_type="Text")
+    return any(s.window_text().strip() == "CPF / CNPJ" for s in statics)
+
+
 def selecionar_empresa(win, cnpj_cpf: str, codigo: str) -> None:
     """Na tela Empresas: busca por CNPJ/CPF e clica no ✓ (Selecione) da
     linha correspondente. Confirmado ao vivo."""
@@ -183,28 +193,35 @@ def voltar_para_empresas(win) -> None:
     genérico em vez de tentar casar o nome exato da empresa (que muda a
     cada chamada).
 
-    IMPORTANTE: a busca é restrita ao Document (conteúdo da página via
-    _tela_documento), NUNCA ao win inteiro - win.descendants() também
-    devolve botões do CHROME do navegador (barra de abas, "Fechar guia"
-    etc.), que ficam bem no topo da janela como a área da página. Se a
-    busca pegasse o win inteiro e o botão certo não fosse o primeiro da
-    lista, dava pra clicar sem querer no botão de fechar a aba/janela -
-    suspeita forte de um bug relatado (empresa selecionada, fluxo seguinte
-    falha, PÁGINA FECHA) quando processar_empresa lança erro antes de
-    abrir_livro_fiscal e o fallback aqui pega o botão errado."""
-    doc = _tela_documento(win)
-    botoes = doc.descendants(control_type="Button")
-    # o botão da empresa fica na faixa superior da página (mesma área do
-    # "Competência: ..." e "Sair"), com texto não-vazio que não é nenhum
-    # desses rótulos fixos - identifica por eliminação em vez de regex de
-    # nome (mais robusto entre empresas com nomes bem diferentes).
+    IMPORTANTE: a busca é restrita aos Document (conteúdo da página),
+    NUNCA ao win inteiro - win.descendants() também devolve botões do
+    CHROME do navegador (barra de abas, "Fechar guia" etc.), que ficam
+    bem no topo da janela como a área da página. Se a busca pegasse o win
+    inteiro e o botão certo não fosse o primeiro da lista, dava pra clicar
+    sem querer no botão de fechar a aba/janela - causa confirmada de um
+    bug relatado (empresa selecionada, fluxo seguinte falha, PÁGINA
+    FECHA) quando processar_empresa lança erro antes de abrir_livro_fiscal
+    e o fallback aqui pegava o botão errado."""
+    # varre TODOS os Document (não só o último) - a página pode ter mais de
+    # um frame dependendo de qual sub-tela está aberta (ex.: Nota
+    # Eletrônica pareceu usar uma estrutura diferente da de Livro Fiscal
+    # nos testes), e pegar só o último Document podia não achar o botão
+    # nesse caso.
+    docs = win.descendants(control_type="Document")
+    alvos = docs if docs else [win]
     fixos = {"Sair", "Competência", "Ajuda", "Menu"}
-    candidatos = [
-        b for b in botoes
-        if b.window_text().strip()
-        and not any(f in b.window_text() for f in fixos)
-        and b.rectangle().top < 220
-    ]
+    candidatos = []
+    for alvo in alvos:
+        try:
+            botoes = alvo.descendants(control_type="Button")
+        except Exception:
+            continue
+        candidatos.extend(
+            b for b in botoes
+            if b.window_text().strip()
+            and not any(f in b.window_text() for f in fixos)
+            and b.rectangle().top < 220
+        )
     if not candidatos:
         raise ErroAttended("[voltar_para_empresas] botão da empresa atual não encontrado no topo da página")
     candidatos[0].click_input()
@@ -234,13 +251,6 @@ def abrir_livro_fiscal(win) -> None:
         raise ErroAttended("[menu] 'Emitir Livro Fiscal' não encontrado") from exc
     sub.click_input()
     time.sleep(1.5)
-
-
-def _tela_documento(win):
-    """Retorna o Document da página atual (o iframe do conteúdo) - usado
-    pra restringir buscas de elemento a ele quando útil."""
-    docs = win.descendants(control_type="Document")
-    return docs[-1] if docs else win
 
 
 def selecionar_tipo_livro_fiscal(win) -> None:
@@ -460,6 +470,12 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path) -> None:
 
     win = conectar_janela()
     print(f"Janela conectada: {win.window_text()}")
+    if not esta_na_tela_empresas(win):
+        raise ErroAttended(
+            "A janela não está na tela 'Empresas' (lista de empresas com o campo "
+            "'CPF / CNPJ'). Antes de iniciar, volte pra essa tela no portal — não "
+            "fique dentro de uma empresa específica nem em Nota Eletrônica."
+        )
     print(f"Competência: {comp['mm_aaaa']} ({len(empresas)} empresa(s) na planilha)")
 
     resultados = []
@@ -605,6 +621,12 @@ def processar_execucao_hub(escritorio_id: str, pasta_raiz: Path) -> None:
 
         win = conectar_janela()
         print(f"Janela conectada: {win.window_text()}")
+        if not esta_na_tela_empresas(win):
+            raise ErroAttended(
+                "A janela não está na tela 'Empresas' (lista de empresas com o campo "
+                "'CPF / CNPJ'). Antes de iniciar, volte pra essa tela no portal — não "
+                "fique dentro de uma empresa específica nem em Nota Eletrônica."
+            )
         print(f"Execução #{execucao['id']} — competência {comp['mm_aaaa']} — {len(empresas)} empresa(s) pendente(s)")
 
         alguma_concluida = False

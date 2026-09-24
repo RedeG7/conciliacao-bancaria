@@ -101,7 +101,9 @@ class App(tk.Tk):
             f1,
             text="Faça login manualmente (certificado digital, ou qualquer verificação que\n"
                  "aparecer) na janela que abrir. Deixe essa janela em primeiro plano, sem\n"
-                 "trocar de aplicativo, até o processamento terminar.",
+                 "trocar de aplicativo, até o processamento terminar. IMPORTANTE: antes de\n"
+                 "clicar em Iniciar, fique na tela 'Empresas' (a listagem com o campo de\n"
+                 "busca CPF/CNPJ) — não deixe aberto dentro de uma empresa específica.",
             foreground="#555", justify="left",
         ).grid(row=1, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 6))
 
