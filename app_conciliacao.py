@@ -552,6 +552,21 @@ def _tela_gerenciar_escritorios() -> None:
                 _flash("flash_escritorio_renomeado", "✅ Apps permitidos do escritório atualizados.")
                 st.rerun()
 
+            st.markdown("**Licença do script local (ISS Net Online attended)**")
+            st.caption("Se desmarcar, o script `attended_worker/issnet_attended.py` recusa a rodar "
+                       "pra este escritório na próxima vez que for usado.")
+            _liberado_atual = edados.get("issnet_attended_liberado", True)
+            _liberado_novo = st.checkbox(
+                "Liberado pra usar o script attended", value=_liberado_atual, key=f"licenca_attended_{eid}",
+            )
+            if _liberado_novo != _liberado_atual:
+                auth.definir_issnet_attended_liberado(eid, _liberado_novo)
+                _flash(
+                    "flash_escritorio_renomeado",
+                    "✅ Licença do script attended " + ("liberada." if _liberado_novo else "bloqueada."),
+                )
+                st.rerun()
+
             st.markdown("**Usuários deste escritório**")
             if usuarios_do:
                 for uname, udados in usuarios_do.items():
@@ -966,11 +981,6 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
     sozinha - só reaproveita rpa_execucoes/rpa_empresas pra guardar a
     lista de empresas da planilha do mês, com link do portal pra abrir
     numa aba separada, e a pessoa marca cada empresa como feita à mão."""
-    st.warning(
-        f"⚠️ **Esta rotina ainda roda por automação assistida (manual)** — não existe worker "
-        f"processando sozinho.\n\n{modulo_info.get('motivo_manual', '')}"
-    )
-
     if modulo_id == "issnet_rest_dms":
         from rpa.issnet.urls import PORTAL_URLS
 

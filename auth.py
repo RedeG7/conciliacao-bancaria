@@ -110,6 +110,15 @@ def garantir_schema() -> None:
         # sentido pra quem roda o script localmente, nao e usado pelo worker
         # em nuvem (esse guarda no banco, nao em disco).
         conn.execute("ALTER TABLE escritorios ADD COLUMN IF NOT EXISTS pasta_raiz_local TEXT")
+        # issnet_attended_liberado: licenca de uso do script local attended
+        # (attended_worker/issnet_attended.py) - super_admin_global pode
+        # bloquear a qualquer momento (ex.: escritorio parou de pagar,
+        # uso indevido) sem precisar revogar credencial nenhuma. Default
+        # TRUE pra nao quebrar quem ja estava usando antes dessa coluna
+        # existir.
+        conn.execute(
+            "ALTER TABLE escritorios ADD COLUMN IF NOT EXISTS issnet_attended_liberado BOOLEAN NOT NULL DEFAULT true"
+        )
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sessoes (
                 token TEXT PRIMARY KEY,
@@ -273,6 +282,7 @@ def carregar_escritorios() -> Dict[str, dict]:
             "nome": l["nome"], "criado_em": l["criado_em"].isoformat(),
             "apps_permitidos": l.get("apps_permitidos") or [],
             "pasta_raiz_local": l.get("pasta_raiz_local") or "",
+            "issnet_attended_liberado": l.get("issnet_attended_liberado", True),
         }
         for l in linhas
     }
@@ -512,5 +522,17 @@ def definir_pasta_raiz_local(escritorio_id: str, pasta: str) -> None:
         conn.execute(
             "UPDATE escritorios SET pasta_raiz_local = %s WHERE id = %s",
             (pasta.strip() or None, escritorio_id),
+        )
+        conn.commit()
+
+
+def definir_issnet_attended_liberado(escritorio_id: str, liberado: bool) -> None:
+    """Liga/desliga a licenca de uso do script local attended (ver
+    attended_worker/issnet_attended.py) - o script confere isso antes de
+    processar qualquer coisa."""
+    with _conectar() as conn:
+        conn.execute(
+            "UPDATE escritorios SET issnet_attended_liberado = %s WHERE id = %s",
+            (liberado, escritorio_id),
         )
         conn.commit()

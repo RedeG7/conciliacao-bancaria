@@ -449,7 +449,160 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path) -> None:
         print(f"{codigo}: {status} — {detalhe}")
 
 
+# ---------------------------------------------------------------------------
+# Sincronização com o Hub (banco de produção) - licença + status/arquivos
+# ---------------------------------------------------------------------------
+
+def _abrir_tunel_ssh(chave: Path, vps_host: str, porta_local: int) -> "subprocess.Popen":
+    """Abre um túnel SSH (-N, sem shell remoto) até o Postgres do VPS -
+    dura só enquanto este processo Python roda, fecha sozinho no fim (não
+    é serviço persistente, é sob demanda - diferente da tentativa anterior
+    de worker sempre ligado, que foi abandonada)."""
+    import subprocess
+    processo = subprocess.Popen(
+        ["ssh", "-i", str(chave), "-L", f"{porta_local}:127.0.0.1:5432",
+         "-o", "StrictHostKeyChecking=accept-new", "-N", f"root@{vps_host}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    time.sleep(3)
+    if processo.poll() is not None:
+        raise ErroAttended("[banco] túnel SSH caiu logo de cara - confira a chave/conexão com o VPS")
+    return processo
+
+
+def _ler_env(caminho: Path) -> dict:
+    valores = {}
+    for linha in caminho.read_text(encoding="utf-8-sig").splitlines():
+        linha = linha.strip()
+        if not linha or linha.startswith("#") or "=" not in linha:
+            continue
+        chave, _, valor = linha.partition("=")
+        valores[chave.strip()] = valor.strip()
+    return valores
+
+
+def conectar_banco():
+    """Prepara DATABASE_URL/RPA_ENC_KEY e abre o túnel SSH - precisa de
+    attended_worker/prod.env (RPA_ENC_KEY e POSTGRES_PASSWORD) e da chave
+    em ../.deploy_keys/homehost_deploy (mesmo par usado pelo deploy) - ver
+    LEIA-ME.txt. Retorna o processo do túnel (mantenha uma referência viva
+    até terminar de usar o banco, senão ele é encerrado)."""
+    import os
+
+    raiz = Path(__file__).resolve().parent.parent
+    env_path = Path(__file__).resolve().parent / "prod.env"
+    chave = raiz / ".deploy_keys" / "homehost_deploy"
+    if not env_path.exists():
+        raise ErroAttended(
+            f"[banco] falta {env_path} com RPA_ENC_KEY e POSTGRES_PASSWORD de produção - ver LEIA-ME.txt"
+        )
+    if not chave.exists():
+        raise ErroAttended(f"[banco] falta a chave SSH em {chave}")
+
+    valores = _ler_env(env_path)
+    for obrigatoria in ("RPA_ENC_KEY", "POSTGRES_PASSWORD"):
+        if not valores.get(obrigatoria):
+            raise ErroAttended(f"[banco] falta '{obrigatoria}' em {env_path}")
+
+    porta_local = 5433
+    tunel = _abrir_tunel_ssh(chave, "192.96.217.88", porta_local)
+
+    os.environ["RPA_ENC_KEY"] = valores["RPA_ENC_KEY"]
+    os.environ["DATABASE_URL"] = (
+        f"postgresql://conciliacao:{valores['POSTGRES_PASSWORD']}@localhost:{porta_local}/conciliacao"
+    )
+    return tunel
+
+
+def verificar_licenca(escritorio_id: str) -> None:
+    """Confere a licença de uso (super_admin_global pode bloquear a
+    qualquer momento em Gerenciar Escritórios) - levanta ErroAttended e
+    para tudo se estiver desligada."""
+    import auth
+    escritorios = auth.carregar_escritorios()
+    dados = escritorios.get(escritorio_id)
+    if dados is None:
+        raise ErroAttended(f"[licença] escritório '{escritorio_id}' não encontrado")
+    if not dados.get("issnet_attended_liberado", True):
+        raise ErroAttended(
+            f"[licença] uso do script attended está BLOQUEADO pelo administrador pra "
+            f"'{escritorio_id}' - fale com o super admin do Hub"
+        )
+
+
+def processar_execucao_hub(escritorio_id: str, pasta_raiz: Path) -> None:
+    """Versão sincronizada com o Hub: em vez de ler uma planilha local,
+    pega a execução PENDENTE mais recente do módulo issnet_rest_dms criada
+    na tela do Hub (upload de planilha lá, mesmo fluxo de sempre) e
+    devolve o resultado pro banco - status por empresa e os PDFs, pra
+    aparecerem como botão de download na tela do Hub, igual um módulo
+    totalmente automatizado. Confere a licença antes de processar
+    qualquer coisa."""
+    from rpa import core as rpa_core
+    from rpa.issnet.competencia import calcular_competencia_anterior
+
+    tunel = conectar_banco()
+    try:
+        verificar_licenca(escritorio_id)
+
+        execucoes = rpa_core.listar_execucoes(escritorio_id, "issnet_rest_dms")
+        execucao = next((e for e in execucoes if e["status"] == rpa_core.STATUS_PENDENTE), None)
+        if execucao is None:
+            print("Nenhuma execução PENDENTE encontrada pra este escritório - envie a planilha no Hub primeiro.")
+            return
+
+        empresas = rpa_core.listar_empresas_pendentes(execucao["id"])
+        if not empresas:
+            print(f"Execução #{execucao['id']} não tem empresa pendente.")
+            return
+
+        comp = calcular_competencia_anterior()
+        competencia_pasta = comp["mm_aaaa_arquivo"].replace(" ", "")
+
+        win = conectar_janela()
+        print(f"Janela conectada: {win.window_text()}")
+        print(f"Execução #{execucao['id']} — competência {comp['mm_aaaa']} — {len(empresas)} empresa(s) pendente(s)")
+
+        alguma_concluida = False
+        for empresa in empresas:
+            codigo, cnpj = empresa["codigo"], empresa["cnpj_cpf"]
+            print(f"\n=== Empresa {codigo} ({cnpj}) ===")
+            rpa_core.marcar_empresa_status(empresa["id"], rpa_core.STATUS_RODANDO)
+            try:
+                resultado = processar_empresa(
+                    win, pasta_raiz, codigo, cnpj,
+                    comp["data_inicial"], comp["data_final"],
+                    competencia_pasta, comp["mm_aaaa_arquivo"],
+                )
+                pdf_bytes = resultado["arquivos"][-1].read_bytes() if resultado["arquivos"] else None
+                pdf_nome = resultado["arquivos"][-1].name if resultado["arquivos"] else ""
+                rpa_core.atualizar_empresa(
+                    empresa["id"], status=rpa_core.STATUS_CONCLUIDO,
+                    movimento=resultado["movimento"], pdf=pdf_bytes, pdf_nome=pdf_nome,
+                )
+                print(f"  OK — {resultado['movimento']} (sincronizado com o Hub)")
+                alguma_concluida = True
+            except Exception as exc:
+                print(f"  ERRO — {exc}")
+                rpa_core.atualizar_empresa(empresa["id"], status=rpa_core.STATUS_ERRO, erro=str(exc))
+
+            try:
+                voltar_para_empresas(win)
+            except Exception as exc:
+                print(f"  AVISO: não confirmou volta pra Empresas ({exc}) — tentando seguir mesmo assim")
+
+        status_final = rpa_core.STATUS_CONCLUIDO if alguma_concluida else rpa_core.STATUS_ERRO
+        rpa_core.marcar_execucao_concluida(execucao["id"], comp["mm_aaaa"], status_final)
+        print(f"\nExecução #{execucao['id']} finalizada ({status_final}) e sincronizada com o Hub.")
+    finally:
+        tunel.terminate()
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 2 and sys.argv[1] == "processar-hub":
+        processar_execucao_hub(sys.argv[2], Path(sys.argv[3] if len(sys.argv) > 3 else r"C:\Prefeituras"))
+        sys.exit(0)
+
     if len(sys.argv) > 2 and sys.argv[1] == "processar-planilha":
         processar_planilha(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else r"C:\Prefeituras"))
         sys.exit(0)
