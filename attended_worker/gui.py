@@ -179,13 +179,34 @@ class App(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Erro", f"Não consegui abrir o Edge: {exc}")
 
+    def _pasta_inicial_valida(self, valor: str) -> str:
+        """Pasta de partida pro seletor nativo do Windows. SEM isso, o
+        seletor abre em "Este Computador" e tenta listar todas as
+        unidades - inclusive unidades de rede/compartilhamentos, comuns
+        em escritório de contabilidade - o que trava por um bom tempo
+        (relatado como "travando ao clicar em Procurar"). Usa a pasta já
+        digitada se ela existir, senão cai pra pasta do usuário (sempre
+        local, sempre rápida)."""
+        candidato = Path(valor) if valor else None
+        if candidato and candidato.exists():
+            return str(candidato)
+        return str(Path.home())
+
     def _escolher_planilha(self) -> None:
-        caminho = filedialog.askopenfilename(title="Escolha a planilha", filetypes=[("Excel", "*.xlsx")])
+        caminho = filedialog.askopenfilename(
+            title="Escolha a planilha", filetypes=[("Excel", "*.xlsx")],
+            initialdir=self._pasta_inicial_valida(str(Path(self.planilha_var.get()).parent) if self.planilha_var.get() else ""),
+            parent=self,
+        )
         if caminho:
             self.planilha_var.set(caminho)
 
     def _escolher_pasta(self) -> None:
-        caminho = filedialog.askdirectory(title="Escolha a pasta de destino")
+        caminho = filedialog.askdirectory(
+            title="Escolha a pasta de destino",
+            initialdir=self._pasta_inicial_valida(self.pasta_var.get()),
+            parent=self,
+        )
         if caminho:
             self.pasta_var.set(caminho)
 
