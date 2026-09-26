@@ -67,10 +67,13 @@ jobs:
             cd /opt/conciliacao-bancaria
             docker compose pull
             docker compose up -d
-            # Caddyfile e montado como volume (bind mount) - "up -d" so
-            # recria um servico se a definicao DELE MESMO no compose mudar,
-            # nao quando um arquivo montado muda de conteudo. Sem isso, uma
-            # alteracao no Caddyfile (ex.: nova rota) nunca entrava em
-            # vigor sozinha - precisava de reload explicito.
-            docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+            # Caddyfile e bind mount - scp-action troca o arquivo via
+            # rename (inode novo), entao o container ja rodando continua
+            # com o bind mount preso ao inode ANTIGO (reload de dentro do
+            # container le exatamente esse caminho preso, entao nem reload
+            # resolve) - so um restart do container reestabelece o mount
+            # contra o arquivo atual. Confirmado ao vivo: "docker exec
+            # caddy cat Caddyfile" mostrava conteudo antigo mesmo depois
+            # do host ja ter o novo.
+            docker compose restart caddy
             docker image prune -f

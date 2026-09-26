@@ -44,6 +44,11 @@ services:
     # usuario/senha, sem precisar de chave SSH nem acesso direto ao
     # Postgres do VPS (ver api.py e attended_worker/hub_api.py).
     entrypoint: ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    # a imagem tem um HEALTHCHECK proprio (curl na porta 8501, do
+    # Streamlit) - nao existe nesse servico (so a 8000 aqui), o que
+    # deixava o container sempre marcado "unhealthy" à toa.
+    healthcheck:
+      disable: true
     environment:
       - DATABASE_URL=postgresql://conciliacao:${POSTGRES_PASSWORD}@db:5432/conciliacao
       - RPA_ENC_KEY=${RPA_ENC_KEY}
