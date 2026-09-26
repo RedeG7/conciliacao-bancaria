@@ -636,9 +636,14 @@ def exportar_xml_competencia(win, data_inicial: str, data_final: str, caminho_de
         btn_exportar.click_input()
     time.sleep(3)
 
+    # o prompt de download demora mais quando o XML é maior (mais notas na
+    # competência) - confirmado ao vivo que TIMEOUT_PADRAO_S (15s) não era
+    # sempre suficiente ("prompt de download não apareceu a tempo"), o que
+    # também derrubava a EMPRESA SEGUINTE (ficava no meio do caminho,
+    # atrapalhando a volta pra Empresas). Prazo bem mais folgado aqui.
     d = Desktop(backend="uia")
     janela_pai = None
-    prazo = time.time() + TIMEOUT_PADRAO_S
+    prazo = time.time() + 45
     while time.time() < prazo:
         candidatos = d.windows(title_re=r".*(Empresas|ISSNet On-Line|Nota Eletr).*Edge.*")
         botoes = []
