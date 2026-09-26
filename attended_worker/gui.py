@@ -411,9 +411,13 @@ class App(tk.Tk):
         lbl_status = ttk.Label(janela, text="")
         lbl_status.pack(pady=(4, 12))
 
-        threading.Thread(target=self._baixar_e_atualizar_bg, args=(janela, barra, lbl_status), daemon=True).start()
+        threading.Thread(
+            target=self._baixar_e_atualizar_bg, args=(janela, barra, lbl_status, versao_nova), daemon=True,
+        ).start()
 
-    def _baixar_e_atualizar_bg(self, janela: tk.Toplevel, barra: ttk.Progressbar, lbl_status: ttk.Label) -> None:
+    def _baixar_e_atualizar_bg(
+        self, janela: tk.Toplevel, barra: ttk.Progressbar, lbl_status: ttk.Label, versao_nova: str,
+    ) -> None:
         def _atualizar(pct: int, texto: str) -> None:
             barra["value"] = pct
             lbl_status.configure(text=texto)
@@ -438,8 +442,18 @@ class App(tk.Tk):
             self.after(0, messagebox.showerror, "Erro na atualização", f"Não consegui baixar a versão nova: {exc}")
             return
 
+        # NÃO troca o arquivo antigo no lugar (era o que fazia antes, via
+        # .bat: baixava, esperava este processo encerrar, MOVIA por cima
+        # do .exe atual e reabria) - confirmado ao vivo que isso falhava
+        # silenciosamente num PC de usuário (o novo ficava baixado do
+        # lado, mas o "move" nunca completava e nada reabria sozinho).
+        # Um executável se auto-substituindo é exatamente o padrão que
+        # antivírus/Windows Defender tende a barrar sem avisar. Mais
+        # simples e confiável: salva com um nome novo (com a versão) e
+        # abre ELE diretamente - nunca mexe no arquivo antigo, que fica
+        # do lado (a pessoa pode apagar na mão quando quiser).
         exe_atual = Path(sys.executable).resolve()
-        exe_novo = exe_atual.with_name(exe_atual.stem + "_novo.exe")
+        exe_novo = exe_atual.with_name(f"issnet_attended_v{versao_nova}.exe")
         try:
             exe_novo.write_bytes(conteudo)
         except Exception as exc:
@@ -448,25 +462,10 @@ class App(tk.Tk):
             return
 
         self.after(0, _atualizar, 100, "✅ Atualização concluída — abrindo o programa...")
-
-        # o .exe rodando não pode se substituir sozinho (arquivo travado
-        # pelo próprio SO enquanto o processo está de pé) - um .bat à
-        # parte espera este processo encerrar, troca o arquivo e reabre.
-        bat = exe_atual.with_suffix(".update.bat")
-        bat.write_text(
-            "@echo off\r\n"
-            "timeout /t 2 /nobreak >nul\r\n"
-            f'move /y "{exe_novo}" "{exe_atual}"\r\n'
-            f'start "" "{exe_atual}"\r\n'
-            'del "%~f0"\r\n',
-            encoding="utf-8",
-        )
-        subprocess.Popen(
-            ["cmd", "/c", str(bat)],
-            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
-        )
         time.sleep(1.5)  # dá tempo da pessoa ler "Atualização concluída" antes de sumir
-        os._exit(0)  # encerra JA (sem cleanup do Tkinter) pra soltar o arquivo do .exe pro .bat conseguir mover
+
+        subprocess.Popen(["cmd", "/c", "start", "", str(exe_novo)], creationflags=subprocess.CREATE_NO_WINDOW)
+        os._exit(0)
 
 
 SUBCOMANDOS_CLI = {"processar-hub", "processar-planilha", "testar-empresa"}
