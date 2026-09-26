@@ -64,6 +64,7 @@ Empresas, pronto pra buscar a próxima).
 from __future__ import annotations
 
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -534,14 +535,48 @@ def abrir_consultar_nota_eletronica(win) -> None:
     time.sleep(2)
 
 
+def _aguardar_novo_arquivo_downloads(pasta_downloads: Path, referencia: float, timeout: float) -> "Path | None":
+    """Espera um .zip NOVO aparecer em pasta_downloads (mtime >=
+    referencia) e o tamanho estabilizar entre duas checagens seguidas
+    (sinal de que o download terminou) - usado em vez de depender do
+    prompt "Salvar como" do Edge, que só aparece se a opção "Perguntar o
+    que fazer com cada download" estiver ligada nas configurações do
+    navegador (ver exportar_xml_competencia pro motivo completo). Retorna
+    None se nada apareceu dentro do prazo."""
+    candidato = None
+    ultimo_tamanho = -1
+    prazo = time.time() + timeout
+    while time.time() < prazo:
+        try:
+            arquivos = sorted(
+                (p for p in pasta_downloads.glob("*.zip") if p.stat().st_mtime >= referencia),
+                key=lambda p: p.stat().st_mtime, reverse=True,
+            )
+        except OSError:
+            arquivos = []
+        if arquivos:
+            candidato = arquivos[0]
+            try:
+                tamanho_atual = candidato.stat().st_size
+            except OSError:
+                tamanho_atual = -1
+            if tamanho_atual > 0 and tamanho_atual == ultimo_tamanho:
+                return candidato
+            ultimo_tamanho = tamanho_atual
+        time.sleep(1)
+    return candidato
+
+
 def exportar_xml_competencia(win, data_inicial: str, data_final: str, caminho_destino: Path) -> bool:
     """Nota Eletrônica > Consultar Nota Eletrônica > expande "Filtros
     Adicionais" > preenche Data Competência Inicial/Final > Localizar >
     clica no ícone "Exportar todas as notas em XML" do cabeçalho da
-    grade > "Salvar como" no prompt de download do Edge > digita o
-    caminho completo. Tudo achado por UIA (postback real dos botões, não
-    coordenada nem glifo de ícone) - confirmado ao vivo, com XML real
-    validado (59 notas, formato ABRASF NFSe padrão).
+    grade > espera o arquivo aparecer na pasta Downloads e move pro
+    destino certo (não depende do prompt "Salvar como" - ver
+    _aguardar_novo_arquivo_downloads pro motivo). Tudo achado por UIA
+    (postback real dos botões, não coordenada nem glifo de ícone) -
+    confirmado ao vivo, com XML real validado (59 notas, formato ABRASF
+    NFSe padrão).
 
     Retorna True se salvou algum arquivo, False se a busca não achou
     nenhuma nota nessa competência (não é erro - só não tem nada pra
@@ -630,44 +665,52 @@ def exportar_xml_competencia(win, data_inicial: str, data_final: str, caminho_de
         raise ErroAttended("[exportar_xml] busca não respondeu (nem grade nem 'nenhum registro')")
 
     btn_exportar = elemento
+    referencia = time.time()
     try:
         btn_exportar.invoke()
     except Exception:
         btn_exportar.click_input()
-    time.sleep(3)
+    time.sleep(1)
 
-    # o prompt de download demora mais quando o XML é maior (mais notas na
-    # competência) - confirmado ao vivo que TIMEOUT_PADRAO_S (15s) não era
-    # sempre suficiente ("prompt de download não apareceu a tempo"), o que
-    # também derrubava a EMPRESA SEGUINTE (ficava no meio do caminho,
-    # atrapalhando a volta pra Empresas). Prazo bem mais folgado aqui.
+    # CAUSA RAIZ CONFIRMADA AO VIVO (num PC de usuário diferente do meu):
+    # o prompt "Salvar como" só aparece se a opção do Edge "Perguntar o
+    # que fazer com cada download antes de baixar" estiver ligada - em
+    # muitas instalações (inclusive a que o usuário testou) ela vem
+    # DESLIGADA por padrão, e o arquivo cai direto na pasta Downloads
+    # padrão sem perguntar nada. Por isso o código antigo (esperar o botão
+    # "Salvar como") travava pra sempre nessa máquina, mesmo com prazo
+    # generoso - o botão simplesmente nunca existia.
+    #
+    # Fix: não depende mais do prompt. Se ele aparecer (algumas máquinas
+    # têm a opção ligada, como a minha nos testes originais), clica em
+    # "Salvar" (não "Salvar como" - aceita o download direto, sem digitar
+    # caminho nenhum). Depois, em QUALQUER caso, só observa a pasta
+    # Downloads do usuário até o arquivo novo aparecer e o tamanho parar
+    # de crescer (download terminou), e MOVE ele pro destino certo -
+    # funciona igual não importa se o Edge perguntou ou baixou direto.
     d = Desktop(backend="uia")
-    janela_pai = None
-    prazo = time.time() + 45
-    while time.time() < prazo:
+    prazo_barra = time.time() + 5
+    while time.time() < prazo_barra:
         candidatos = d.windows(title_re=r".*(Empresas|ISSNet On-Line|Nota Eletr).*Edge.*")
-        botoes = []
         if candidatos:
-            janela_pai = candidatos[0]
-            botoes = [b for b in janela_pai.descendants(control_type="Button") if b.window_text().strip() == "Salvar como"]
-        if botoes:
-            botoes[0].click_input()
-            break
-        time.sleep(0.5)
-    else:
-        raise ErroAttended("[exportar_xml] prompt de download (Salvar como) não apareceu a tempo")
-    time.sleep(2)
+            botoes = [b for b in candidatos[0].descendants(control_type="Button") if b.window_text().strip() == "Salvar"]
+            if botoes:
+                botoes[0].click_input()
+                break
+        time.sleep(0.3)
+
+    pasta_downloads = Path.home() / "Downloads"
+    arquivo_baixado = _aguardar_novo_arquivo_downloads(pasta_downloads, referencia, timeout=45)
+    if arquivo_baixado is None:
+        raise ErroAttended(
+            f"[exportar_xml] nenhum arquivo novo apareceu em {pasta_downloads} depois de exportar"
+        )
 
     caminho_destino.parent.mkdir(parents=True, exist_ok=True)
-    pyautogui.hotkey("ctrl", "a")
-    time.sleep(0.2)
-    pyautogui.typewrite(str(caminho_destino), interval=0.01)
-    time.sleep(0.3)
-    pyautogui.press("enter")
-    time.sleep(2)
+    shutil.move(str(arquivo_baixado), str(caminho_destino))
 
     # o Edge abre o painel de "Downloads" (o mesmo da barra de ferramentas)
-    # depois de salvar e ele fica ABERTO por cima da página - relatado ao
+    # depois de baixar e ele fica ABERTO por cima da página - relatado ao
     # vivo: sem fechar, o clique seguinte (voltar pra Empresas/selecionar a
     # próxima empresa) caía nesse painel em vez da página, abrindo a pasta
     # de downloads por engano. Esc fecha esse painel (não afeta mais nada
@@ -676,7 +719,7 @@ def exportar_xml_competencia(win, data_inicial: str, data_final: str, caminho_de
     time.sleep(0.5)
 
     if not caminho_destino.exists():
-        raise ErroAttended(f"[exportar_xml] arquivo não apareceu em {caminho_destino} após salvar")
+        raise ErroAttended(f"[exportar_xml] arquivo não apareceu em {caminho_destino} após mover")
     return True
 
 
