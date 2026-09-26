@@ -33,6 +33,7 @@ import hub_api  # noqa: E402
 import issnet_attended as core  # noqa: E402  (reusa toda a lógica já testada)
 
 MUNICIPIOS = {"Goiânia": "goiania", "Aparecida de Goiânia": "aparecida"}
+NOME_APP = "Prefeituras DMS_REST"
 
 # quando empacotado como .exe (PyInstaller --onefile), sys.executable é o
 # próprio .exe; __file__ aponta pra pasta temporária de extração, que não
@@ -93,6 +94,41 @@ def _selecionar_pasta_nativa(inicial: str) -> str:
     return resultado.stdout.strip()
 
 
+def _atualizar_atalho_desktop(exe_path: Path, forcar: bool) -> None:
+    """Cria (se não existir) ou atualiza (se forcar=True) o atalho fixo
+    "{NOME_APP}.lnk" na Área de Trabalho, sempre apontando pro .exe mais
+    recente - pedido do usuário: como cada atualização baixa um arquivo
+    com nome novo (issnet_attended_v{versão}.exe, pra nunca mexer no
+    arquivo antigo rodando - ver _baixar_e_atualizar_bg), um atalho
+    fixado manualmente na Área de Trabalho ficaria PRESO na versão de
+    quando foi criado, e a pessoa nunca mais abriria a versão nova sem
+    saber procurar o arquivo certo na pasta.
+
+    O ATALHO em si (não o .exe) é o que fica fixo - trocar o ALVO dele é
+    uma operação leve num arquivo .lnk que ninguém tem aberto, então não
+    esbarra no mesmo problema que substituir o .exe rodando tinha
+    (antivírus/Windows barrando a troca - ver v1.4)."""
+    try:
+        desktop = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop"
+        atalho = desktop / f"{NOME_APP}.lnk"
+        if atalho.exists() and not forcar:
+            return
+        script = (
+            "$WshShell = New-Object -ComObject WScript.Shell\n"
+            f'$Shortcut = $WshShell.CreateShortcut("{atalho}")\n'
+            f'$Shortcut.TargetPath = "{exe_path}"\n'
+            f'$Shortcut.IconLocation = "{exe_path},0"\n'
+            f'$Shortcut.WorkingDirectory = "{exe_path.parent}"\n'
+            "$Shortcut.Save()\n"
+        )
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, timeout=15,
+        )
+    except Exception:
+        pass  # atalho é conveniência - nunca trava o uso normal por causa disso
+
+
 def _carregar_config() -> dict:
     if CONFIG_PATH.exists():
         try:
@@ -132,12 +168,22 @@ class _LogParaWidget:
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title(f"Fechamento ISS Net Online — REST/DMS — v{VERSAO_ATUAL}")
+        self.title(f"{NOME_APP} — v{VERSAO_ATUAL}")
         self.geometry("680x600")
         self.minsize(600, 520)
         self._config = _carregar_config()
         self._rodando = False
         self._montar_ui()
+        if getattr(sys, "frozen", False):
+            # garante que o atalho fixo da Área de Trabalho aponte pra
+            # ESTE .exe se ainda não existir - cobre o primeiro uso (a
+            # pessoa ainda não tem atalho nenhum). Atualizações
+            # seguintes reapontam o mesmo atalho pro .exe novo (ver
+            # _baixar_e_atualizar_bg) - o atalho em si nunca muda de
+            # nome/local, só o alvo.
+            threading.Thread(
+                target=_atualizar_atalho_desktop, args=(Path(sys.executable).resolve(), False), daemon=True,
+            ).start()
         self.after(800, self._checar_atualizacao)
 
     # ------------------------------------------------------------------
@@ -460,6 +506,11 @@ class App(tk.Tk):
             self.after(0, janela.destroy)
             self.after(0, messagebox.showerror, "Erro na atualização", f"Não consegui salvar a versão nova: {exc}")
             return
+
+        # reaponta o atalho fixo da Área de Trabalho pra este .exe novo -
+        # ANTES de abrir, senão a pessoa fecha e da próxima vez clica no
+        # mesmo ícone de sempre e cai de volta na versão antiga.
+        _atualizar_atalho_desktop(exe_novo, True)
 
         self.after(0, _atualizar, 100, "✅ Atualização concluída — abrindo o programa...")
         time.sleep(1.5)  # dá tempo da pessoa ler "Atualização concluída" antes de sumir

@@ -16,11 +16,13 @@
 
 $raiz = (Get-Item $PSScriptRoot).Parent.FullName
 $versaoPath = Join-Path $PSScriptRoot "VERSION"
+$iconePath = Join-Path $PSScriptRoot "icon.ico"
 
 Remove-Item -Force (Join-Path $PSScriptRoot "dist\issnet_attended.exe") -ErrorAction SilentlyContinue
 
 & "$PSScriptRoot\.venv\Scripts\python.exe" -m PyInstaller `
     --onefile --name issnet_attended `
+    --icon "$iconePath" `
     --distpath "$PSScriptRoot\dist" `
     --workpath "$PSScriptRoot\build" `
     --specpath "$PSScriptRoot" `
