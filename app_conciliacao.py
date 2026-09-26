@@ -21,7 +21,7 @@ import io
 import os
 import tempfile
 import zipfile
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -975,6 +975,47 @@ def _montar_zip_execucao(execucao: dict, empresas_exec: list[dict]) -> bytes:
     return buffer.getvalue()
 
 
+def _interpolar_cor(c1: tuple[int, int, int], c2: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+    return tuple(round(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
+
+
+def _barra_retencao_arquivos(concluido_em) -> None:
+    """Avisa quantos dias faltam até o PDF/XML dessa execução serem
+    apagados por retenção (rpa_core.RETENCAO_ARQUIVOS_DIAS dias após
+    concluído - ver rpa_core.limpar_arquivos_vencidos, quem apaga de
+    fato). Barra que começa verde e vai virando vermelha conforme o
+    prazo se aproxima, pra avisar antes do "Baixar tudo" sumir."""
+    if not concluido_em:
+        return
+    total_dias = rpa_core.RETENCAO_ARQUIVOS_DIAS
+    agora = datetime.now(timezone.utc)
+    if concluido_em.tzinfo is None:
+        concluido_em = concluido_em.replace(tzinfo=timezone.utc)
+    dias_passados = (agora - concluido_em).total_seconds() / 86400
+    fracao = max(0.0, min(1.0, dias_passados / total_dias))
+    dias_restantes = max(0, total_dias - int(dias_passados))
+
+    verde, amarelo, vermelho = (34, 197, 94), (234, 179, 8), (239, 68, 68)
+    if fracao <= 0.5:
+        cor = _interpolar_cor(verde, amarelo, fracao / 0.5)
+    else:
+        cor = _interpolar_cor(amarelo, vermelho, (fracao - 0.5) / 0.5)
+
+    st.markdown(
+        f"""
+        <div style="margin:4px 0 10px 0;">
+          <div style="font-size:0.8em;color:#666;margin-bottom:2px;">
+            🗂️ Arquivos serão apagados em {dias_restantes} dia(s) (retenção de {total_dias} dias)
+          </div>
+          <div style="background:#e5e7eb;border-radius:6px;height:8px;width:100%;overflow:hidden;">
+            <div style="background:rgb{cor};height:100%;width:{fracao * 100:.1f}%;"></div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usuario: str) -> None:
     """Fluxo de apoio pra rotinas ainda não automatizadas (ver
     modulo_info['automatizado'] em rpa/registry.py): não roda nada
@@ -1067,6 +1108,7 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
     st.divider()
     _flash("flash_rpa_manual")
     st.subheader("Listas de controle")
+    rpa_core.limpar_arquivos_vencidos()
     execucoes = rpa_core.listar_execucoes(escritorio_id, modulo_id)
     if not execucoes:
         st.info("Nenhuma lista criada ainda para esta rotina.")
@@ -1093,6 +1135,8 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
         )
         with st.expander(titulo):
             st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}")
+            if concluidas and execucao.get("concluido_em"):
+                _barra_retencao_arquivos(execucao["concluido_em"])
             _cols_acoes_manual = st.columns(2)
             if concluidas:
                 _pasta_comp_manual = (execucao.get("competencia") or "sem-competencia").replace("/", "")
@@ -1269,6 +1313,7 @@ def _tela_rpa_hub() -> None:
 
     st.divider()
     st.subheader("Execuções")
+    rpa_core.limpar_arquivos_vencidos()
     execucoes = rpa_core.listar_execucoes(escritorio_id, modulo_id)
     if not execucoes:
         st.info("Nenhuma execução ainda para esta rotina.")
@@ -1290,6 +1335,8 @@ def _tela_rpa_hub() -> None:
         )
         with st.expander(titulo):
             st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}")
+            if concluidas and execucao.get("concluido_em"):
+                _barra_retencao_arquivos(execucao["concluido_em"])
             _cols_acoes = st.columns(2)
             if concluidas:
                 _pasta_competencia_zip = (execucao.get("competencia") or "sem-competencia").replace("/", "")

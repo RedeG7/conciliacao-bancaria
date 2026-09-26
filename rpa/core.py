@@ -31,6 +31,14 @@ STATUS_RODANDO = "RODANDO"
 STATUS_CONCLUIDO = "CONCLUIDO"
 STATUS_ERRO = "ERRO"
 
+# Dias que o PDF/XML/screenshot de erro ficam guardados (BYTEA no Postgres)
+# após a execução concluir, antes de limpar_arquivos_vencidos() apagar só
+# o conteúdo binário - a linha da empresa/execução (status, código, CNPJ,
+# erro) continua pra sempre, é só o arquivo em si que soma pra não lotar
+# o disco do banco. Ver app_conciliacao.py _barra_retencao_arquivos pro
+# aviso visual (barra verde -> vermelha) que aparece antes de apagar.
+RETENCAO_ARQUIVOS_DIAS = 60
+
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -359,6 +367,36 @@ def reabrir_execucao_se_incompleta(execucao_id: int) -> bool:
         )
         conn.commit()
     return True
+
+
+def limpar_arquivos_vencidos() -> int:
+    """Varredura preguiçosa (chamada a cada carregamento das telas de RPA,
+    sem cron/scheduler separado): apaga só as colunas BYTEA (pdf, xml_zip,
+    screenshot_erro) das empresas cuja execução concluiu há mais de
+    RETENCAO_ARQUIVOS_DIAS dias - a lista de controle (execução, empresas,
+    status, código, CNPJ, erro) fica intacta pra sempre, só o arquivo em
+    si some. Idempotente e barato quando não há nada vencido (WHERE
+    filtra pela data antes de tocar em qualquer linha). Retorna quantas
+    empresas tiveram arquivo apagado nesta chamada."""
+    with auth.conectar() as conn:
+        linhas = conn.execute(
+            """
+            UPDATE rpa_empresas SET
+                pdf = NULL, pdf_nome = NULL,
+                xml_zip = NULL, xml_zip_nome = NULL,
+                screenshot_erro = NULL
+            WHERE execucao_id IN (
+                SELECT id FROM rpa_execucoes
+                WHERE concluido_em IS NOT NULL
+                  AND concluido_em < now() - make_interval(days => %s)
+            )
+            AND (pdf IS NOT NULL OR xml_zip IS NOT NULL OR screenshot_erro IS NOT NULL)
+            RETURNING id
+            """,
+            (RETENCAO_ARQUIVOS_DIAS,),
+        ).fetchall()
+        conn.commit()
+    return len(linhas)
 
 
 def recuperar_execucoes_orfas() -> int:
