@@ -389,6 +389,7 @@ class App(tk.Tk):
 
     def _rodar(self, modo: str, planilha: str, hub_usuario: str, hub_senha: str, pasta: str) -> None:
         saida = _LogParaWidget(self)
+        erro_msg = None
         try:
             with contextlib.redirect_stdout(saida):
                 if modo == "planilha":
@@ -398,17 +399,37 @@ class App(tk.Tk):
                     core.processar_execucao_hub(token, Path(pasta))
             self.after(0, self._log, "\n✅ Terminado.")
         except core.hub_api.ErroHubApi as exc:
+            erro_msg = str(exc)
             self.after(0, self._log, f"\n❌ {exc}")
         except core.ErroAttended as exc:
+            erro_msg = str(exc)
             self.after(0, self._log, f"\n❌ {exc}")
         except Exception as exc:  # nunca deixa a GUI travar por uma exceção não prevista
+            erro_msg = str(exc)
             self.after(0, self._log, f"\n❌ ERRO INESPERADO: {exc}")
         finally:
-            self.after(0, self._finalizar)
+            self.after(0, self._finalizar, erro_msg)
 
-    def _finalizar(self) -> None:
+    def _finalizar(self, erro_msg: "str | None" = None) -> None:
         self._rodando = False
         self.btn_iniciar.configure(state="normal", text="▶  Iniciar processamento")
+        self._trazer_para_frente()
+        if erro_msg:
+            messagebox.showerror("Concluído com erro", f"O processamento parou:\n\n{erro_msg}")
+        else:
+            messagebox.showinfo("Concluído", "Processamento concluído! Veja o resumo na caixa Andamento.")
+
+    def _trazer_para_frente(self) -> None:
+        """Traz a janela pra frente (mesmo se tiver minimizada ou atrás do
+        Edge, onde ela fica o tempo todo enquanto processa) - pedido do
+        usuário: sem isso, a mensagem de conclusão passava despercebida
+        porque a janela do programa nunca é a que fica em foco durante o
+        processamento (é o Edge que precisa ficar em primeiro plano)."""
+        self.deiconify()
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(300, lambda: self.attributes("-topmost", False))
+        self.focus_force()
 
     # ------------------------------------------------------------------
     # auto-atualização
