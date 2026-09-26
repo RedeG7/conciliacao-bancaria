@@ -1100,7 +1100,7 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
                     "📦 Baixar tudo (.zip)", _montar_zip_execucao(execucao, empresas_exec),
                     file_name=f"{modulo_id} {_pasta_comp_manual}.zip", key=f"zip_manual_{execucao['id']}",
                 )
-            if pendencias and execucao["status"] != rpa_core.STATUS_PENDENTE:
+            if pendencias:
                 if _cols_acoes_manual[1].button(
                     f"🔁 Reprocessar {pendencias} empresa(s) pendente(s) (via Sincronizar com o Hub)",
                     key=f"reprocessar_manual_{execucao['id']}",
