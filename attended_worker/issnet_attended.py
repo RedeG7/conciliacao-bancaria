@@ -445,6 +445,12 @@ def salvar_pdf_popup(caminho_destino: Path) -> None:
     pyautogui.press("enter")
     time.sleep(2)
 
+    # mesmo painel de "Downloads" do Edge que aparece em exportar_xml_
+    # competencia() - fecha antes de fechar o popup, por segurança (ver
+    # comentário lá pro motivo completo).
+    pyautogui.press("escape")
+    time.sleep(0.5)
+
     popup.close()
     time.sleep(1)
 
@@ -654,6 +660,15 @@ def exportar_xml_competencia(win, data_inicial: str, data_final: str, caminho_de
     time.sleep(0.3)
     pyautogui.press("enter")
     time.sleep(2)
+
+    # o Edge abre o painel de "Downloads" (o mesmo da barra de ferramentas)
+    # depois de salvar e ele fica ABERTO por cima da página - relatado ao
+    # vivo: sem fechar, o clique seguinte (voltar pra Empresas/selecionar a
+    # próxima empresa) caía nesse painel em vez da página, abrindo a pasta
+    # de downloads por engano. Esc fecha esse painel (não afeta mais nada
+    # na página, já que nenhum campo está em edição nesse ponto).
+    pyautogui.press("escape")
+    time.sleep(0.5)
 
     if not caminho_destino.exists():
         raise ErroAttended(f"[exportar_xml] arquivo não apareceu em {caminho_destino} após salvar")
