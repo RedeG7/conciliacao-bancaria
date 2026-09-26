@@ -19,15 +19,21 @@ do necessário, e todo endpoint (exceto /login) exige o token da sessão.
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import auth
 from rpa import core as rpa_core
 
 app = FastAPI(title="Hub RedeG7 - API attended", docs_url=None, redoc_url=None)
+
+_RAIZ = Path(__file__).resolve().parent
+_VERSAO_PATH = _RAIZ / "attended_worker" / "VERSION"
+_EXE_PATH = _RAIZ / "attended_worker" / "dist" / "issnet_attended.exe"
 
 
 @app.on_event("startup")
@@ -189,3 +195,23 @@ def execucao_concluir(execucao_id: int, body: ExecucaoConcluirBody, authorizatio
         raise HTTPException(status_code=404, detail="Execução não encontrada")
     rpa_core.marcar_execucao_concluida(execucao_id, body.competencia, body.status)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Auto-atualização do script attended - SEM autenticação de propósito: o
+# .exe precisa checar/baixar a versão nova antes mesmo de qualquer login
+# (e o executável em si não tem nada sensível - quem quiser pode pegar o
+# mesmo arquivo pelo botão de download na tela do Hub).
+# ---------------------------------------------------------------------------
+
+@app.get("/api/attended/versao")
+def attended_versao():
+    versao = _VERSAO_PATH.read_text(encoding="utf-8").strip() if _VERSAO_PATH.exists() else "0.0"
+    return {"versao": versao}
+
+
+@app.get("/api/attended/download")
+def attended_download():
+    if not _EXE_PATH.exists():
+        raise HTTPException(status_code=404, detail="Executável não encontrado")
+    return FileResponse(_EXE_PATH, media_type="application/octet-stream", filename="issnet_attended.exe")

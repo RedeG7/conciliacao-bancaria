@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -23,8 +24,11 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import hub_api  # noqa: E402
 import issnet_attended as core  # noqa: E402  (reusa toda a lógica já testada)
 
 MUNICIPIOS = {"Goiânia": "goiania", "Aparecida de Goiânia": "aparecida"}
@@ -34,6 +38,27 @@ MUNICIPIOS = {"Goiânia": "goiania", "Aparecida de Goiânia": "aparecida"}
 # serve pra guardar config entre execuções.
 _PASTA_APP = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 CONFIG_PATH = _PASTA_APP / "issnet_attended_config.json"
+
+# _MEIPASS: pasta temporária onde o PyInstaller extrai os arquivos
+# empacotados (--add-data) em modo --onefile - é de lá que o VERSION
+# embutido é lido, não da pasta do .exe (que é só onde ele foi salvo).
+_PASTA_DADOS = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+
+def _ler_versao_local() -> str:
+    arq = _PASTA_DADOS / "VERSION"
+    return arq.read_text(encoding="utf-8").strip() if arq.exists() else "0.0"
+
+
+def _versao_maior(a: str, b: str) -> bool:
+    """True se a > b, comparando parte a parte como número (\"1.10\" > \"1.9\",
+    diferente de comparar como texto)."""
+    def partes(v: str) -> list:
+        return [int(p) for p in v.split(".") if p.strip().isdigit()]
+    return partes(a) > partes(b)
+
+
+VERSAO_ATUAL = _ler_versao_local()
 
 
 def _selecionar_pasta_nativa(inicial: str) -> str:
@@ -106,12 +131,13 @@ class _LogParaWidget:
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Fechamento ISS Net Online — REST/DMS")
+        self.title(f"Fechamento ISS Net Online — REST/DMS — v{VERSAO_ATUAL}")
         self.geometry("680x600")
         self.minsize(600, 520)
         self._config = _carregar_config()
         self._rodando = False
         self._montar_ui()
+        self.after(800, self._checar_atualizacao)
 
     # ------------------------------------------------------------------
     # montagem da janela
@@ -336,6 +362,70 @@ class App(tk.Tk):
     def _finalizar(self) -> None:
         self._rodando = False
         self.btn_iniciar.configure(state="normal", text="▶  Iniciar processamento")
+
+    # ------------------------------------------------------------------
+    # auto-atualização
+    # ------------------------------------------------------------------
+
+    def _checar_atualizacao(self) -> None:
+        # só faz sentido pro .exe empacotado - rodando como script solto
+        # (dev) não tem um único arquivo pra substituir sozinho.
+        if not getattr(sys, "frozen", False):
+            return
+        threading.Thread(target=self._checar_atualizacao_bg, daemon=True).start()
+
+    def _checar_atualizacao_bg(self) -> None:
+        try:
+            r = requests.get(f"{hub_api.BASE_URL}/attended/versao", timeout=10)
+            r.raise_for_status()
+            versao_nova = r.json()["versao"]
+        except Exception:
+            return  # sem internet/servidor fora do ar - nunca trava o uso normal por causa disso
+        if _versao_maior(versao_nova, VERSAO_ATUAL):
+            self.after(0, self._perguntar_atualizar, versao_nova)
+
+    def _perguntar_atualizar(self, versao_nova: str) -> None:
+        se_atualiza = messagebox.askyesno(
+            "Atualização disponível",
+            f"Tem uma versão nova (v{versao_nova} — você está na v{VERSAO_ATUAL}).\n\n"
+            "Atualizar agora? O programa baixa a versão nova e reabre sozinho.",
+        )
+        if se_atualiza:
+            threading.Thread(target=self._baixar_e_atualizar, args=(versao_nova,), daemon=True).start()
+
+    def _baixar_e_atualizar(self, versao_nova: str) -> None:
+        try:
+            r = requests.get(f"{hub_api.BASE_URL}/attended/download", timeout=180)
+            r.raise_for_status()
+        except Exception as exc:
+            self.after(0, messagebox.showerror, "Erro na atualização", f"Não consegui baixar a versão nova: {exc}")
+            return
+
+        exe_atual = Path(sys.executable).resolve()
+        exe_novo = exe_atual.with_name(exe_atual.stem + "_novo.exe")
+        try:
+            exe_novo.write_bytes(r.content)
+        except Exception as exc:
+            self.after(0, messagebox.showerror, "Erro na atualização", f"Não consegui salvar a versão nova: {exc}")
+            return
+
+        # o .exe rodando não pode se substituir sozinho (arquivo travado
+        # pelo próprio SO enquanto o processo está de pé) - um .bat à
+        # parte espera este processo encerrar, troca o arquivo e reabre.
+        bat = exe_atual.with_suffix(".update.bat")
+        bat.write_text(
+            "@echo off\r\n"
+            "timeout /t 2 /nobreak >nul\r\n"
+            f'move /y "{exe_novo}" "{exe_atual}"\r\n'
+            f'start "" "{exe_atual}"\r\n'
+            'del "%~f0"\r\n',
+            encoding="utf-8",
+        )
+        subprocess.Popen(
+            ["cmd", "/c", str(bat)],
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+        )
+        os._exit(0)  # encerra JA (sem cleanup do Tkinter) pra soltar o arquivo do .exe pro .bat conseguir mover
 
 
 SUBCOMANDOS_CLI = {"processar-hub", "processar-planilha", "testar-empresa"}

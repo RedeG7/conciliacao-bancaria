@@ -21,6 +21,11 @@ Na primeira vez que rodar, o Windows pode mostrar um aviso do SmartScreen
 .exe não tem certificado de editor pago. Clique em "Mais informações" e
 depois em "Executar assim mesmo".
 
+A versão aparece no título da janela (ex.: "...— v1.0"). Ao abrir, o
+programa confere sozinho se tem uma versão mais nova disponível - se
+tiver, pergunta se quer atualizar agora (baixa e reabre sozinho, sem
+precisar baixar o .zip de novo na mão).
+
 USO NORMAL — COM JANELA (recomendado, sem terminal)
 ------------------------------------------------------
 1. Dê duplo clique em issnet_attended.exe. Abre uma janela com 3 passos:
