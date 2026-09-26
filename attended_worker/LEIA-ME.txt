@@ -37,7 +37,7 @@ USO NORMAL — COM JANELA (recomendado, sem terminal)
 
    2. Escolha de onde vêm as empresas: "Planilha local (.xlsx)" (clique em
       "Procurar..." e selecione o arquivo) ou "Sincronizar com o Hub"
-      (avançado — ver seção abaixo, precisa de configuração extra).
+      (usuário/senha do site hub.redeg7.com — ver seção abaixo).
 
    3. Escolha a pasta onde salvar os PDFs (clique em "Procurar...").
 
@@ -59,7 +59,7 @@ automatizar:
 
    cd C:\attended_worker
    issnet_attended.exe processar-planilha "CAMINHO_DA_PLANILHA.xlsx" "PASTA_ONDE_SALVAR"
-   issnet_attended.exe processar-hub "ID_DO_ESCRITORIO" "PASTA_ONDE_SALVAR"
+   issnet_attended.exe processar-hub "USUARIO_DO_HUB" "SENHA" "PASTA_ONDE_SALVAR"
    issnet_attended.exe testar-empresa "CNPJ" "CODIGO" "PASTA_ONDE_SALVAR"
 
 Nesse modo o login manual no portal também é necessário antes de rodar.
@@ -67,25 +67,18 @@ Nesse modo o login manual no portal também é necessário antes de rodar.
 SINCRONIZAÇÃO COM O HUB (modo "processar-hub" / opção "Sincronizar com o Hub")
 ------------------------------------------------------------------------------
 Pega a lista de empresas que você já subiu na tela do Hub e devolve pra lá
-o status e os PDFs de cada uma - aparecem como botão de download no Hub,
-igual um módulo automatizado de verdade. Só funciona na máquina que tem a
-chave SSH de deploy do escritório (fala com o super admin se não tiver) -
-sem ela, o programa recusa com uma mensagem clara, não trava escondido.
-Passos (uma vez só, por máquina):
+o status e os PDFs/XMLs de cada uma - aparecem como botão de download no
+Hub, igual um módulo automatizado de verdade.
 
-1. Copie a pasta ".deploy_keys" (com a chave "homehost_deploy") pra ficar
-   como pasta IRMÃ desta ("attended_worker"), ex.:
-     C:\algumlugar\.deploy_keys\homehost_deploy
-     C:\algumlugar\attended_worker\issnet_attended.exe
+Não precisa de NENHUMA configuração além do login: é o mesmo usuário e
+senha que você usa no site hub.redeg7.com. Na janela do programa, escolha
+"Sincronizar com o Hub" e informe usuário/senha - da segunda vez em
+diante a senha só é pedida de novo se a sessão expirar (30 dias) ou você
+trocar de usuário (o programa lembra o login, nunca a senha).
 
-2. Gere attended_worker\prod.env com as credenciais de produção (peça o
-   comando pro super admin - ele lê um arquivo .env no VPS via SSH, nunca
-   precisa digitar senha nenhuma na mão).
-
-3. A licença de uso desse modo pode ser ligada/desligada a qualquer
-   momento pelo super admin, em Gerenciar Escritórios no Hub. Se estiver
-   desligada, o programa para com uma mensagem clara antes de fazer
-   qualquer coisa.
+A licença de uso desse modo pode ser ligada/desligada a qualquer momento
+pelo super admin, em Gerenciar Escritórios no Hub. Se estiver desligada, o
+programa para com uma mensagem clara antes de fazer qualquer coisa.
 
 LIMITAÇÕES CONHECIDAS
 ------------------------

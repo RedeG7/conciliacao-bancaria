@@ -1,3 +1,12 @@
 {$DOMINIO} {
-	reverse_proxy app:8501
+	# /api/* vai pra API nova (attended_worker sincroniza so com
+	# usuario/senha - ver api.py) - "handle" (nao "handle_path") preserva
+	# o prefixo /api no caminho encaminhado, que e o que as rotas do
+	# FastAPI esperam (@app.post("/api/login") etc.).
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+	handle {
+		reverse_proxy app:8501
+	}
 }

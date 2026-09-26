@@ -71,6 +71,9 @@ from pathlib import Path
 from pywinauto import Desktop
 from pywinauto.timings import TimeoutError as PywinautoTimeoutError
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # pra importar hub_api
+import hub_api
+
 # titulos de janela do navegador as vezes trazem caracteres invisiveis
 # (ex.: zero-width space) que o console do Windows nao imprime na
 # codificacao padrao (cp1252) - sem isso, o script (principalmente o .exe
@@ -771,171 +774,99 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sincronização com o Hub (banco de produção) - licença + status/arquivos
+# Sincronização com o Hub - login/senha via API HTTP (ver hub_api.py e, na
+# raiz do repositório, api.py). Substitui o mecanismo antigo de túnel SSH +
+# acesso direto ao Postgres do VPS (exigia chave de deploy manual na
+# máquina) - agora qualquer usuário do Hub sincroniza só com o próprio
+# login, sem configuração nenhuma além disso.
 # ---------------------------------------------------------------------------
 
-def _abrir_tunel_ssh(chave: Path, vps_host: str, porta_local: int) -> "subprocess.Popen":
-    """Abre um túnel SSH (-N, sem shell remoto) até o Postgres do VPS -
-    dura só enquanto este processo Python roda, fecha sozinho no fim (não
-    é serviço persistente, é sob demanda - diferente da tentativa anterior
-    de worker sempre ligado, que foi abandonada)."""
-    import subprocess
-    processo = subprocess.Popen(
-        ["ssh", "-i", str(chave), "-L", f"{porta_local}:127.0.0.1:5432",
-         "-o", "StrictHostKeyChecking=accept-new", "-N", f"root@{vps_host}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    time.sleep(3)
-    if processo.poll() is not None:
-        raise ErroAttended("[banco] túnel SSH caiu logo de cara - confira a chave/conexão com o VPS")
-    return processo
-
-
-def _ler_env(caminho: Path) -> dict:
-    valores = {}
-    for linha in caminho.read_text(encoding="utf-8-sig").splitlines():
-        linha = linha.strip()
-        if not linha or linha.startswith("#") or "=" not in linha:
-            continue
-        chave, _, valor = linha.partition("=")
-        valores[chave.strip()] = valor.strip()
-    return valores
-
-
-def conectar_banco():
-    """Prepara DATABASE_URL/RPA_ENC_KEY e abre o túnel SSH - precisa de
-    attended_worker/prod.env (RPA_ENC_KEY e POSTGRES_PASSWORD) e da chave
-    em ../.deploy_keys/homehost_deploy (mesmo par usado pelo deploy) - ver
-    LEIA-ME.txt. Retorna o processo do túnel (mantenha uma referência viva
-    até terminar de usar o banco, senão ele é encerrado)."""
-    import os
-
-    raiz = Path(__file__).resolve().parent.parent
-    env_path = Path(__file__).resolve().parent / "prod.env"
-    chave = raiz / ".deploy_keys" / "homehost_deploy"
-    if not env_path.exists():
-        raise ErroAttended(
-            f"[banco] falta {env_path} com RPA_ENC_KEY e POSTGRES_PASSWORD de produção - ver LEIA-ME.txt"
-        )
-    if not chave.exists():
-        raise ErroAttended(f"[banco] falta a chave SSH em {chave}")
-
-    valores = _ler_env(env_path)
-    for obrigatoria in ("RPA_ENC_KEY", "POSTGRES_PASSWORD"):
-        if not valores.get(obrigatoria):
-            raise ErroAttended(f"[banco] falta '{obrigatoria}' em {env_path}")
-
-    porta_local = 5433
-    tunel = _abrir_tunel_ssh(chave, "192.96.217.88", porta_local)
-
-    os.environ["RPA_ENC_KEY"] = valores["RPA_ENC_KEY"]
-    os.environ["DATABASE_URL"] = (
-        f"postgresql://conciliacao:{valores['POSTGRES_PASSWORD']}@localhost:{porta_local}/conciliacao"
-    )
-    return tunel
-
-
-def verificar_licenca(escritorio_id: str) -> None:
-    """Confere a licença de uso (super_admin_global pode bloquear a
-    qualquer momento em Gerenciar Escritórios) - levanta ErroAttended e
-    para tudo se estiver desligada."""
-    import auth
-    escritorios = auth.carregar_escritorios()
-    dados = escritorios.get(escritorio_id)
-    if dados is None:
-        raise ErroAttended(f"[licença] escritório '{escritorio_id}' não encontrado")
-    if not dados.get("issnet_attended_liberado", True):
-        raise ErroAttended(
-            f"[licença] uso do script attended está BLOQUEADO pelo administrador pra "
-            f"'{escritorio_id}' - fale com o super admin do Hub"
-        )
-
-
-def processar_execucao_hub(escritorio_id: str, pasta_raiz: Path) -> None:
+def processar_execucao_hub(token: str, pasta_raiz: Path) -> None:
     """Versão sincronizada com o Hub: em vez de ler uma planilha local,
     pega a execução PENDENTE mais recente do módulo issnet_rest_dms criada
     na tela do Hub (upload de planilha lá, mesmo fluxo de sempre) e
-    devolve o resultado pro banco - status por empresa e os PDFs, pra
-    aparecerem como botão de download na tela do Hub, igual um módulo
-    totalmente automatizado. Confere a licença antes de processar
-    qualquer coisa."""
-    from rpa import core as rpa_core
+    devolve o resultado pra lá - status por empresa e os PDFs/XMLs, pra
+    aparecerem como botão de download no Hub, igual um módulo totalmente
+    automatizado. Confere a licença antes de processar qualquer coisa.
+
+    token: sessão obtida via hub_api.login(usuario, senha) - o mesmo tipo
+    de token usado no cookie do navegador (30 dias de validade)."""
     from rpa.issnet.competencia import calcular_competencia_anterior
 
-    tunel = conectar_banco()
-    try:
-        verificar_licenca(escritorio_id)
+    if not hub_api.verificar_licenca(token):
+        raise ErroAttended(
+            "[licença] uso do script attended está BLOQUEADO pelo administrador "
+            "pra este escritório - fale com o super admin do Hub"
+        )
 
-        execucoes = rpa_core.listar_execucoes(escritorio_id, "issnet_rest_dms")
-        execucao = next((e for e in execucoes if e["status"] == rpa_core.STATUS_PENDENTE), None)
-        if execucao is None:
-            print("Nenhuma execução PENDENTE encontrada pra este escritório - envie a planilha no Hub primeiro.")
-            return
+    resultado_busca = hub_api.execucao_pendente(token, "issnet_rest_dms")
+    execucao_id = resultado_busca["execucao_id"]
+    if execucao_id is None:
+        print("Nenhuma execução PENDENTE encontrada pra este escritório - envie a planilha no Hub primeiro.")
+        return
 
-        empresas = rpa_core.listar_empresas_pendentes(execucao["id"])
-        if not empresas:
-            print(f"Execução #{execucao['id']} não tem empresa pendente.")
-            return
+    empresas = resultado_busca["empresas"]
+    if not empresas:
+        print(f"Execução #{execucao_id} não tem empresa pendente.")
+        return
 
-        comp = calcular_competencia_anterior()
-        competencia_pasta = comp["mm_aaaa_arquivo"].replace(" ", "")
+    comp = calcular_competencia_anterior()
+    competencia_pasta = comp["mm_aaaa_arquivo"].replace(" ", "")
 
-        win = conectar_janela()
-        print(f"Janela conectada: {win.window_text()}")
-        if not esta_na_tela_empresas(win):
-            raise ErroAttended(
-                "A janela não está na tela 'Empresas' (lista de empresas com o campo "
-                "'CPF / CNPJ'). Antes de iniciar, volte pra essa tela no portal — não "
-                "fique dentro de uma empresa específica nem em Nota Eletrônica."
+    win = conectar_janela()
+    print(f"Janela conectada: {win.window_text()}")
+    if not esta_na_tela_empresas(win):
+        raise ErroAttended(
+            "A janela não está na tela 'Empresas' (lista de empresas com o campo "
+            "'CPF / CNPJ'). Antes de iniciar, volte pra essa tela no portal — não "
+            "fique dentro de uma empresa específica nem em Nota Eletrônica."
+        )
+    print(f"Execução #{execucao_id} — competência {comp['mm_aaaa']} — {len(empresas)} empresa(s) pendente(s)")
+
+    alguma_concluida = False
+    for empresa in empresas:
+        codigo, cnpj = empresa["codigo"], empresa["cnpj_cpf"]
+        print(f"\n=== Empresa {codigo} ({cnpj}) ===")
+        hub_api.marcar_rodando(token, empresa["id"])
+        try:
+            resultado = processar_empresa(
+                win, pasta_raiz, codigo, cnpj,
+                comp["data_inicial"], comp["data_final"],
+                competencia_pasta, comp["mm_aaaa_arquivo"],
             )
-        print(f"Execução #{execucao['id']} — competência {comp['mm_aaaa']} — {len(empresas)} empresa(s) pendente(s)")
+            arquivos_pdf = [a for a in resultado["arquivos"] if a.suffix.lower() == ".pdf"]
+            arquivos_xml = [a for a in resultado["arquivos"] if a.suffix.lower() == ".zip"]
+            hub_api.concluir_empresa(
+                token, empresa["id"], resultado["movimento"],
+                pdf_path=arquivos_pdf[-1] if arquivos_pdf else None,
+                xml_path=arquivos_xml[-1] if arquivos_xml else None,
+            )
+            print(f"  OK — {resultado['movimento']} (sincronizado com o Hub)")
+            alguma_concluida = True
+        except Exception as exc:
+            print(f"  ERRO — {exc}")
+            hub_api.erro_empresa(token, empresa["id"], str(exc))
 
-        alguma_concluida = False
-        for empresa in empresas:
-            codigo, cnpj = empresa["codigo"], empresa["cnpj_cpf"]
-            print(f"\n=== Empresa {codigo} ({cnpj}) ===")
-            rpa_core.marcar_empresa_status(empresa["id"], rpa_core.STATUS_RODANDO)
-            try:
-                resultado = processar_empresa(
-                    win, pasta_raiz, codigo, cnpj,
-                    comp["data_inicial"], comp["data_final"],
-                    competencia_pasta, comp["mm_aaaa_arquivo"],
-                )
-                arquivos_pdf = [a for a in resultado["arquivos"] if a.suffix.lower() == ".pdf"]
-                arquivos_xml = [a for a in resultado["arquivos"] if a.suffix.lower() == ".zip"]
-                pdf_bytes = arquivos_pdf[-1].read_bytes() if arquivos_pdf else None
-                pdf_nome = arquivos_pdf[-1].name if arquivos_pdf else ""
-                xml_bytes = arquivos_xml[-1].read_bytes() if arquivos_xml else None
-                xml_nome = arquivos_xml[-1].name if arquivos_xml else ""
-                rpa_core.atualizar_empresa(
-                    empresa["id"], status=rpa_core.STATUS_CONCLUIDO,
-                    movimento=resultado["movimento"], pdf=pdf_bytes, pdf_nome=pdf_nome,
-                    xml_zip=xml_bytes, xml_zip_nome=xml_nome,
-                )
-                print(f"  OK — {resultado['movimento']} (sincronizado com o Hub)")
-                alguma_concluida = True
-            except Exception as exc:
-                print(f"  ERRO — {exc}")
-                rpa_core.atualizar_empresa(empresa["id"], status=rpa_core.STATUS_ERRO, erro=str(exc))
+        try:
+            voltar_para_empresas(win)
+        except Exception as exc:
+            print(f"  AVISO: não confirmou volta pra Empresas ({exc}) — tentando seguir mesmo assim")
 
-            try:
-                voltar_para_empresas(win)
-            except Exception as exc:
-                print(f"  AVISO: não confirmou volta pra Empresas ({exc}) — tentando seguir mesmo assim")
-
-        status_final = rpa_core.STATUS_CONCLUIDO if alguma_concluida else rpa_core.STATUS_ERRO
-        rpa_core.marcar_execucao_concluida(execucao["id"], comp["mm_aaaa"], status_final)
-        print(f"\nExecução #{execucao['id']} finalizada ({status_final}) e sincronizada com o Hub.")
-    finally:
-        tunel.terminate()
+    status_final = "CONCLUIDO" if alguma_concluida else "ERRO"
+    hub_api.concluir_execucao(token, execucao_id, comp["mm_aaaa"], status_final)
+    print(f"\nExecução #{execucao_id} finalizada ({status_final}) e sincronizada com o Hub.")
 
 
 def main_cli() -> None:
     """Modo linha de comando (sem interface gráfica) - usado por gui.py
     quando roda com argumentos reconhecidos, e também disponível chamando
     este arquivo direto (uso avançado/automação/debug)."""
-    if len(sys.argv) > 2 and sys.argv[1] == "processar-hub":
-        processar_execucao_hub(sys.argv[2], Path(sys.argv[3] if len(sys.argv) > 3 else r"C:\Prefeituras"))
+    if len(sys.argv) > 3 and sys.argv[1] == "processar-hub":
+        # usuario/senha em vez de escritorio_id - loga na hora (mesmo
+        # login do site) pra pegar o token, sem precisar de chave SSH nem
+        # config nenhuma na maquina.
+        dados_login = hub_api.login(sys.argv[2], sys.argv[3])
+        processar_execucao_hub(dados_login["token"], Path(sys.argv[4] if len(sys.argv) > 4 else r"C:\Prefeituras"))
         return
 
     if len(sys.argv) > 2 and sys.argv[1] == "processar-planilha":

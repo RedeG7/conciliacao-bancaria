@@ -145,7 +145,7 @@ class App(tk.Tk):
             f2, text="Planilha local (.xlsx)", variable=self.modo_var, value="planilha", command=self._atualizar_modo,
         ).grid(row=0, column=0, sticky="w", padx=8, pady=4)
         ttk.Radiobutton(
-            f2, text="Sincronizar com o Hub (avançado)", variable=self.modo_var, value="hub", command=self._atualizar_modo,
+            f2, text="Sincronizar com o Hub", variable=self.modo_var, value="hub", command=self._atualizar_modo,
         ).grid(row=0, column=1, sticky="w", padx=8, pady=4)
 
         self.planilha_var = tk.StringVar(value=self._config.get("planilha", ""))
@@ -153,13 +153,19 @@ class App(tk.Tk):
         self.ent_planilha = ttk.Entry(f2, textvariable=self.planilha_var, width=55)
         self.btn_planilha = ttk.Button(f2, text="Procurar...", command=self._escolher_planilha)
 
-        self.escritorio_var = tk.StringVar(value=self._config.get("escritorio_id", ""))
-        self.lbl_escritorio = ttk.Label(f2, text="ID do escritório:")
-        self.ent_escritorio = ttk.Entry(f2, textvariable=self.escritorio_var, width=55)
+        self.hub_usuario_var = tk.StringVar(value=self._config.get("hub_usuario", ""))
+        self.lbl_hub_usuario = ttk.Label(f2, text="Usuário do Hub:")
+        self.ent_hub_usuario = ttk.Entry(f2, textvariable=self.hub_usuario_var, width=55)
+
+        self.hub_senha_var = tk.StringVar(value="")  # senha nunca fica salva
+        self.lbl_hub_senha = ttk.Label(f2, text="Senha:")
+        self.ent_hub_senha = ttk.Entry(f2, textvariable=self.hub_senha_var, width=55, show="•")
+
+        self._hub_token = self._config.get("hub_token", "")
         self.lbl_hub_info = ttk.Label(
             f2,
-            text="Precisa da chave SSH de deploy e do arquivo prod.env nesta máquina\n"
-                 "(configuração única, com o super admin) - ver LEIA-ME.txt.",
+            text="Mesmo login/senha do site hub.redeg7.com. Só precisa digitar a senha\n"
+                 "de novo se a sessão expirar (30 dias) ou trocar de usuário.",
             foreground="#555", justify="left",
         )
 
@@ -184,8 +190,10 @@ class App(tk.Tk):
 
     def _atualizar_modo(self) -> None:
         if self.modo_var.get() == "planilha":
-            self.lbl_escritorio.grid_forget()
-            self.ent_escritorio.grid_forget()
+            self.lbl_hub_usuario.grid_forget()
+            self.ent_hub_usuario.grid_forget()
+            self.lbl_hub_senha.grid_forget()
+            self.ent_hub_senha.grid_forget()
             self.lbl_hub_info.grid_forget()
             self.lbl_planilha.grid(row=1, column=0, sticky="w", padx=8)
             self.ent_planilha.grid(row=1, column=1, sticky="we", padx=8)
@@ -194,9 +202,11 @@ class App(tk.Tk):
             self.lbl_planilha.grid_forget()
             self.ent_planilha.grid_forget()
             self.btn_planilha.grid_forget()
-            self.lbl_escritorio.grid(row=1, column=0, sticky="w", padx=8, pady=4)
-            self.ent_escritorio.grid(row=1, column=1, sticky="we", padx=8, pady=4)
-            self.lbl_hub_info.grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 4))
+            self.lbl_hub_usuario.grid(row=1, column=0, sticky="w", padx=8, pady=4)
+            self.ent_hub_usuario.grid(row=1, column=1, sticky="we", padx=8, pady=4)
+            self.lbl_hub_senha.grid(row=2, column=0, sticky="w", padx=8, pady=4)
+            self.ent_hub_senha.grid(row=2, column=1, sticky="we", padx=8, pady=4)
+            self.lbl_hub_info.grid(row=3, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 4))
 
     # ------------------------------------------------------------------
     # ações
@@ -243,6 +253,16 @@ class App(tk.Tk):
         self.txt_log.see("end")
         self.txt_log.configure(state="disabled")
 
+    def _config_atual(self) -> dict:
+        return {
+            "municipio": self.municipio_var.get(),
+            "modo": self.modo_var.get(),
+            "planilha": self.planilha_var.get().strip(),
+            "pasta_raiz": self.pasta_var.get().strip(),
+            "hub_usuario": self.hub_usuario_var.get().strip(),
+            "hub_token": self._hub_token,
+        }
+
     def _iniciar(self) -> None:
         if self._rodando:
             return
@@ -254,23 +274,25 @@ class App(tk.Tk):
             return
 
         planilha = self.planilha_var.get().strip()
-        escritorio = self.escritorio_var.get().strip()
+        hub_usuario = self.hub_usuario_var.get().strip()
+        hub_senha = self.hub_senha_var.get()
         if modo == "planilha":
             if not planilha or not Path(planilha).exists():
                 messagebox.showwarning("Faltou informação", "Escolha uma planilha válida (.xlsx).")
                 return
         else:
-            if not escritorio:
-                messagebox.showwarning("Faltou informação", "Informe o ID do escritório.")
+            if not hub_usuario:
+                messagebox.showwarning("Faltou informação", "Informe o usuário do Hub.")
+                return
+            tem_sessao_salva = bool(self._hub_token) and self._config.get("hub_usuario") == hub_usuario
+            if not hub_senha and not tem_sessao_salva:
+                messagebox.showwarning(
+                    "Faltou informação",
+                    "Informe a senha (primeira vez usando este usuário, ou sessão expirada).",
+                )
                 return
 
-        _salvar_config({
-            "municipio": self.municipio_var.get(),
-            "modo": modo,
-            "planilha": planilha,
-            "pasta_raiz": pasta,
-            "escritorio_id": escritorio,
-        })
+        _salvar_config(self._config_atual())
 
         self._rodando = True
         self.btn_iniciar.configure(state="disabled", text="Processando...")
@@ -278,17 +300,32 @@ class App(tk.Tk):
         self.txt_log.delete("1.0", "end")
         self.txt_log.configure(state="disabled")
 
-        threading.Thread(target=self._rodar, args=(modo, planilha, escritorio, pasta), daemon=True).start()
+        threading.Thread(target=self._rodar, args=(modo, planilha, hub_usuario, hub_senha, pasta), daemon=True).start()
 
-    def _rodar(self, modo: str, planilha: str, escritorio: str, pasta: str) -> None:
+    def _obter_token_hub(self, usuario: str, senha: str) -> str:
+        """Reusa a sessão salva se a senha não foi digitada de novo (mesmo
+        usuário de antes); senão faz login de verdade e guarda o token
+        novo - a senha em si NUNCA é salva em disco."""
+        if not senha and self._hub_token and self._config.get("hub_usuario") == usuario:
+            return self._hub_token
+        dados = core.hub_api.login(usuario, senha)
+        self._hub_token = dados["token"]
+        self.after(0, self._log, f"Login OK — {dados.get('nome', usuario)}")
+        _salvar_config(self._config_atual())
+        return self._hub_token
+
+    def _rodar(self, modo: str, planilha: str, hub_usuario: str, hub_senha: str, pasta: str) -> None:
         saida = _LogParaWidget(self)
         try:
             with contextlib.redirect_stdout(saida):
                 if modo == "planilha":
                     core.processar_planilha(Path(planilha), Path(pasta))
                 else:
-                    core.processar_execucao_hub(escritorio, Path(pasta))
+                    token = self._obter_token_hub(hub_usuario, hub_senha)
+                    core.processar_execucao_hub(token, Path(pasta))
             self.after(0, self._log, "\n✅ Terminado.")
+        except core.hub_api.ErroHubApi as exc:
+            self.after(0, self._log, f"\n❌ {exc}")
         except core.ErroAttended as exc:
             self.after(0, self._log, f"\n❌ {exc}")
         except Exception as exc:  # nunca deixa a GUI travar por uma exceção não prevista
