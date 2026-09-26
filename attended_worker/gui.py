@@ -36,6 +36,37 @@ _PASTA_APP = Path(sys.executable).resolve().parent if getattr(sys, "frozen", Fal
 CONFIG_PATH = _PASTA_APP / "issnet_attended_config.json"
 
 
+def _selecionar_pasta_nativa(inicial: str) -> str:
+    """Abre o seletor de pasta MODERNO do Windows (estilo Explorer),
+    delegando pro FolderBrowserDialog do .NET via um PowerShell auxiliar
+    - em vez do filedialog.askdirectory() do Tkinter, que no Windows usa
+    o componente ANTIGO (SHBrowseForFolder). Esse antigo sempre monta a
+    árvore inteira a partir de "Este Computador" pra poder expandir até
+    a pasta inicial, o que enumera TODAS as unidades (inclusive de rede)
+    mesmo com initialdir definido - confirmado que travava mesmo depois
+    de setar initialdir, então o problema era o componente em si, não a
+    pasta de partida."""
+    inicial_escapada = inicial.replace("'", "''")
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms\n"
+        "$dlg = New-Object System.Windows.Forms.FolderBrowserDialog\n"
+        "$dlg.Description = 'Escolha a pasta de destino'\n"
+        f"$dlg.SelectedPath = '{inicial_escapada}'\n"
+        "$dlg.ShowNewFolderButton = $true\n"
+        "if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {\n"
+        "    Write-Output $dlg.SelectedPath\n"
+        "}\n"
+    )
+    try:
+        resultado = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=180,
+        )
+    except Exception:
+        return ""
+    return resultado.stdout.strip()
+
+
 def _carregar_config() -> dict:
     if CONFIG_PATH.exists():
         try:
@@ -202,11 +233,7 @@ class App(tk.Tk):
             self.planilha_var.set(caminho)
 
     def _escolher_pasta(self) -> None:
-        caminho = filedialog.askdirectory(
-            title="Escolha a pasta de destino",
-            initialdir=self._pasta_inicial_valida(self.pasta_var.get()),
-            parent=self,
-        )
+        caminho = _selecionar_pasta_nativa(self._pasta_inicial_valida(self.pasta_var.get()))
         if caminho:
             self.pasta_var.set(caminho)
 
