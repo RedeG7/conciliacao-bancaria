@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -391,23 +392,62 @@ class App(tk.Tk):
             "Atualizar agora? O programa baixa a versão nova e reabre sozinho.",
         )
         if se_atualiza:
-            threading.Thread(target=self._baixar_e_atualizar, args=(versao_nova,), daemon=True).start()
+            self._baixar_e_atualizar(versao_nova)
 
     def _baixar_e_atualizar(self, versao_nova: str) -> None:
+        """Mostra uma janelinha com barra de progresso durante o download
+        (pedido do usuário - antes baixava mudo, sem feedback nenhum) e só
+        troca/reabre depois de confirmar "Atualização concluída"."""
+        janela = tk.Toplevel(self)
+        janela.title("Atualizando")
+        janela.geometry("380x130")
+        janela.resizable(False, False)
+        janela.transient(self)
+        janela.grab_set()
+        janela.protocol("WM_DELETE_WINDOW", lambda: None)  # não deixa fechar no meio do download
+        ttk.Label(janela, text=f"Baixando versão {versao_nova}...").pack(pady=(18, 8))
+        barra = ttk.Progressbar(janela, orient="horizontal", length=320, mode="determinate")
+        barra.pack(pady=4)
+        lbl_status = ttk.Label(janela, text="")
+        lbl_status.pack(pady=(4, 12))
+
+        threading.Thread(target=self._baixar_e_atualizar_bg, args=(janela, barra, lbl_status), daemon=True).start()
+
+    def _baixar_e_atualizar_bg(self, janela: tk.Toplevel, barra: ttk.Progressbar, lbl_status: ttk.Label) -> None:
+        def _atualizar(pct: int, texto: str) -> None:
+            barra["value"] = pct
+            lbl_status.configure(text=texto)
+
         try:
-            r = requests.get(f"{hub_api.BASE_URL}/attended/download", timeout=180)
-            r.raise_for_status()
+            with requests.get(f"{hub_api.BASE_URL}/attended/download", stream=True, timeout=180) as r:
+                r.raise_for_status()
+                total = int(r.headers.get("Content-Length") or 0)
+                baixado = 0
+                pedacos = []
+                for pedaco in r.iter_content(chunk_size=262144):
+                    if not pedaco:
+                        continue
+                    pedacos.append(pedaco)
+                    baixado += len(pedaco)
+                    pct = int(baixado * 100 / total) if total else 0
+                    texto = f"{pct}% ({baixado // 1024} KB / {total // 1024} KB)" if total else f"{baixado // 1024} KB baixados"
+                    self.after(0, _atualizar, pct, texto)
+                conteudo = b"".join(pedacos)
         except Exception as exc:
+            self.after(0, janela.destroy)
             self.after(0, messagebox.showerror, "Erro na atualização", f"Não consegui baixar a versão nova: {exc}")
             return
 
         exe_atual = Path(sys.executable).resolve()
         exe_novo = exe_atual.with_name(exe_atual.stem + "_novo.exe")
         try:
-            exe_novo.write_bytes(r.content)
+            exe_novo.write_bytes(conteudo)
         except Exception as exc:
+            self.after(0, janela.destroy)
             self.after(0, messagebox.showerror, "Erro na atualização", f"Não consegui salvar a versão nova: {exc}")
             return
+
+        self.after(0, _atualizar, 100, "✅ Atualização concluída — abrindo o programa...")
 
         # o .exe rodando não pode se substituir sozinho (arquivo travado
         # pelo próprio SO enquanto o processo está de pé) - um .bat à
@@ -425,6 +465,7 @@ class App(tk.Tk):
             ["cmd", "/c", str(bat)],
             creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
         )
+        time.sleep(1.5)  # dá tempo da pessoa ler "Atualização concluída" antes de sumir
         os._exit(0)  # encerra JA (sem cleanup do Tkinter) pra soltar o arquivo do .exe pro .bat conseguir mover
 
 
