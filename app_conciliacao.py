@@ -1072,29 +1072,73 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
         st.info("Nenhuma lista criada ainda para esta rotina.")
         return
 
+    _emoji_status_manual = {
+        rpa_core.STATUS_PENDENTE: "⏳ Pendente", rpa_core.STATUS_RODANDO: "🔄 Rodando",
+        rpa_core.STATUS_CONCLUIDO: "✅ Feito", rpa_core.STATUS_ERRO: "❌ Erro",
+    }
     for execucao in execucoes:
         empresas_exec = rpa_core.listar_empresas(execucao["id"])
         concluidas = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_CONCLUIDO)
+        erros = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_ERRO)
+        # inclui PENDENTE/RODANDO travado numa execução que já não está
+        # mais PENDENTE (processamento interrompido no meio) - essas
+        # empresas nunca chegaram a rodar, mas a API do attended só
+        # procura execução com status PENDENTE, então ficam invisíveis
+        # pra sempre sem reabrir a execução (ver reabrir_execucao_se_incompleta).
+        pendencias = sum(1 for e in empresas_exec if e["status"] != rpa_core.STATUS_CONCLUIDO)
         _competencia_exec = f" · competência {execucao['competencia']}" if execucao.get("competencia") else ""
         titulo = (
             f"📋 Lista #{execucao['id']} — {execucao['criado_em']:%d/%m/%Y %H:%M}{_competencia_exec} "
-            f"({concluidas}/{len(empresas_exec)} feitas)"
+            f"({concluidas}/{len(empresas_exec)} feitas{f', {erros} erro(s)' if erros else ''})"
         )
         with st.expander(titulo):
             st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}")
+            _cols_acoes_manual = st.columns(2)
+            if concluidas:
+                _pasta_comp_manual = (execucao.get("competencia") or "sem-competencia").replace("/", "")
+                _cols_acoes_manual[0].download_button(
+                    "📦 Baixar tudo (.zip)", _montar_zip_execucao(execucao, empresas_exec),
+                    file_name=f"{modulo_id} {_pasta_comp_manual}.zip", key=f"zip_manual_{execucao['id']}",
+                )
+            if pendencias and execucao["status"] != rpa_core.STATUS_PENDENTE:
+                if _cols_acoes_manual[1].button(
+                    f"🔁 Reprocessar {pendencias} empresa(s) pendente(s) (via Sincronizar com o Hub)",
+                    key=f"reprocessar_manual_{execucao['id']}",
+                ):
+                    rpa_core.reprocessar_falhas(execucao["id"])
+                    rpa_core.reabrir_execucao_se_incompleta(execucao["id"])
+                    _flash(
+                        "flash_rpa_manual",
+                        f"✅ Lista reaberta — rode o script attended de novo (Sincronizar com o "
+                        "Hub) que ele processa só quem ainda não terminou.",
+                    )
+                    st.rerun()
             for empresa in empresas_exec:
-                feito = empresa["status"] == rpa_core.STATUS_CONCLUIDO
-                cols = st.columns([1, 2, 2, 2, 1])
+                status_atual = empresa["status"]
+                feito = status_atual == rpa_core.STATUS_CONCLUIDO
+                cols = st.columns([1, 2, 2, 2, 1, 1, 1])
                 cols[0].write(empresa["codigo"])
                 cols[1].write(empresa["cnpj_cpf"])
                 cols[2].write(empresa.get("municipio") or "—")
-                cols[3].write("✅ Feito" if feito else "⏳ Pendente")
+                cols[3].write(_emoji_status_manual.get(status_atual, status_atual))
+                if empresa.get("erro"):
+                    cols[3].caption(empresa["erro"][:120])
+                if empresa.get("pdf"):
+                    cols[4].download_button(
+                        "PDF", bytes(empresa["pdf"]), file_name=empresa["pdf_nome"],
+                        key=f"pdf_manual_{empresa['id']}",
+                    )
+                if empresa.get("xml_zip"):
+                    cols[5].download_button(
+                        "XML", bytes(empresa["xml_zip"]), file_name=empresa["xml_zip_nome"],
+                        key=f"xml_manual_{empresa['id']}",
+                    )
                 if feito:
-                    if cols[4].button("↩️", key=f"desfazer_manual_{empresa['id']}", help="Desfazer"):
+                    if cols[6].button("↩️", key=f"desfazer_manual_{empresa['id']}", help="Desfazer"):
                         rpa_core.marcar_empresa_status(empresa["id"], rpa_core.STATUS_PENDENTE)
                         st.rerun()
                 else:
-                    if cols[4].button("✔️", key=f"concluir_manual_{empresa['id']}", help="Marcar como feito"):
+                    if cols[6].button("✔️", key=f"concluir_manual_{empresa['id']}", help="Marcar como feito"):
                         rpa_core.marcar_empresa_status(empresa["id"], rpa_core.STATUS_CONCLUIDO)
                         st.rerun()
 

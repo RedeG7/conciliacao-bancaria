@@ -306,9 +306,17 @@ def listar_empresas(execucao_id: int) -> list[dict]:
 
 def reprocessar_falhas(execucao_id: int) -> int:
     """Volta pra fila (status PENDENTE) só as empresas que ficaram ERRO
-    nessa execução, e a execução em si (senão o worker nunca pega ela de
-    novo — reivindicar_proxima_execucao só olha status PENDENTE). Empresas
-    já CONCLUIDO não são tocadas. Retorna quantas linhas voltaram pra fila."""
+    nessa execução, e a execução em si (senão o worker/script nunca pega
+    ela de novo — reivindicar_proxima_execucao / a API do attended só
+    olham status PENDENTE). Empresas já CONCLUIDO não são tocadas.
+    Retorna quantas linhas voltaram pra fila.
+
+    NÃO cobre sozinho o caso de empresa que ficou PENDENTE (nunca chegou
+    a rodar) numa execução que já foi marcada CONCLUIDO/ERRO - isso
+    acontece quando o processamento é interrompido no meio (ex.: o
+    script attended fechado/travado antes de terminar todas as
+    empresas): a empresa em si já está PENDENTE, só a execução que
+    precisa reabrir - ver reabrir_execucao_se_incompleta()."""
     with auth.conectar() as conn:
         linhas = conn.execute(
             "UPDATE rpa_empresas SET status = %s, erro = NULL WHERE execucao_id = %s AND status = %s RETURNING id",
@@ -321,6 +329,36 @@ def reprocessar_falhas(execucao_id: int) -> int:
             )
         conn.commit()
     return len(linhas)
+
+
+def reabrir_execucao_se_incompleta(execucao_id: int) -> bool:
+    """Complementa reprocessar_falhas() pro caso de empresa que ficou
+    PENDENTE (nunca rodou) numa execução já marcada CONCLUIDO/ERRO -
+    acontece quando o processamento é interrompido no meio (ex.: script
+    attended fechado/travado antes de processar todas as empresas da
+    lista). A empresa em si já está PENDENTE, só a execução precisa
+    voltar a ficar PENDENTE também - senão a API do attended
+    (GET /api/execucao-pendente) nunca mais encontra essa execução, já
+    que ela só procura execução com status PENDENTE, não empresa por
+    empresa. Não mexe em empresa nenhuma. Retorna True se reabriu."""
+    with auth.conectar() as conn:
+        execucao = conn.execute(
+            "SELECT status FROM rpa_execucoes WHERE id = %s", (execucao_id,)
+        ).fetchone()
+        if not execucao or execucao["status"] == STATUS_PENDENTE:
+            return False
+        tem_pendente = conn.execute(
+            "SELECT 1 FROM rpa_empresas WHERE execucao_id = %s AND status IN (%s, %s) LIMIT 1",
+            (execucao_id, STATUS_PENDENTE, STATUS_RODANDO),
+        ).fetchone()
+        if not tem_pendente:
+            return False
+        conn.execute(
+            "UPDATE rpa_execucoes SET status = %s, concluido_em = NULL WHERE id = %s",
+            (STATUS_PENDENTE, execucao_id),
+        )
+        conn.commit()
+    return True
 
 
 def recuperar_execucoes_orfas() -> int:
