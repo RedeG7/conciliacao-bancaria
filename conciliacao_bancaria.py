@@ -973,6 +973,19 @@ _BAL_LINE_RE = re.compile(
     r"^\s*(?P<codigo>\d+)\s+(?P<classif>\d+(?:\.\d+)+)\s+(?P<nome>.+?)\s*$"
 )
 
+# usada so' como FALLBACK final em parse_balancete, nunca dentro de
+# _reparar_linhas_balancete_sobrepostas: essa versao aceita codigo+nome SEM
+# classificacao (alguns balancetes nao tem classificacao contabil pra contas
+# de grupo/totalizadoras, ex.: "9 BANCO ITAU AG 4313 C/C 0099589-8"). Se
+# usada dentro do reparo, contamina reconstrucoes de linhas garbled com
+# qualquer coisa que comece com digito (ex.: cabecalhos tipo "Periodo:
+# 01/01/2026..." viram conta falsa) - por isso so entra como ultima
+# tentativa, depois que o reparo (que exige a classificacao pontuada pra
+# aceitar uma reconstrucao) ja rejeitou a linha.
+_BAL_LINE_SEM_CLASSIF_RE = re.compile(
+    r"^\s*(?P<codigo>\d+)\s+(?P<nome>.+?)\s*$"
+)
+
 _TOKEN_MONETARIO_RE = re.compile(r"^\(?-?\d{1,3}(?:\.\d{3})*,\d{2}\)?[DC]?$", re.IGNORECASE)
 
 # usado quando so da pra recuperar codigo+classificacao de uma linha de
@@ -1001,6 +1014,50 @@ def _limpar_nome_conta(nome: str) -> str:
     while len(tokens) > 1 and _TOKEN_MONETARIO_RE.match(tokens[-1]):
         tokens.pop()
     return " ".join(tokens).strip() or nome.strip()
+
+
+def _filtrar_glifos_negrito_duplicado(page):
+    """Alguns balancetes desenham o nome de contas 'de grupo' (ex.: a propria
+    conta banco, como '9 BANCO ITAU AG 4313 C/C 0099589-8') DUAS vezes, a
+    menos de ~2px de distancia vertical, pra simular negrito numa fonte sem
+    variante bold - uma copia CURTA (so o nome) e uma copia COMPLETA
+    (codigo + nome + valores). Sem filtrar, extract_text() intercala as duas
+    cadeias por posicao X e produz lixo tipo 'BANC7OS CONTBAAN...', fazendo
+    a conta sumir da lista pra vincular sem nenhum aviso (a linha resultante
+    nem bate em _BAL_LINE_RE nem consegue ser reparada por
+    _reparar_linhas_balancete_sobrepostas, que espera uma UNICA linha com
+    duas cadeias sobrepostas, nao duas linhas fisicas distintas). Remove os
+    caracteres da copia curta (cujo texto e um substring exato do texto da
+    copia mais longa numa 'top' proxima) ANTES de extrair o texto - a copia
+    mais longa e sempre a completa, entao nunca se perde informacao real."""
+    por_top: Dict[float, list] = {}
+    for c in page.chars:
+        por_top.setdefault(c["top"], []).append(c)
+    tops_ordenados = sorted(por_top)
+    descartar_tops = set()
+    for i, t1 in enumerate(tops_ordenados):
+        if t1 in descartar_tops:
+            continue
+        texto1 = "".join(c["text"] for c in sorted(por_top[t1], key=lambda c: c["x0"])).strip()
+        if not texto1:
+            continue
+        for t2 in tops_ordenados[i + 1:]:
+            if t2 - t1 > 2.0:
+                break
+            texto2 = "".join(c["text"] for c in sorted(por_top[t2], key=lambda c: c["x0"])).strip()
+            if not texto2 or texto1 == texto2:
+                continue
+            if len(texto1) <= len(texto2):
+                curto, texto_curto, texto_longo = t1, texto1, texto2
+            else:
+                curto, texto_curto, texto_longo = t2, texto2, texto1
+            if texto_curto in texto_longo:
+                descartar_tops.add(curto)
+    if not descartar_tops:
+        return page
+    return page.filter(
+        lambda obj: obj.get("object_type") != "char" or obj["top"] not in descartar_tops
+    )
 
 
 def _reparar_linhas_balancete_sobrepostas(page, linhas_texto: List[str]) -> List[str]:
@@ -1183,14 +1240,15 @@ def parse_balancete(path: str) -> List[ContaBalancete]:
             raise ImportError("Leitura de balancete PDF requer pdfplumber.") from exc
         with pdfplumber.open(path) as pdf:
             for page in pdf.pages:
+                page = _filtrar_glifos_negrito_duplicado(page)
                 text = page.extract_text() or ""
                 linhas = _reparar_linhas_balancete_sobrepostas(page, text.splitlines())
                 for line in linhas:
-                    m = _BAL_LINE_RE.match(line)
+                    m = _BAL_LINE_RE.match(line) or _BAL_LINE_SEM_CLASSIF_RE.match(line)
                     if m:
                         contas.append(ContaBalancete(
                             codigo=m.group("codigo"),
-                            classificacao=m.group("classif"),
+                            classificacao=m.groupdict().get("classif") or "",
                             nome=_limpar_nome_conta(m.group("nome")),
                         ))
         if not contas:
