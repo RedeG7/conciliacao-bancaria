@@ -20,6 +20,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import shutil
 import tempfile
 import zipfile
 from datetime import date, datetime, timezone
@@ -187,8 +188,33 @@ def _popular_sessao(dados: dict, token: Optional[str] = None) -> None:
         st.session_state[_COOKIE_SESSAO] = token
 
 
+def _resetar_estado_nao_login() -> None:
+    """Limpa TUDO do session_state exceto as chaves de login/cookie (ver
+    _CHAVES_SESSAO_LOGIN) - em especial apaga do disco a pasta temporaria
+    de uploads (tmpdir) e limpa o @st.cache_data de processamento.
+
+    CAUSA RAIZ de um bug de vazamento entre escritorios confirmado pelo
+    usuario: st.session_state sobrevive a troca de usuario quando a MESMA
+    aba do navegador faz logout de um escritorio e login de outro (nao e
+    uma conexao nova) - sem essa limpeza, o extrato/razao/balancete que o
+    escritorio A tinha enviado (pasta e nomes fixos: extrato.*, razao.*,
+    balancete.* dentro de st.session_state.tmpdir) continuava no disco e
+    podia ser reaproveitado pelo proximo login naquela aba, fazendo o
+    escritorio B "ler" arquivo/resultado de outro escritorio mesmo depois
+    de enviar a propria planilha. Chamada tanto no logout quanto logo
+    antes de popular uma sessao nova por login, como cinto-e-suspensorio."""
+    tmpdir = st.session_state.get("tmpdir")
+    if tmpdir:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    for chave in list(st.session_state.keys()):
+        if chave not in _CHAVES_SESSAO_LOGIN and chave != _COOKIE_SESSAO:
+            st.session_state.pop(chave, None)
+    st.cache_data.clear()
+
+
 def _fazer_logout() -> None:
     auth.remover_sessao(st.session_state.get(_COOKIE_SESSAO, ""))
+    _resetar_estado_nao_login()
     for chave in _CHAVES_SESSAO_LOGIN:
         st.session_state.pop(chave, None)
     st.session_state.pop(_COOKIE_SESSAO, None)
@@ -367,6 +393,10 @@ def _tela_login() -> None:
                 st.error("Este usuário está inativo. Fale com o administrador do seu escritório.")
             else:
                 token = auth.criar_sessao(usuario)
+                # limpa qualquer resto de sessao anterior (outro usuario/
+                # escritorio) ANTES de popular a nova - ver
+                # _resetar_estado_nao_login pro bug que isso evita.
+                _resetar_estado_nao_login()
                 _popular_sessao(dados, token=token)
                 _agendar_cookie_sessao("set", token)
                 st.rerun()
@@ -750,9 +780,10 @@ def _tela_gerenciar_usuarios() -> None:
 
 def _tela_historico() -> None:
     """Tela de historico dos lancamentos (conciliacoes) rodados por cada
-    usuario - so super_admin_global (escolhendo o escritorio) e
-    admin_escritorio (so o proprio) enxergam; usuario comum nao ve o
-    historico dos colegas."""
+    usuario - qualquer usuario logado enxerga (inclusive usuario comum),
+    sempre restrito ao PROPRIO escritorio (historico.listar ja filtra por
+    escritorio_id); so super_admin_global tem o seletor pra escolher
+    QUALQUER escritorio, por ser quem administra o hub inteiro."""
     st.title("📜 Histórico de Lançamentos")
     if st.button("← Início"):
         st.session_state["tela"] = "home"
@@ -1855,11 +1886,10 @@ if st.session_state.get("tela") == "gerenciar_usuarios":
         st.stop()
 
 if st.session_state.get("tela") == "historico":
-    if st.session_state.get("papel_usuario") not in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
-        st.session_state["tela"] = "home"
-    else:
-        _tela_historico()
-        st.stop()
+    # qualquer usuario logado pode ver (inclusive usuario comum) - sempre
+    # restrito ao proprio escritorio, ja garantido dentro de _tela_historico.
+    _tela_historico()
+    st.stop()
 
 if st.session_state.get("tela") == "gerenciar_clientes":
     _tela_gerenciar_clientes()
@@ -1914,10 +1944,9 @@ with st.sidebar:
     if st.button("🏢 Gerenciar Clientes", use_container_width=True):
         st.session_state["tela"] = "gerenciar_clientes"
         st.rerun()
-    if st.session_state.get("papel_usuario") in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
-        if st.button("📜 Histórico de Lançamentos", use_container_width=True):
-            st.session_state["tela"] = "historico"
-            st.rerun()
+    if st.button("📜 Histórico de Lançamentos", use_container_width=True):
+        st.session_state["tela"] = "historico"
+        st.rerun()
     st.divider()
 
 def _resetar_empresa() -> None:
