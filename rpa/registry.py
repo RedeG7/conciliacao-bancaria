@@ -4,8 +4,10 @@
 Registro dos módulos de RPA disponíveis no hub. Cada módulo declara:
   - id: chave usada em rpa_execucoes.modulo e rpa_credenciais.sistema
   - titulo: nome mostrado na tela
-  - tipo_auth: "senha" (padrão, CNPJ+senha do portal) ou "certificado"
-    (certificado digital A1 .pfx+senha do certificado) - controla qual
+  - tipo_auth: "senha" (padrão, CNPJ+senha do portal), "certificado"
+    (certificado digital A1 .pfx+senha do certificado) ou
+    "certificado_senha" (os dois: certificado A1 apresentado no TLS + CPF e
+    senha no formulário do portal - SEFAZ-GO) - controla qual
     formulário de credencial a tela mostra e qual função de rpa_core usar
     (ver app_conciliacao.py _tela_rpa_hub e worker abaixo)
   - processar_empresa(page, empresa, competencia) -> dict, de <modulo>/processar.py
@@ -49,6 +51,21 @@ MODULOS = {
             "oficial para automação."
         ),
     },
+    "sefazgo_nfe": {
+        "titulo": "RPA NF GO — Download de XML de NF-e (SEFAZ-GO)",
+        # certificado A1 do escritório (TLS) - opcional: se o portal não
+        # pedir certificado, o login segue só com CPF/senha
+        "sistema_credencial": "sefazgo_certificado",
+        # CPF + senha do Acesso Restrito (obrigatório) - guardado como uma
+        # credencial separada (cnpj = CPF de acesso), ver obter_credencial()
+        "sistema_credencial_portal": "sefazgo_portal",
+        "tipo_auth": "certificado_senha",
+        "colunas_planilha": ["Código da Empresa", "Razão Social", "CNPJ", "Inscrição Estadual"],
+        "municipio_alvo": "GOIÁS",
+        # o Hub mostra este módulo num card próprio (RPA NF GO), fora da
+        # tela "RPA — Fechamento REST/DMS" - ver _APPS_HOME em app_conciliacao.py
+        "app_home": "rpa_nfgo",
+    },
 }
 
 
@@ -61,6 +78,9 @@ def processar_empresa(modulo: str, *args, **kwargs) -> dict:
     if modulo == "issnet_rest_dms":
         from rpa.issnet import processar
         return processar.processar_empresa(*args, **kwargs)
+    if modulo == "sefazgo_nfe":
+        from rpa.sefazgo_nfe import processar
+        return processar.processar_empresa(*args, **kwargs)
     raise ValueError(f"Módulo de RPA desconhecido: {modulo}")
 
 
@@ -72,6 +92,9 @@ def preparar_periodo(modulo: str) -> dict:
         return calcular_competencia_anterior()
     if modulo == "issnet_rest_dms":
         from rpa.issnet.competencia import calcular_competencia_anterior
+        return calcular_competencia_anterior()
+    if modulo == "sefazgo_nfe":
+        from rpa.sefazgo_nfe.competencia import calcular_competencia_anterior
         return calcular_competencia_anterior()
     raise ValueError(f"Módulo de RPA desconhecido: {modulo}")
 
@@ -86,6 +109,9 @@ def ler_empresas(modulo: str, conteudo: bytes) -> list[dict]:
     if modulo == "issnet_rest_dms":
         from rpa.issnet import planilha
         return planilha.ler_empresas(conteudo)
+    if modulo == "sefazgo_nfe":
+        from rpa.sefazgo_nfe import planilha
+        return planilha.ler_empresas(conteudo)
     raise ValueError(f"Módulo de RPA desconhecido: {modulo}")
 
 
@@ -95,6 +121,17 @@ def obter_credencial(modulo: str, escritorio_id: str) -> dict | None:
     a tela do Streamlit lida com o cadastro, não com a leitura cifrada)."""
     from rpa import core
     sistema = MODULOS[modulo]["sistema_credencial"]
+    if MODULOS[modulo].get("tipo_auth") == "certificado_senha":
+        # CPF/senha do portal é obrigatório; certificado é opcional
+        portal = core.obter_credencial(escritorio_id, MODULOS[modulo]["sistema_credencial_portal"])
+        if not portal:
+            return None
+        certificado = core.obter_credencial_certificado(escritorio_id, sistema)
+        return {
+            "cpf": portal["cnpj"], "senha_portal": portal["senha"],
+            "pfx_bytes": certificado["pfx_bytes"] if certificado else None,
+            "senha": certificado["senha"] if certificado else None,
+        }
     if MODULOS[modulo].get("tipo_auth") == "certificado":
         return core.obter_credencial_certificado(escritorio_id, sistema)
     return core.obter_credencial(escritorio_id, sistema)
@@ -107,6 +144,16 @@ def criar_contexto(modulo: str, browser, credencial: dict):
     TLS, não dá pra configurar depois de já ter aberto uma página)."""
     if modulo == "issnet_rest_dms":
         from rpa.issnet import portal
+        return browser.new_context(
+            accept_downloads=True,
+            client_certificates=[{
+                "origin": portal.CERTIFICADO_ORIGIN,
+                "pfx": credencial["pfx_bytes"],
+                "passphrase": credencial["senha"],
+            }],
+        )
+    if modulo == "sefazgo_nfe" and credencial.get("pfx_bytes"):
+        from rpa.sefazgo_nfe import portal
         return browser.new_context(
             accept_downloads=True,
             client_certificates=[{
@@ -131,5 +178,9 @@ def fazer_login(modulo: str, page, credencial: dict) -> None:
         # sessão/caminho separado no mesmo domínio, então quem loga é
         # processar_empresa() por empresa, trocando de sessão conforme o
         # município mudar entre uma empresa e outra (ver rpa/issnet/portal.py).
+        return
+    if modulo == "sefazgo_nfe":
+        from rpa.sefazgo_nfe import portal
+        portal.login(page, credencial["cpf"], credencial["senha_portal"])
         return
     raise ValueError(f"Módulo de RPA desconhecido: {modulo}")

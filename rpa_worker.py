@@ -20,6 +20,7 @@ execução da fila.
 import logging
 import os
 import time
+from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
@@ -42,6 +43,29 @@ INTERVALO_POLLING_S = 15
 _MODULOS_PERMITIDOS = [
     m.strip() for m in os.environ.get("WORKER_MODULOS", "").split(",") if m.strip()
 ] or None
+
+# RPA_SALVAR_EM_DISCO=1 (opcional): além de gravar no banco, grava os
+# arquivos que o módulo devolver em resultado["arquivos"] ({caminho
+# relativo: bytes}) numa pasta local - RPA_PASTA_DESTINO, ou a pasta
+# informada na tela ao criar a execução (rpa_execucoes.pasta_destino).
+# Só faz sentido num worker rodando no PC do escritório (o do VPS não
+# enxerga C:\... de ninguém) - por isso é opt-in, desligado por padrão.
+_SALVAR_EM_DISCO = os.environ.get("RPA_SALVAR_EM_DISCO", "").strip().lower() in ("1", "true", "sim", "yes")
+_PASTA_DESTINO_FIXA = os.environ.get("RPA_PASTA_DESTINO", "").strip()
+
+
+def _salvar_arquivos_em_disco(execucao: dict, arquivos: dict) -> None:
+    if not _SALVAR_EM_DISCO or not arquivos:
+        return
+    raiz = _PASTA_DESTINO_FIXA or (execucao.get("pasta_destino") or "").strip()
+    if not raiz:
+        log.warning("Execução %s: RPA_SALVAR_EM_DISCO ligado mas sem pasta de destino — arquivos só no Hub", execucao["id"])
+        return
+    for relativo, conteudo in arquivos.items():
+        destino = Path(raiz).joinpath(*relativo.split("/"))
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_bytes(conteudo)
+        log.info("Execução %s: gravado %s", execucao["id"], destino)
 
 
 def processar_execucao(execucao: dict) -> None:
@@ -101,13 +125,26 @@ def processar_execucao(execucao: dict) -> None:
             core.marcar_empresa_status(empresa["id"], core.STATUS_RODANDO)
             try:
                 resultado = registry.processar_empresa(modulo, page, empresa, competencia)
+                # status vem do módulo quando ele mesmo detecta problema sem
+                # exceção (ex.: RPA NF GO com ZIP incompleto vira ERRO, mas
+                # os arquivos baixados ficam gravados pra conferência)
+                status = resultado.get("status") or core.STATUS_CONCLUIDO
                 core.atualizar_empresa(
-                    empresa["id"], status=core.STATUS_CONCLUIDO,
-                    movimento=resultado["movimento"], pdf=resultado["pdf"], pdf_nome=resultado["pdf_nome"],
+                    empresa["id"], status=status,
+                    movimento=resultado.get("movimento", ""), erro=resultado.get("erro", ""),
+                    pdf=resultado.get("pdf"), pdf_nome=resultado.get("pdf_nome", ""),
                     xml_zip=resultado.get("xml_zip"), xml_zip_nome=resultado.get("xml_zip_nome", ""),
+                    qtd_notas_portal=resultado.get("qtd_notas_portal"), qtd_xml=resultado.get("qtd_xml"),
+                    evidencia_png=resultado.get("evidencia_png"), observacao=resultado.get("observacao", ""),
                 )
-                log.info("Execução %s: empresa %s concluída (%s)", execucao_id, empresa["codigo"], resultado["movimento"])
-                alguma_concluida = True
+                try:
+                    _salvar_arquivos_em_disco(execucao, resultado.get("arquivos") or {})
+                except OSError as exc:
+                    log.error("Execução %s: empresa %s — falha ao gravar na pasta de destino: %s",
+                              execucao_id, empresa["codigo"], exc)
+                log.info("Execução %s: empresa %s %s (%s)", execucao_id, empresa["codigo"], status, resultado.get("movimento", ""))
+                if status == core.STATUS_CONCLUIDO:
+                    alguma_concluida = True
             except Exception as exc:
                 log.error("Execução %s: empresa %s falhou — %s", execucao_id, empresa["codigo"], exc)
                 screenshot = None
