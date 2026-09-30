@@ -39,7 +39,10 @@ from pathlib import Path
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
 LOGIN_URL = "https://www.sefaz.go.gov.br/netaccess/000System/acessoRestrito/login/"
-CERTIFICADO_ORIGIN = "https://www.sefaz.go.gov.br"
+# o login e o menu ficam em www.sefaz.go.gov.br, mas o formulário "Baixar
+# XML NFE" abre em nfeweb.sefaz.go.gov.br (OpenUrl2 do menu, visto no log
+# da execução real) - o certificado, se cadastrado, vale para os dois
+CERTIFICADO_ORIGINS = ["https://www.sefaz.go.gov.br", "https://nfeweb.sefaz.go.gov.br"]
 
 TIMEOUT_PADRAO_MS = 20_000
 TIMEOUT_CURTO_MS = 4_000
@@ -89,22 +92,60 @@ def _candidatos_clique(escopo, texto: str):
     ]
 
 
+# true quando o centro do elemento está na tela e NADA está por cima dele
+# (o clique de verdade acertaria ele mesmo, não outro elemento)
+_JS_NO_TOPO = """e => {
+  const r = e.getBoundingClientRect();
+  if (!r.width || !r.height) return false;
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return false;
+  const t = document.elementFromPoint(x, y);
+  return !!t && (t === e || e.contains(t));
+}"""
+
+
 def _achar_visivel(page: Page, textos: list[str]):
+    """Primeiro elemento visível com o texto, preferindo o que está de fato
+    clicável. Confirmado na execução real: o menu do Acesso Restrito tem
+    DOIS "Baixar XML NFE" - um no submenu lateral "Nota Fiscal Eletronica",
+    coberto pelos títulos do menu (todo clique acertava o <h3> por cima), e
+    o link de "Serviços em Destaque", que é o que uma pessoa clica."""
     for texto in textos:
+        reserva = None
         for escopo in _escopos(page):
             for loc in _candidatos_clique(escopo, texto):
                 try:
                     qtd = loc.count()
                 except Exception:
                     continue
-                for i in range(min(qtd, 5)):
+                for i in range(min(qtd, 8)):
                     item = loc.nth(i)
                     try:
-                        if item.is_visible():
+                        if not item.is_visible():
+                            continue
+                        if item.evaluate(_JS_NO_TOPO):
                             return item
+                        if reserva is None:
+                            reserva = item
                     except Exception:
                         continue
+        if reserva is not None:
+            return reserva
     return None
+
+
+def _clique(alvo) -> None:
+    """Clique normal; se outro elemento estiver por cima (Playwright fica
+    tentando até estourar o timeout), aciona o clique direto no elemento
+    via JS - dispara o mesmo onclick (ex.: OpenUrl2 do menu da SEFAZ)."""
+    try:
+        alvo.scroll_into_view_if_needed(timeout=TIMEOUT_CURTO_MS)
+    except Exception:
+        pass
+    try:
+        alvo.click(timeout=5_000)
+    except PlaywrightTimeoutError:
+        alvo.evaluate("e => e.click()")
 
 
 def _clicar(page: Page, textos: list[str], timeout: int = TIMEOUT_CURTO_MS) -> str | None:
@@ -115,8 +156,7 @@ def _clicar(page: Page, textos: list[str], timeout: int = TIMEOUT_CURTO_MS) -> s
         for texto in textos:
             alvo = _achar_visivel(page, [texto])
             if alvo is not None:
-                alvo.scroll_into_view_if_needed(timeout=TIMEOUT_CURTO_MS)
-                alvo.click()
+                _clique(alvo)
                 return texto
         if esperado >= timeout:
             return None
@@ -231,8 +271,43 @@ def _clicar_se_existir(page: Page, textos: list[str], timeout: int = 2_000) -> b
 # ---------------------------------------------------------------------------
 
 def _formulario_consulta_visivel(page: Page, timeout: int = TIMEOUT_CURTO_MS) -> bool:
+    """Tela "Consulta de Notas Recebidas" (nfeweb.sefaz.go.gov.br - print da
+    execução real): Período, Inscrição Estadual, Tipo de notas, Modelo da
+    NF-e, Exibir notas canceladas e a verificação da Cloudflare."""
     return _existe(page, ["Inscrição Estadual", "Inscricao Estadual"], timeout=timeout) is not None and \
-        _existe(page, ["Pesquisar", "Consultar"], timeout=1_000) is not None
+        _existe(page, ["Tipo de notas", "Consulta de Notas", "Pesquisar", "Consultar"], timeout=1_000) is not None
+
+
+def _aguardar_verificacao_cloudflare(page: Page, timeout_ms: int = 30_000) -> None:
+    """O formulário tem uma verificação da Cloudflare (Turnstile) que, num
+    navegador comum, passa sozinha ("Sucesso!"). O robô só ESPERA ela passar
+    sozinha - não clica nem tenta contornar a verificação. Se não passar no
+    prazo, para com mensagem clara (a consulta dessa empresa fica com erro)."""
+    tem_widget = False
+    for escopo in _escopos(page):
+        try:
+            if escopo.locator("[name='cf-turnstile-response'], .cf-turnstile, iframe[src*='challenges.cloudflare.com']").count():
+                tem_widget = True
+                break
+        except Exception:
+            continue
+    if not tem_widget and not any("challenges.cloudflare.com" in (f.url or "") for f in page.frames):
+        return
+    esperado = 0
+    while esperado <= timeout_ms:
+        for escopo in _escopos(page):
+            try:
+                campo = escopo.locator("[name='cf-turnstile-response']")
+                if campo.count() and (campo.first.input_value() or "").strip():
+                    return
+            except Exception:
+                continue
+        page.wait_for_timeout(1_000)
+        esperado += 1_000
+    raise ErroPortal(
+        "[consulta] a verificação da Cloudflare do formulário não foi concluída automaticamente "
+        f"em {timeout_ms // 1000}s — o portal não liberou a consulta para o navegador do robô"
+    )
 
 
 # Injetado em toda página da sessão (context.add_init_script): o portal
@@ -456,7 +531,10 @@ def _marcar_opcao(page: Page, grupo: list[str], textos: list[str]) -> None:
                         escopo.get_by_label(exato)):
                 try:
                     if loc.count() and loc.first.is_visible():
-                        loc.first.check()
+                        try:
+                            loc.first.check(timeout=5_000)
+                        except PlaywrightTimeoutError:
+                            loc.first.evaluate("e => { if (!e.checked) e.click(); }")
                         return
                 except Exception:
                     continue
@@ -483,8 +561,10 @@ def pesquisar(page: Page, data_inicial: str, data_final: str, inscricao_estadual
         raise ErroPortal("[consulta] campo Inscrição Estadual não encontrado")
     _preencher(campo_ie, inscricao_estadual)
 
-    _marcar_opcao(page, ["Tipo de nota", "Tipo da nota", "Tipo de Operação", "Tipo"], TEXTOS_TIPO[tipo])
-    _marcar_opcao(page, ["Modelo"], ["Todas", "Todos"])
+    _marcar_opcao(page, ["Tipo de notas", "Tipo de nota", "Tipo da nota", "Tipo de Operação", "Tipo"], TEXTOS_TIPO[tipo])
+    _marcar_opcao(page, ["Modelo da NF-e", "Modelo"], ["Todos", "Todas"])
+
+    _aguardar_verificacao_cloudflare(page)
 
     # o botão fica no fim do formulário ("descer a barra de rolagem") -
     # _clicar já faz scroll_into_view antes de clicar
@@ -538,8 +618,7 @@ def _clicar_botao_baixar(page: Page, timeout: int) -> bool:
                         escopo.locator("input[type=button][value='Baixar' i], input[type=submit][value='Baixar' i]")):
                 try:
                     if loc.count() and loc.first.is_visible():
-                        loc.first.scroll_into_view_if_needed(timeout=TIMEOUT_CURTO_MS)
-                        loc.first.click()
+                        _clique(loc.first)
                         return True
                 except Exception:
                     continue
