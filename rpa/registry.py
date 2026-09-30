@@ -156,11 +156,10 @@ def criar_contexto(modulo: str, browser, credencial: dict):
         from rpa.sefazgo_nfe import portal
         return browser.new_context(
             accept_downloads=True,
-            client_certificates=[{
-                "origin": portal.CERTIFICADO_ORIGIN,
-                "pfx": credencial["pfx_bytes"],
-                "passphrase": credencial["senha"],
-            }],
+            client_certificates=[
+                {"origin": origem, "pfx": credencial["pfx_bytes"], "passphrase": credencial["senha"]}
+                for origem in portal.CERTIFICADO_ORIGINS
+            ],
         )
     return browser.new_context(accept_downloads=True)
 
