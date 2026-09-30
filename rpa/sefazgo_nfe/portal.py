@@ -235,17 +235,58 @@ def _formulario_consulta_visivel(page: Page, timeout: int = TIMEOUT_CURTO_MS) ->
         _existe(page, ["Pesquisar", "Consultar"], timeout=1_000) is not None
 
 
-def _abrir_menu_baixar_xml(page: Page) -> None:
-    _clicar_se_existir(page, ["Acesso Restrito"], timeout=2_000)
-    _clicar(page, ["Baixar XML NF-e", "Baixar XML NFe", "Baixar XML NFE", "Download de XML", "Baixar XML"],
-            timeout=TIMEOUT_CURTO_MS)
+def _clicar_e_seguir(page: Page, textos: list[str], timeout: int) -> str | None:
+    """Clica e, se o portal abrir o destino numa aba nova (comum nos cards
+    do painel "Portal de Aplicações e Serviços"), traz a página atual para
+    a mesma URL e fecha a aba nova - o worker trabalha sempre com o mesmo
+    objeto page; a sessão é a mesma (cookies do contexto)."""
+    antes = set(page.context.pages)
+    clicado = _clicar(page, textos, timeout=timeout)
+    if clicado is None:
+        return None
+    for _ in range(10):
+        novas = [p for p in page.context.pages if p not in antes and not p.is_closed()]
+        if novas:
+            aba = novas[0]
+            try:
+                aba.wait_for_load_state("domcontentloaded", timeout=TIMEOUT_PADRAO_MS)
+            except PlaywrightTimeoutError:
+                pass
+            destino = aba.url
+            aba.close()
+            if destino and destino != "about:blank":
+                page.goto(destino, wait_until="domcontentloaded", timeout=60_000)
+            break
+        page.wait_for_timeout(500)
+    try:
+        page.wait_for_load_state("networkidle", timeout=TIMEOUT_PADRAO_MS)
+    except PlaywrightTimeoutError:
+        pass
+    return clicado
+
+
+TEXTOS_MENU_XML = ["Baixar XML NF-e", "Baixar XML NFe", "Baixar XML NFE", "Download de XML", "Baixar XML"]
+
+
+def _abrir_menu_baixar_xml(page: Page, timeout: int = TIMEOUT_PADRAO_MS) -> None:
+    """Painel pós-login ("Portal de Aplicações e Serviços", confirmado pelo
+    print da execução real) -> card "Acesso Restrito" (ASP) -> menu Baixar
+    XML NF-e. Se o menu já estiver visível (já dentro do ASP), pula o card."""
+    if _existe(page, TEXTOS_MENU_XML, timeout=1_000) is None:
+        _clicar_e_seguir(page, ["Acesso Restrito"], timeout=timeout)
+        _clicar_se_existir(page, ["Depois", "Agora não", "Agora nao"], timeout=1_500)
+    _clicar_e_seguir(page, TEXTOS_MENU_XML, timeout=timeout)
 
 
 def login(page: Page, cpf: str, senha: str) -> None:
     page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
 
-    # se já cair direto no formulário de CPF, os cliques abaixo só não acham nada
-    _abrir_menu_baixar_xml(page)
+    # LOGIN_URL já cai direto no formulário de login (confirmado na execução
+    # real); só navega pelos menus se a senha ainda não estiver na tela
+    if _campo(page, ["Senha"], ["input[type=password]"]) is None:
+        page.wait_for_timeout(2_000)
+        if _campo(page, ["Senha"], ["input[type=password]"]) is None:
+            _abrir_menu_baixar_xml(page, timeout=TIMEOUT_CURTO_MS)
 
     campo_cpf = _campo(
         page, ["CPF", "Usuário", "Usuario", "Login"],
@@ -297,7 +338,7 @@ def abrir_formulario(page: Page) -> None:
     if not _formulario_consulta_visivel(page, timeout=TIMEOUT_PADRAO_MS):
         raise ErroPortal(
             "[consulta] tela 'Baixar XML NF-e' (Período / Inscrição Estadual) não abriu — "
-            "sessão pode ter expirado ou o menu mudou de nome"
+            f"sessão pode ter expirado ou o menu mudou de nome (página atual: {page.url})"
         )
 
 
