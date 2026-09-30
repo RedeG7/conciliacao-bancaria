@@ -31,6 +31,7 @@ aquela linha (empresa + tipo) como ERRO e segue para a próxima.
 
 from __future__ import annotations
 
+import itertools
 import re
 import tempfile
 from pathlib import Path
@@ -48,6 +49,9 @@ TIMEOUT_PESQUISA_MS = 90_000
 TIMEOUT_DOWNLOAD_MS = 300_000
 
 TEXTOS_TIPO = {"ENTRADA": ["Entrada", "Entradas"], "SAIDA": ["Saída", "Saida", "Saídas", "Saidas"]}
+
+
+_CONTADOR_MARCA = itertools.count(1)
 
 
 class ErroPortal(Exception):
@@ -165,21 +169,55 @@ def _campo(page: Page, rotulos: list[str], css: list[str]):
                 item = loc.nth(i)
                 try:
                     if item.is_visible() and item.is_editable():
-                        return item
+                        return _fixar(escopo, item)
                 except Exception:
                     continue
     return None
 
 
+def _fixar(escopo, item):
+    """Troca o localizador "por placeholder/rótulo" por um preso ao próprio
+    elemento (id ou name). Confirmado no portal real: o campo de CPF nasce
+    com placeholder "CPF" e o plugin de máscara troca na hora para
+    "___.___.___-__" - o localizador lazy por placeholder deixava de achar
+    o campo entre o "achei" e o fill(), e travava 30s até o timeout."""
+    try:
+        attrs = item.evaluate("e => ({id: e.id || '', name: e.getAttribute('name') || ''})")
+    except Exception:
+        return item
+    if attrs.get("id"):
+        return escopo.locator(f"[id='{attrs['id']}']").first
+    if attrs.get("name"):
+        return escopo.locator(f"[name='{attrs['name']}']").first
+    try:
+        handle = item.element_handle(timeout=TIMEOUT_CURTO_MS)
+        # sem id/name: marca o elemento com um atributo próprio
+        marca = f"rpa-{next(_CONTADOR_MARCA)}"
+        handle.evaluate("(e, m) => e.setAttribute('data-rpa', m)", marca)
+        return escopo.locator(f"[data-rpa='{marca}']").first
+    except Exception:
+        return item
+
+
 def _preencher(campo, valor: str) -> None:
     """fill() direto; se o campo tiver máscara que rejeita o texto colado
-    (comum em data/IE), apaga e digita só os dígitos, tecla por tecla."""
-    campo.click()
-    campo.fill(valor)
-    atual = re.sub(r"\D", "", campo.input_value() or "")
-    if atual != re.sub(r"\D", "", valor):
-        campo.fill("")
-        campo.press_sequentially(re.sub(r"\D", "", valor), delay=40)
+    (CPF, data, IE), apaga e digita só os dígitos, tecla por tecla."""
+    digitos = re.sub(r"\D", "", valor)
+    campo.click(timeout=TIMEOUT_PADRAO_MS)
+    try:
+        campo.fill(valor, timeout=TIMEOUT_CURTO_MS)
+    except PlaywrightTimeoutError:
+        pass
+    atual = re.sub(r"\D", "", campo.input_value(timeout=TIMEOUT_CURTO_MS) or "")
+    if atual != digitos:
+        campo.click(timeout=TIMEOUT_CURTO_MS)
+        campo.press("Control+a")
+        campo.press("Delete")
+        campo.press("Home")
+        campo.press_sequentially(digitos, delay=60)
+        atual = re.sub(r"\D", "", campo.input_value(timeout=TIMEOUT_CURTO_MS) or "")
+        if atual != digitos:
+            raise ErroPortal(f"[preencher] campo não aceitou o valor (ficou '{atual}', esperado '{digitos}')")
     campo.dispatch_event("change")
     campo.dispatch_event("blur")
 
@@ -211,7 +249,11 @@ def login(page: Page, cpf: str, senha: str) -> None:
 
     campo_cpf = _campo(
         page, ["CPF", "Usuário", "Usuario", "Login"],
-        ["input[name*=cpf i]", "input[id*=cpf i]", "input[name*=usuario i]", "input[name*=login i]"],
+        ["input[name*=cpf i]", "input[id*=cpf i]", "input[name*=usuario i]", "input[name*=login i]",
+         "input[name*=username i]", "input[id*=username i]",
+         # último recurso: o campo de texto logo antes do campo de senha
+         # (o placeholder "CPF" some quando a máscara do portal carrega)
+         "xpath=//input[@type='password']/preceding::input[not(@type) or @type='text' or @type='tel'][1]"],
     )
     campo_senha = _campo(page, ["Senha"], ["input[type=password]"])
     if campo_cpf is None or campo_senha is None:
@@ -220,11 +262,14 @@ def login(page: Page, cpf: str, senha: str) -> None:
         raise ErroPortal("[login] campos de CPF/senha não encontrados na tela de Acesso Restrito")
 
     _preencher(campo_cpf, cpf)
-    campo_senha.fill(senha)
-    if _clicar(page, ["Entrar", "Acessar", "Login", "Confirmar"], timeout=TIMEOUT_CURTO_MS) is None:
+    campo_senha.fill(senha, timeout=TIMEOUT_PADRAO_MS)
+    # "Autenticar": texto real do botão no Portal de Aplicações e Serviços
+    # (tela de login confirmada pelo print da primeira execução)
+    if _clicar(page, ["Autenticar", "Entrar", "Acessar", "Login", "Confirmar"], timeout=TIMEOUT_CURTO_MS) is None:
         campo_senha.press("Enter")
 
     erros = ["senha inválida", "senha invalida", "usuário ou senha", "usuario ou senha",
+             "credenciais inválidas", "credenciais invalidas", "cpf ou senha",
              "cpf inválido", "cpf invalido", "acesso negado", "não autorizado", "nao autorizado",
              "bloquead"]
     achou = _existe(page, erros, timeout=3_000)
