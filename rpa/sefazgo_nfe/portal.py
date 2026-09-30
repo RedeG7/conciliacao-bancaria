@@ -39,6 +39,9 @@ from pathlib import Path
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
 LOGIN_URL = "https://www.sefaz.go.gov.br/netaccess/000System/acessoRestrito/login/"
+# formulário "Consulta de Notas Recebidas" - destino do "Baixar XML NFE"
+# (OpenUrl2 do menu do Acesso Restrito, visto no log da execução real)
+URL_CONSULTA = "https://nfeweb.sefaz.go.gov.br/nfeweb/sites/nfe/consulta-notas-recebidas"
 # o login e o menu ficam em www.sefaz.go.gov.br, mas o formulário "Baixar
 # XML NFE" abre em nfeweb.sefaz.go.gov.br (OpenUrl2 do menu, visto no log
 # da execução real) - o certificado, se cadastrado, vale para os dois
@@ -393,21 +396,24 @@ def _abrir_menu_baixar_xml(page: Page, timeout: int = TIMEOUT_PADRAO_MS) -> None
     XML NF-e. Se o menu já estiver visível (já dentro do ASP), pula o card."""
     if _existe(page, TEXTOS_MENU_XML, timeout=1_000) is None:
         _clicar_e_seguir(page, ["Acesso Restrito"], timeout=timeout)
+        _relogar_se_pedir(page)
         _clicar_se_existir(page, ["Depois", "Agora não", "Agora nao"], timeout=1_500)
     _clicar_e_seguir(page, TEXTOS_MENU_XML, timeout=timeout)
+    _relogar_se_pedir(page)
 
 
-def login(page: Page, cpf: str, senha: str) -> None:
-    preparar_sessao(page)
-    page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
+# CPF/senha da sessão atual: o portal pede login DE NOVO ao entrar no site
+# das notas (nfeweb.sefaz.go.gov.br, depois do "Baixar XML NFE") e quando a
+# sessão expira no meio do lote - o robô preenche as mesmas credenciais
+_CREDENCIAIS: dict = {}
 
-    # LOGIN_URL já cai direto no formulário de login (confirmado na execução
-    # real); só navega pelos menus se a senha ainda não estiver na tela
-    if _campo(page, ["Senha"], ["input[type=password]"]) is None:
-        page.wait_for_timeout(2_000)
-        if _campo(page, ["Senha"], ["input[type=password]"]) is None:
-            _abrir_menu_baixar_xml(page, timeout=TIMEOUT_CURTO_MS)
 
+def _tela_de_login(page: Page) -> bool:
+    return _campo(page, ["Senha"], ["input[type=password]"]) is not None
+
+
+def _autenticar(page: Page, cpf: str, senha: str) -> None:
+    """Preenche CPF + senha na tela de login que estiver aberta e entra."""
     campo_cpf = _campo(
         page, ["CPF", "Usuário", "Usuario", "Login"],
         ["input[name*=cpf i]", "input[id*=cpf i]", "input[name*=usuario i]", "input[name*=login i]",
@@ -418,9 +424,7 @@ def login(page: Page, cpf: str, senha: str) -> None:
     )
     campo_senha = _campo(page, ["Senha"], ["input[type=password]"])
     if campo_cpf is None or campo_senha is None:
-        if _formulario_consulta_visivel(page, timeout=1_000):
-            return  # sessão ainda válida (reaproveitada)
-        raise ErroPortal("[login] campos de CPF/senha não encontrados na tela de Acesso Restrito")
+        raise ErroPortal(f"[login] campos de CPF/senha não encontrados na tela de login (página: {page.url})")
 
     _preencher(campo_cpf, cpf)
     campo_senha.fill(senha, timeout=TIMEOUT_PADRAO_MS)
@@ -436,30 +440,84 @@ def login(page: Page, cpf: str, senha: str) -> None:
     achou = _existe(page, erros, timeout=3_000)
     if achou:
         raise ErroPortal(f"[login] portal recusou o acesso ('{achou}') — confira CPF/senha em Credenciais")
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=TIMEOUT_PADRAO_MS)
+    except PlaywrightTimeoutError:
+        pass
 
     # "Deseja salvar a senha?" -> Depois (pode ser do próprio portal; o do
     # navegador nem aparece no Chromium do Playwright)
-    _clicar_se_existir(page, ["Depois", "Agora não", "Agora nao", "Lembrar depois"], timeout=3_000)
+    _clicar_se_existir(page, ["Depois", "Agora não", "Agora nao", "Lembrar depois"], timeout=2_000)
 
+
+def _relogar_se_pedir(page: Page) -> bool:
+    """Se a tela atual for de login, entra com as credenciais da sessão."""
+    if not _CREDENCIAIS or not _tela_de_login(page):
+        return False
+    _autenticar(page, _CREDENCIAIS["cpf"], _CREDENCIAIS["senha"])
+    return True
+
+
+def login(page: Page, cpf: str, senha: str) -> None:
+    _CREDENCIAIS.update(cpf=cpf, senha=senha)
+    preparar_sessao(page)
+    page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
+
+    # LOGIN_URL já cai direto no formulário de login (confirmado na execução
+    # real); só navega pelos menus se a senha ainda não estiver na tela
+    if not _tela_de_login(page):
+        page.wait_for_timeout(2_000)
+        if not _tela_de_login(page):
+            _abrir_menu_baixar_xml(page, timeout=TIMEOUT_CURTO_MS)
+
+    if not _tela_de_login(page):
+        if _formulario_consulta_visivel(page, timeout=1_000):
+            return  # sessão ainda válida (reaproveitada)
+        raise ErroPortal("[login] campos de CPF/senha não encontrados na tela de Acesso Restrito")
+
+    _autenticar(page, cpf, senha)
     abrir_formulario(page)
 
 
+def _esperar_formulario(page: Page, timeout_ms: int) -> bool:
+    """Espera o formulário aparecer; se no caminho surgir tela de login
+    (site das notas pedindo login de novo), entra e continua esperando."""
+    esperado = 0
+    relogins = 0
+    while esperado <= timeout_ms:
+        if _formulario_consulta_visivel(page, timeout=0):
+            return True
+        if relogins < 3 and _relogar_se_pedir(page):
+            relogins += 1
+            continue
+        page.wait_for_timeout(1_000)
+        esperado += 1_000
+    return False
+
+
 def abrir_formulario(page: Page) -> None:
-    """Garante que a tela "Baixar XML NF-e" (formulário de consulta) está
-    aberta - clica em Nova consulta se estiver no resultado anterior, ou
-    no menu Baixar XML NF-e se estiver em outra tela."""
+    """Garante que a tela "Consulta de Notas Recebidas" está aberta: Nova
+    consulta (se estiver no resultado anterior), senão Acesso Restrito >
+    Baixar XML NFE. Entra de novo com CPF/senha sempre que o portal pedir.
+    Última tentativa: vai direto para URL_CONSULTA (endereço que o próprio
+    menu abre, visto no log da execução real)."""
+    _relogar_se_pedir(page)
     if _formulario_consulta_visivel(page, timeout=1_000):
         return
     _clicar_se_existir(page, ["Nova consulta", "Nova Consulta", "Nova pesquisa"], timeout=1_500)
-    if _formulario_consulta_visivel(page, timeout=3_000):
+    if _esperar_formulario(page, 3_000):
         return
     _clicar_se_existir(page, ["Depois"], timeout=1_000)
     _abrir_menu_baixar_xml(page)
-    if not _formulario_consulta_visivel(page, timeout=TIMEOUT_PADRAO_MS):
-        raise ErroPortal(
-            "[consulta] tela 'Baixar XML NF-e' (Período / Inscrição Estadual) não abriu — "
-            f"sessão pode ter expirado ou o menu mudou de nome (página atual: {page.url})"
-        )
+    if _esperar_formulario(page, TIMEOUT_PADRAO_MS):
+        return
+    page.goto(URL_CONSULTA, wait_until="domcontentloaded", timeout=60_000)
+    if _esperar_formulario(page, TIMEOUT_PADRAO_MS):
+        return
+    raise ErroPortal(
+        "[consulta] tela 'Consulta de Notas Recebidas' (Período / Inscrição Estadual) não abriu — "
+        f"sessão pode ter expirado ou o menu mudou de nome (página atual: {page.url})"
+    )
 
 
 # ---------------------------------------------------------------------------
