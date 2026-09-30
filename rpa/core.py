@@ -121,6 +121,29 @@ def garantir_schema() -> None:
             ALTER TABLE rpa_empresas
             ADD COLUMN IF NOT EXISTS screenshot_erro BYTEA
         """)
+        # RPA NF GO (rpa/sefazgo_nfe): cada linha é uma consulta (empresa +
+        # ENTRADA/SAIDA) na SEFAZ-GO. inscricao_estadual vem da planilha;
+        # qtd_notas_portal é o total que a SEFAZ mostra na tela de resultado
+        # e qtd_xml quantos XMLs de nota vieram no ZIP (conferência de
+        # download incompleto); evidencia_png é o print da tela de
+        # resultado, gravado também em sucesso (diferente de
+        # screenshot_erro); observacao guarda divergência/aviso sem ser erro.
+        conn.execute("""
+            ALTER TABLE rpa_empresas
+            ADD COLUMN IF NOT EXISTS inscricao_estadual TEXT,
+            ADD COLUMN IF NOT EXISTS qtd_notas_portal INTEGER,
+            ADD COLUMN IF NOT EXISTS qtd_xml INTEGER,
+            ADD COLUMN IF NOT EXISTS evidencia_png BYTEA,
+            ADD COLUMN IF NOT EXISTS observacao TEXT
+        """)
+        # pasta_destino: caminho informado na tela ao criar a execução, onde
+        # um worker rodando no PC do escritório grava os arquivos (ver
+        # RPA_SALVAR_EM_DISCO em rpa_worker.py). O worker do VPS não tem
+        # acesso a esse disco - lá os arquivos ficam só no banco/Hub.
+        conn.execute("""
+            ALTER TABLE rpa_execucoes
+            ADD COLUMN IF NOT EXISTS pasta_destino TEXT
+        """)
         conn.commit()
 
 
@@ -250,7 +273,7 @@ def montar_competencia(mes: int, ano: int) -> dict:
 
 def criar_execucao(
     escritorio_id: str, modulo: str, planilha_bytes: bytes, planilha_nome: str,
-    criado_por: str, empresas: list[dict], competencia: str,
+    criado_por: str, empresas: list[dict], competencia: str, pasta_destino: str = "",
 ) -> int:
     """Cria a execucao e ja insere as linhas de empresa (status PENDENTE),
     tudo numa transacao so. competencia (formato "MM/AAAA") e a escolhida
@@ -259,19 +282,22 @@ def criar_execucao(
     rpa_worker.py), em vez de recalcular "mes anterior" na hora de rodar."""
     with auth.conectar() as conn:
         linha = conn.execute("""
-            INSERT INTO rpa_execucoes (escritorio_id, modulo, planilha_original, planilha_nome, criado_por, competencia)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO rpa_execucoes (escritorio_id, modulo, planilha_original, planilha_nome, criado_por, competencia, pasta_destino)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (escritorio_id, modulo, planilha_bytes, planilha_nome, criado_por, competencia)).fetchone()
+        """, (
+            escritorio_id, modulo, planilha_bytes, planilha_nome, criado_por, competencia, pasta_destino or None,
+        )).fetchone()
         execucao_id = linha["id"]
 
         for empresa in empresas:
             conn.execute("""
-                INSERT INTO rpa_empresas (execucao_id, codigo, cnpj_cpf, obrigacao, municipio, razao_social)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO rpa_empresas (execucao_id, codigo, cnpj_cpf, obrigacao, municipio, razao_social, inscricao_estadual)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (
                 execucao_id, empresa["codigo"], empresa["cnpj_cpf"], empresa["obrigacao"],
                 empresa.get("municipio") or None, empresa.get("razao_social") or None,
+                empresa.get("inscricao_estadual") or None,
             ))
 
         conn.commit()
@@ -372,7 +398,7 @@ def reabrir_execucao_se_incompleta(execucao_id: int) -> bool:
 def limpar_arquivos_vencidos() -> int:
     """Varredura preguiçosa (chamada a cada carregamento das telas de RPA,
     sem cron/scheduler separado): apaga só as colunas BYTEA (pdf, xml_zip,
-    screenshot_erro) das empresas cuja execução concluiu há mais de
+    screenshot_erro, evidencia_png) das empresas cuja execução concluiu há mais de
     RETENCAO_ARQUIVOS_DIAS dias - a lista de controle (execução, empresas,
     status, código, CNPJ, erro) fica intacta pra sempre, só o arquivo em
     si some. Idempotente e barato quando não há nada vencido (WHERE
@@ -384,13 +410,13 @@ def limpar_arquivos_vencidos() -> int:
             UPDATE rpa_empresas SET
                 pdf = NULL, pdf_nome = NULL,
                 xml_zip = NULL, xml_zip_nome = NULL,
-                screenshot_erro = NULL
+                screenshot_erro = NULL, evidencia_png = NULL
             WHERE execucao_id IN (
                 SELECT id FROM rpa_execucoes
                 WHERE concluido_em IS NOT NULL
                   AND concluido_em < now() - make_interval(days => %s)
             )
-            AND (pdf IS NOT NULL OR xml_zip IS NOT NULL OR screenshot_erro IS NOT NULL)
+            AND (pdf IS NOT NULL OR xml_zip IS NOT NULL OR screenshot_erro IS NOT NULL OR evidencia_png IS NOT NULL)
             RETURNING id
             """,
             (RETENCAO_ARQUIVOS_DIAS,),
@@ -495,12 +521,19 @@ def atualizar_empresa(
     pdf: Optional[bytes] = None, pdf_nome: str = "",
     xml_zip: Optional[bytes] = None, xml_zip_nome: str = "",
     screenshot_erro: Optional[bytes] = None,
+    qtd_notas_portal: Optional[int] = None, qtd_xml: Optional[int] = None,
+    evidencia_png: Optional[bytes] = None, observacao: str = "",
 ) -> None:
     with auth.conectar() as conn:
         conn.execute("""
             UPDATE rpa_empresas
             SET status = %s, movimento = %s, erro = %s, pdf = %s, pdf_nome = %s,
-                xml_zip = %s, xml_zip_nome = %s, screenshot_erro = %s, atualizado_em = now()
+                xml_zip = %s, xml_zip_nome = %s, screenshot_erro = %s,
+                qtd_notas_portal = %s, qtd_xml = %s, evidencia_png = %s, observacao = %s,
+                atualizado_em = now()
             WHERE id = %s
-        """, (status, movimento, erro, pdf, pdf_nome, xml_zip, xml_zip_nome, screenshot_erro, empresa_id))
+        """, (
+            status, movimento, erro, pdf, pdf_nome, xml_zip, xml_zip_nome, screenshot_erro,
+            qtd_notas_portal, qtd_xml, evidencia_png, observacao, empresa_id,
+        ))
         conn.commit()

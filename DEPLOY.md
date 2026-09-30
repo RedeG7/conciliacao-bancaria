@@ -184,3 +184,51 @@ Para restaurar: `docker exec -i conciliacao-db psql -U conciliacao conciliacao <
 cd /opt/conciliacao-bancaria
 docker compose pull && docker compose up -d
 ```
+
+## RPA NF GO (download de XML de NF-e na SEFAZ-GO)
+
+Card próprio na home do Hub ("🧾 RPA NF GO"). Módulo `sefazgo_nfe`
+(`rpa/sefazgo_nfe/`), processado pelo mesmo worker dos outros RPAs - já
+incluído em `WORKER_MODULOS` no `docker-compose.yml`.
+
+1. **Credenciais** (na própria tela, cifradas com `RPA_ENC_KEY`, nunca no
+   código): CPF + senha do Acesso Restrito da SEFAZ-GO (obrigatório) e o
+   certificado A1 (.pfx) do escritório (opcional - apresentado quando o
+   portal pede certificado, no lugar da janela de seleção do navegador).
+2. **Planilha**: `Código da Empresa`, `Razão Social`, `CNPJ`,
+   `Inscrição Estadual` (dá pra baixar o modelo na tela). Cada empresa vira
+   duas consultas na fila: ENTRADA e depois SAIDA.
+3. **Competência**: vem preenchida com o mês anterior; o período usado é
+   do dia 1 ao último dia do mês escolhido.
+4. **Resultado por consulta**: `ENTRADA_MMAAAA.zip` / `SAIDA_MMAAAA.zip`,
+   print da tela de resultado (evidência), total de notas mostrado pela
+   SEFAZ e total de XMLs de nota dentro do ZIP. Se o ZIP vier com MENOS
+   notas que a SEFAZ mostrou, a consulta fica como erro (download
+   incompleto) e pode ser reprocessada; os arquivos baixados ficam salvos.
+5. **Onde ficam os arquivos**: rodando no VPS, no botão "Baixar tudo
+   (.zip)" da execução, na estrutura
+   `RPA NF GO/<código - empresa>/<MMAAAA>/ENTRADA|SAIDA/`.
+
+**Gravar direto numa pasta do PC do escritório** (ex.: `C:\RPA NF GO`):
+rode o worker nesse PC em vez do VPS. Tire `sefazgo_nfe` do
+`WORKER_MODULOS` do VPS (senão os dois disputam a fila), abra o túnel pro
+Postgres e suba o worker local:
+
+```powershell
+ssh -N -L 5432:127.0.0.1:5432 root@SEU_IP   # deixe aberto numa janela
+# em outra janela, na pasta do repositorio (pip install -r requirements-worker.txt; playwright install chromium):
+$env:DATABASE_URL="postgresql://conciliacao:SENHA_DO_ENV@127.0.0.1:5432/conciliacao"
+$env:RPA_ENC_KEY="mesma chave do .env do VPS"
+$env:WORKER_MODULOS="sefazgo_nfe"
+$env:RPA_SALVAR_EM_DISCO="1"
+python rpa_worker.py
+```
+
+Os arquivos vão para a "Pasta de destino dos XMLs" informada ao criar a
+execução (ou para `RPA_PASTA_DESTINO`, se definida), com a mesma estrutura
+de pastas, e continuam aparecendo no Hub.
+
+> O fluxo foi escrito a partir do roteiro manual e validado contra uma
+> simulação local do portal - acompanhe a primeira execução real: se a
+> SEFAZ usar outro texto em algum botão/campo, a consulta fica com erro e
+> o print da tela mostra exatamente em que passo parou.

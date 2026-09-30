@@ -74,7 +74,9 @@ services:
       # bloqueia o IP de datacenter deste VPS mesmo com Chromium headed
       # (confirmado ao vivo) - esse modulo roda num worker local separado,
       # numa rede que o Cloudflare nao sinaliza (ver run-worker-issnet-local.ps1).
-      - WORKER_MODULOS=issweb_rest_dms
+      # sefazgo_nfe (RPA NF GO): portal da SEFAZ-GO, sem Cloudflare
+      # conhecido - roda no VPS; arquivos ficam no Hub (Baixar tudo .zip).
+      - WORKER_MODULOS=issweb_rest_dms,sefazgo_nfe
     depends_on:
       db:
         condition: service_healthy

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import tempfile
 import zipfile
 from datetime import date, datetime, timezone
@@ -33,6 +34,7 @@ import historico
 import conciliacao_bancaria as cb
 from rpa import core as rpa_core
 from rpa import registry as rpa_registry
+from rpa.sefazgo_nfe import arquivos as nfgo_arquivos
 
 st.set_page_config(page_title="Hub App", page_icon="🧩", layout="wide")
 
@@ -921,6 +923,7 @@ def _planilha_modelo(modulo_info: dict) -> bytes:
     linha_exemplo = {
         "Código da Empresa": "68", "CNPJ/CPF": "00.000.000/0001-00",
         "Razão Social": "Empresa Exemplo LTDA", "Município": modulo_info["municipio_alvo"].split(" / ")[0],
+        "CNPJ": "00.000.000/0001-00", "Inscrição Estadual": "10.123.456-7",
     }
     ws.append([linha_exemplo.get(c, "") for c in colunas])
     buffer = io.BytesIO()
@@ -1187,14 +1190,254 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
                         st.rerun()
 
 
-def _tela_rpa_hub() -> None:
+_STATUS_NFGO = {
+    rpa_core.STATUS_PENDENTE: "⏳ Aguardando", rpa_core.STATUS_RODANDO: "🔄 Executando",
+    rpa_core.STATUS_ERRO: "❌ Erro",
+}
+
+
+def _status_linha_nfgo(linha: dict | None) -> str:
+    if linha is None:
+        return "—"
+    if linha["status"] == rpa_core.STATUS_CONCLUIDO:
+        return "➖ Sem movimento" if linha.get("movimento") == "Sem movimento" else "✅ Concluído"
+    return _STATUS_NFGO.get(linha["status"], linha["status"])
+
+
+def _status_empresa_nfgo(linhas: list[dict]) -> str:
+    """Status consolidado da empresa (Entrada + Saída): o pior dos dois."""
+    status = [_status_linha_nfgo(l) for l in linhas]
+    for rotulo in ("❌ Erro", "🔄 Executando", "⏳ Aguardando"):
+        if rotulo in status:
+            return rotulo
+    if all(s == "➖ Sem movimento" for s in status):
+        return "➖ Sem movimento"
+    return "✅ Concluído"
+
+
+def _agrupar_nfgo(empresas_exec: list[dict]) -> list[tuple[dict, dict | None, dict | None]]:
+    """[(dados da empresa, linha ENTRADA, linha SAIDA)] na ordem da planilha."""
+    grupos: dict = {}
+    for e in empresas_exec:
+        chave = (e["codigo"], e.get("inscricao_estadual") or "")
+        grupo = grupos.setdefault(chave, {"empresa": e, "ENTRADA": None, "SAIDA": None})
+        grupo[(e.get("obrigacao") or "").upper()] = e
+    return [(g["empresa"], g["ENTRADA"], g["SAIDA"]) for g in grupos.values()]
+
+
+def _qtd_xml_nfgo(linha: dict | None):
+    if linha is None or linha["status"] in (rpa_core.STATUS_PENDENTE, rpa_core.STATUS_RODANDO):
+        return None
+    return linha.get("qtd_xml") if linha.get("qtd_xml") is not None else (0 if linha.get("movimento") == "Sem movimento" else None)
+
+
+def _linhas_grade_nfgo(execucao: dict, empresas_exec: list[dict]) -> list[dict]:
+    grade = []
+    for empresa, entrada, saida in _agrupar_nfgo(empresas_exec):
+        qtd_e, qtd_s = _qtd_xml_nfgo(entrada), _qtd_xml_nfgo(saida)
+        atualizados = [l["atualizado_em"] for l in (entrada, saida) if l and l.get("atualizado_em")]
+        observacoes = [
+            f"{tipo}: {l.get('observacao') or l.get('erro')}"
+            for tipo, l in (("Entrada", entrada), ("Saída", saida))
+            if l and (l.get("observacao") or l.get("erro"))
+        ]
+        grade.append({
+            "Código": empresa["codigo"],
+            "Empresa": empresa.get("razao_social") or "",
+            "CNPJ": empresa["cnpj_cpf"],
+            "IE": empresa.get("inscricao_estadual") or "",
+            "Competência": execucao.get("competencia") or "",
+            "XML Entrada": qtd_e,
+            "SEFAZ Entrada": entrada.get("qtd_notas_portal") if entrada else None,
+            "XML Saída": qtd_s,
+            "SEFAZ Saída": saida.get("qtd_notas_portal") if saida else None,
+            "Total": (qtd_e or 0) + (qtd_s or 0) if qtd_e is not None or qtd_s is not None else None,
+            "Status": _status_empresa_nfgo([l for l in (entrada, saida) if l]),
+            "Data/Hora": max(atualizados).strftime("%d/%m/%Y %H:%M") if atualizados else "",
+            "Observação": " | ".join(observacoes),
+        })
+    return grade
+
+
+def _montar_zip_nfgo(execucao: dict, empresas_exec: list[dict]) -> bytes:
+    """Mesma estrutura que o worker grava em disco (ver
+    rpa/sefazgo_nfe/arquivos.py pasta_relativa): RPA NF GO/<código -
+    empresa>/<MMAAAA>/ENTRADA|SAIDA/ com o ZIP de XMLs e o print da
+    consulta, mais a planilha-resumo na raiz."""
+    competencia = execucao.get("competencia") or ""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for e in empresas_exec:
+            tipo = (e.get("obrigacao") or "").upper()
+            pasta = nfgo_arquivos.pasta_relativa(e["codigo"], e.get("razao_social") or "", competencia, tipo)
+            if e.get("xml_zip"):
+                zf.writestr(f"{pasta}/{e['xml_zip_nome']}", bytes(e["xml_zip"]))
+            if e.get("evidencia_png"):
+                zf.writestr(f"{pasta}/{nfgo_arquivos.nome_evidencia(tipo, competencia)}", bytes(e["evidencia_png"]))
+
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "RPA NF GO"
+        grade = _linhas_grade_nfgo(execucao, empresas_exec)
+        colunas = list(grade[0].keys()) if grade else ["Código"]
+        ws.append(colunas)
+        for linha in grade:
+            ws.append([linha[c] for c in colunas])
+        planilha = io.BytesIO()
+        wb.save(planilha)
+        zf.writestr(
+            f"{nfgo_arquivos.PASTA_RAIZ}/Relatorio_RPA_NF_GO_{nfgo_arquivos.competencia_pasta(competencia)}.xlsx",
+            planilha.getvalue(),
+        )
+    return buffer.getvalue()
+
+
+def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
+    """Execução do RPA NF GO: grade Código | Empresa | CNPJ | IE |
+    Competência | XML Entrada | XML Saída | Total | Status | Data/Hora e,
+    por empresa, os ZIPs e o print (evidência) de cada consulta."""
+    empresas_exec = rpa_core.listar_empresas(execucao["id"])
+    concluidas = [e for e in empresas_exec if e["status"] == rpa_core.STATUS_CONCLUIDO]
+    erros = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_ERRO)
+    total_entrada = sum(e.get("qtd_xml") or 0 for e in empresas_exec if e.get("obrigacao") == "ENTRADA")
+    total_saida = sum(e.get("qtd_xml") or 0 for e in empresas_exec if e.get("obrigacao") == "SAIDA")
+    _competencia_exec = f" · competência {execucao['competencia']}" if execucao.get("competencia") else ""
+    titulo = (
+        f"{emoji_status.get(execucao['status'], '•')} Execução #{execucao['id']} — "
+        f"{execucao['criado_em']:%d/%m/%Y %H:%M}{_competencia_exec} — "
+        f"Entrada: {total_entrada} XMLs | Saída: {total_saida} XMLs | {execucao['status']}"
+        f"{f' ({erros} consulta(s) com erro)' if erros else ''}"
+    )
+    with st.expander(titulo):
+        _pasta = f" · Pasta: {execucao['pasta_destino']}" if execucao.get("pasta_destino") else ""
+        st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}{_pasta}")
+        if concluidas and execucao.get("concluido_em"):
+            _barra_retencao_arquivos(execucao["concluido_em"])
+        _cols_acoes = st.columns(2)
+        if any(e.get("xml_zip") or e.get("evidencia_png") for e in empresas_exec):
+            _cols_acoes[0].download_button(
+                "📦 Baixar tudo (.zip, uma pasta por empresa/competência/tipo)",
+                _montar_zip_nfgo(execucao, empresas_exec),
+                file_name=f"RPA NF GO {nfgo_arquivos.competencia_pasta(execucao.get('competencia') or '')}.zip",
+                key=f"zip_nfgo_{execucao['id']}",
+            )
+        if erros:
+            if _cols_acoes[1].button(
+                f"🔁 Reprocessar {erros} consulta(s) com erro", key=f"reprocessar_nfgo_{execucao['id']}",
+            ):
+                qtd = rpa_core.reprocessar_falhas(execucao["id"])
+                _flash("flash_rpa_hub", f"✅ {qtd} consulta(s) voltaram para a fila — o worker processa em instantes.")
+                st.rerun()
+
+        st.dataframe(_linhas_grade_nfgo(execucao, empresas_exec), use_container_width=True, hide_index=True)
+
+        st.markdown("**Arquivos por empresa**")
+        for empresa, entrada, saida in _agrupar_nfgo(empresas_exec):
+            cols = st.columns([3, 2, 2])
+            cols[0].write(nfgo_arquivos.nome_pasta_empresa(empresa["codigo"], empresa.get("razao_social") or ""))
+            for col, tipo, linha in ((cols[1], "ENTRADA", entrada), (cols[2], "SAIDA", saida)):
+                if linha is None:
+                    continue
+                col.caption(f"{tipo.title()}: {_status_linha_nfgo(linha)}")
+                if linha.get("xml_zip"):
+                    col.download_button(
+                        f"⬇️ {linha['xml_zip_nome']}", bytes(linha["xml_zip"]), file_name=linha["xml_zip_nome"],
+                        key=f"nfgo_zip_{linha['id']}",
+                    )
+                if linha.get("evidencia_png"):
+                    with col.popover("🖼️ Print da consulta"):
+                        st.image(bytes(linha["evidencia_png"]))
+                if linha["status"] == rpa_core.STATUS_ERRO:
+                    col.caption(f"⚠️ {linha.get('erro') or ''}")
+                    if linha.get("screenshot_erro"):
+                        with col.popover("🖼️ Tela do erro"):
+                            st.image(bytes(linha["screenshot_erro"]))
+                elif linha.get("observacao"):
+                    col.caption(f"⚠️ {linha['observacao']}")
+
+
+def _bloco_credenciais_certificado_senha(
+    modulo_id: str, modulo_info: dict, escritorio_id: str, usuario: str,
+) -> dict | None:
+    """Credenciais do RPA NF GO: CPF + senha do Acesso Restrito da SEFAZ-GO
+    (obrigatório - é o que o formulário de login pede) e o certificado A1
+    do escritório (opcional - apresentado no TLS quando o portal pedir, no
+    lugar da janela "Selecionar certificado" do navegador). As duas ficam
+    cifradas em rpa_credenciais (RPA_ENC_KEY), nunca em código. Retorna os
+    metadados da credencial do portal (None = ainda não cadastrada)."""
+    sistema_portal = modulo_info["sistema_credencial_portal"]
+    sistema_cert = modulo_info["sistema_credencial"]
+
+    st.subheader("Credenciais")
+    cred_portal = rpa_core.tem_credencial(escritorio_id, sistema_portal)
+    cred_cert = rpa_core.tem_credencial(escritorio_id, sistema_cert)
+    col_portal, col_cert = st.columns(2)
+    with col_portal:
+        if cred_portal:
+            st.caption(
+                f"✅ Acesso SEFAZ-GO — CPF {cred_portal['cnpj']} · "
+                f"atualizado em {cred_portal['atualizado_em']:%d/%m/%Y %H:%M} por {cred_portal['atualizado_por']}"
+            )
+        else:
+            st.caption("⚠️ CPF/senha do Acesso Restrito ainda não cadastrados (obrigatório).")
+    with col_cert:
+        if cred_cert:
+            st.caption(
+                f"✅ Certificado — titular {cred_cert['cnpj']} · "
+                f"atualizado em {cred_cert['atualizado_em']:%d/%m/%Y %H:%M} por {cred_cert['atualizado_por']}"
+            )
+        else:
+            st.caption("ℹ️ Nenhum certificado cadastrado (opcional — só se o portal pedir).")
+
+    with st.expander("Cadastrar / atualizar acesso SEFAZ-GO (CPF + senha)"):
+        with st.form(f"credencial_portal_form_{modulo_id}", clear_on_submit=True):
+            cpf_acesso = st.text_input("CPF de acesso (cadastro do escritório)")
+            senha_acesso = st.text_input("Senha do Acesso Restrito", type="password")
+            salvar_portal = st.form_submit_button("Salvar", type="primary")
+        if salvar_portal:
+            if not cpf_acesso.strip() or not senha_acesso:
+                st.error("Informe CPF e senha.")
+            else:
+                cpf_limpo = re.sub(r"\D", "", cpf_acesso)
+                rpa_core.salvar_credencial(escritorio_id, sistema_portal, cpf_limpo, senha_acesso, usuario)
+                _flash("flash_rpa_hub", "✅ Acesso SEFAZ-GO salvo.")
+                st.rerun()
+
+    with st.expander("Cadastrar / atualizar certificado digital do escritório (A1)"):
+        st.caption(
+            "Só certificado A1 (arquivo .pfx/.p12) — A3 (token/cartão) não dá pra usar no "
+            "worker do servidor. O robô apresenta este certificado quando o portal pedir, "
+            "no lugar da janela de seleção de certificado do navegador."
+        )
+        with st.form(f"credencial_cert_form_{modulo_id}", clear_on_submit=True):
+            titular_cert = st.text_input("CNPJ/CPF do titular do certificado")
+            up_certificado = st.file_uploader("Certificado digital A1 (.pfx/.p12)", type=["pfx", "p12"])
+            senha_cert = st.text_input("Senha do certificado", type="password")
+            salvar_cert = st.form_submit_button("Salvar", type="primary")
+        if salvar_cert:
+            if not titular_cert.strip() or not up_certificado or not senha_cert:
+                st.error("Informe o titular, o arquivo do certificado e a senha.")
+            else:
+                rpa_core.salvar_credencial_certificado(
+                    escritorio_id, sistema_cert, titular_cert.strip(), up_certificado.getvalue(), senha_cert, usuario,
+                )
+                _flash("flash_rpa_hub", "✅ Certificado salvo.")
+                st.rerun()
+    return cred_portal
+
+
+def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs") -> None:
     """Hub de RPAs do escritório: cadastro de credenciais de procurador,
     upload de planilha e acompanhamento das execuções, por módulo (ISS Web
     é o primeiro — novos módulos só entram em rpa/registry.py, esta tela
     não muda). O processamento de verdade roda no worker separado
     (rpa_worker.py, container à parte com Playwright) — esta tela só
-    enfileira em rpa_execucoes/rpa_empresas e mostra status/resultado."""
-    st.title("🤖 Hub de RPAs")
+    enfileira em rpa_execucoes/rpa_empresas e mostra status/resultado.
+
+    modulos: quais módulos esta tela mostra - padrão são os que não têm card
+    próprio na home (sem 'app_home' no registry); o RPA NF GO passa só o dele."""
+    st.title(titulo)
     if st.button("← Início"):
         st.session_state["tela"] = "home"
         st.rerun()
@@ -1203,10 +1446,16 @@ def _tela_rpa_hub() -> None:
     escritorio_id = st.session_state.get("escritorio_id")
     usuario = st.session_state.get("usuario_logado")
 
-    modulo_id = st.selectbox(
-        "Rotina", list(rpa_registry.MODULOS.keys()),
-        format_func=lambda m: rpa_registry.MODULOS[m]["titulo"],
-    )
+    if modulos is None:
+        modulos = [m for m, info in rpa_registry.MODULOS.items() if not info.get("app_home")]
+    if len(modulos) == 1:
+        modulo_id = modulos[0]
+        st.caption(rpa_registry.MODULOS[modulo_id]["titulo"])
+    else:
+        modulo_id = st.selectbox(
+            "Rotina", modulos,
+            format_func=lambda m: rpa_registry.MODULOS[m]["titulo"],
+        )
     modulo_info = rpa_registry.MODULOS[modulo_id]
     sistema = modulo_info["sistema_credencial"]
 
@@ -1223,58 +1472,79 @@ def _tela_rpa_hub() -> None:
     )
     competencia_escolhida = f"{_data_competencia.month:02d}/{_data_competencia.year}"
 
-    st.subheader("Credenciais do procurador")
-    cred = rpa_core.tem_credencial(escritorio_id, sistema)
-    if cred:
-        st.caption(
-            f"✅ Cadastrada — CNPJ {cred['cnpj']} · "
-            f"atualizado em {cred['atualizado_em']:%d/%m/%Y %H:%M} por {cred['atualizado_por']}"
-        )
-    else:
-        st.caption("⚠️ Nenhuma credencial cadastrada ainda para esta rotina.")
-
     tipo_auth = modulo_info.get("tipo_auth", "senha")
-    with st.expander("Cadastrar / atualizar credencial"):
-        if tipo_auth == "certificado":
+    if tipo_auth == "certificado_senha":
+        cred = _bloco_credenciais_certificado_senha(modulo_id, modulo_info, escritorio_id, usuario)
+    else:
+        st.subheader("Credenciais do procurador")
+        cred = rpa_core.tem_credencial(escritorio_id, sistema)
+        if cred:
             st.caption(
-                "Só certificado A1 (arquivo .pfx/.p12) — A3 é um token/leitor físico, "
-                "não dá pra usar no worker do servidor. Para A3, feche essa empresa pelo "
-                "navegador da própria máquina onde o leitor está instalado."
+                f"✅ Cadastrada — CNPJ {cred['cnpj']} · "
+                f"atualizado em {cred['atualizado_em']:%d/%m/%Y %H:%M} por {cred['atualizado_por']}"
             )
-            with st.form(f"credencial_form_{modulo_id}", clear_on_submit=True):
-                cnpj_proc = st.text_input("CPF/CNPJ do titular do certificado")
-                up_certificado = st.file_uploader("Certificado digital A1 (.pfx/.p12)", type=["pfx", "p12"])
-                senha_cert = st.text_input("Senha do certificado", type="password")
-                salvar_cred = st.form_submit_button("Salvar", type="primary")
-            if salvar_cred:
-                if not cnpj_proc.strip() or not up_certificado or not senha_cert:
-                    st.error("Informe CPF/CNPJ, o arquivo do certificado e a senha.")
-                else:
-                    rpa_core.salvar_credencial_certificado(
-                        escritorio_id, sistema, cnpj_proc.strip(), up_certificado.getvalue(), senha_cert, usuario,
-                    )
-                    _flash("flash_rpa_hub", "✅ Certificado salvo.")
-                    st.rerun()
         else:
-            with st.form(f"credencial_form_{modulo_id}", clear_on_submit=True):
-                cnpj_proc = st.text_input("CNPJ do procurador")
-                senha_proc = st.text_input("Senha do procurador", type="password")
-                salvar_cred = st.form_submit_button("Salvar", type="primary")
-            if salvar_cred:
-                if not cnpj_proc.strip() or not senha_proc:
-                    st.error("Informe CNPJ e senha.")
-                else:
-                    rpa_core.salvar_credencial(escritorio_id, sistema, cnpj_proc.strip(), senha_proc, usuario)
-                    _flash("flash_rpa_hub", "✅ Credencial salva.")
-                    st.rerun()
+            st.caption("⚠️ Nenhuma credencial cadastrada ainda para esta rotina.")
+
+        with st.expander("Cadastrar / atualizar credencial"):
+            if tipo_auth == "certificado":
+                st.caption(
+                    "Só certificado A1 (arquivo .pfx/.p12) — A3 é um token/leitor físico, "
+                    "não dá pra usar no worker do servidor. Para A3, feche essa empresa pelo "
+                    "navegador da própria máquina onde o leitor está instalado."
+                )
+                with st.form(f"credencial_form_{modulo_id}", clear_on_submit=True):
+                    cnpj_proc = st.text_input("CPF/CNPJ do titular do certificado")
+                    up_certificado = st.file_uploader("Certificado digital A1 (.pfx/.p12)", type=["pfx", "p12"])
+                    senha_cert = st.text_input("Senha do certificado", type="password")
+                    salvar_cred = st.form_submit_button("Salvar", type="primary")
+                if salvar_cred:
+                    if not cnpj_proc.strip() or not up_certificado or not senha_cert:
+                        st.error("Informe CPF/CNPJ, o arquivo do certificado e a senha.")
+                    else:
+                        rpa_core.salvar_credencial_certificado(
+                            escritorio_id, sistema, cnpj_proc.strip(), up_certificado.getvalue(), senha_cert, usuario,
+                        )
+                        _flash("flash_rpa_hub", "✅ Certificado salvo.")
+                        st.rerun()
+            else:
+                with st.form(f"credencial_form_{modulo_id}", clear_on_submit=True):
+                    cnpj_proc = st.text_input("CNPJ do procurador")
+                    senha_proc = st.text_input("Senha do procurador", type="password")
+                    salvar_cred = st.form_submit_button("Salvar", type="primary")
+                if salvar_cred:
+                    if not cnpj_proc.strip() or not senha_proc:
+                        st.error("Informe CNPJ e senha.")
+                    else:
+                        rpa_core.salvar_credencial(escritorio_id, sistema, cnpj_proc.strip(), senha_proc, usuario)
+                        _flash("flash_rpa_hub", "✅ Credencial salva.")
+                        st.rerun()
 
     st.divider()
     _flash("flash_rpa_hub")
 
     st.subheader("Nova execução")
+    _eh_nfgo = modulo_id == "sefazgo_nfe"
     if not cred:
         st.info("Cadastre a credencial do procurador acima antes de enviar uma planilha.")
     else:
+        pasta_destino = ""
+        if _eh_nfgo:
+            # vem com a pasta da última execução (o escritório costuma usar sempre a mesma)
+            _ultima_pasta = next(
+                (e["pasta_destino"] for e in rpa_core.listar_execucoes(escritorio_id, modulo_id) if e.get("pasta_destino")),
+                r"C:\RPA NF GO",
+            )
+            pasta_destino = st.text_input(
+                "Pasta de destino dos XMLs",
+                value=_ultima_pasta,
+                key=f"pasta_destino_{modulo_id}",
+                help="Onde os arquivos são gravados quando o robô roda no PC do escritório "
+                     "(worker local com RPA_SALVAR_EM_DISCO=1). Dentro dela: "
+                     "RPA NF GO / CÓDIGO - EMPRESA / MMAAAA / ENTRADA e SAIDA, com "
+                     "ENTRADA_MMAAAA.zip, SAIDA_MMAAAA.zip e o print de cada consulta. Rodando no "
+                     "servidor, os mesmos arquivos ficam no \"Baixar tudo (.zip)\" abaixo, na mesma estrutura.",
+            )
         st.caption("Colunas esperadas: " + " · ".join(modulo_info["colunas_planilha"]))
         st.download_button(
             "📥 Baixar planilha modelo (.xlsx)", _planilha_modelo(modulo_info),
@@ -1292,17 +1562,27 @@ def _tela_rpa_hub() -> None:
             else:
                 st.success(f"{len(empresas)} empresa(s) encontradas na planilha para esta rotina.")
                 with st.expander("Ver empresas identificadas"):
-                    st.dataframe(
-                        [
-                            {"Código": e["codigo"], "CNPJ/CPF": e["cnpj_cpf"], "Obrigação": e["obrigacao"]}
-                            for e in empresas
-                        ],
-                        use_container_width=True, hide_index=True,
-                    )
+                    if _eh_nfgo:
+                        st.dataframe(
+                            [
+                                {"Código": e["codigo"], "Empresa": e["razao_social"], "CNPJ": e["cnpj_cpf"],
+                                 "Inscrição Estadual": e["inscricao_estadual"]}
+                                for e in empresas if e["obrigacao"] == "ENTRADA"
+                            ],
+                            use_container_width=True, hide_index=True,
+                        )
+                    else:
+                        st.dataframe(
+                            [
+                                {"Código": e["codigo"], "CNPJ/CPF": e["cnpj_cpf"], "Obrigação": e["obrigacao"]}
+                                for e in empresas
+                            ],
+                            use_container_width=True, hide_index=True,
+                        )
                 if st.button("🚀 Iniciar processamento", type="primary"):
                     execucao_id = rpa_core.criar_execucao(
                         escritorio_id, modulo_id, conteudo, up_planilha.name, usuario, empresas,
-                        competencia_escolhida,
+                        competencia_escolhida, pasta_destino=pasta_destino.strip(),
                     )
                     _flash(
                         "flash_rpa_hub",
@@ -1323,6 +1603,10 @@ def _tela_rpa_hub() -> None:
         st.rerun()
 
     emoji_status = {"PENDENTE": "⏳", "RODANDO": "🔄", "CONCLUIDO": "✅", "ERRO": "❌"}
+    if _eh_nfgo:
+        for execucao in execucoes:
+            _expander_execucao_nfgo(execucao, emoji_status)
+        return
     for execucao in execucoes:
         empresas_exec = rpa_core.listar_empresas(execucao["id"])
         concluidas = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_CONCLUIDO)
@@ -1393,6 +1677,13 @@ _APPS_HOME = [
         "titulo": "RPA — Fechamento REST/DMS",
         "descricao": "Fechamento mensal de REST e DMS no ISS Web.",
         "tela": "rpa_hub",
+    },
+    {
+        "id": "rpa_nfgo",
+        "icone": "🧾",
+        "titulo": "RPA NF GO",
+        "descricao": "Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO, com quantidade de notas e print da consulta.",
+        "tela": "rpa_nfgo",
     },
     {
         "id": "rpa_folha",
@@ -1559,6 +1850,18 @@ if st.session_state.get("tela") == "rpa_hub":
         st.session_state["tela"] = "home"
         st.rerun()
     _tela_rpa_hub()
+    st.stop()
+
+if st.session_state.get("tela") == "rpa_nfgo":
+    if "rpa_nfgo" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    _tela_rpa_hub(
+        modulos=[m for m, info in rpa_registry.MODULOS.items() if info.get("app_home") == "rpa_nfgo"],
+        titulo="🧾 RPA NF GO",
+    )
     st.stop()
 
 if st.session_state.get("tela") == "conciliacao":
