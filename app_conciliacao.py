@@ -1477,14 +1477,34 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs")
     enfileira em rpa_execucoes/rpa_empresas e mostra status/resultado.
 
     modulos: quais módulos esta tela mostra - padrão são os que não têm card
-    próprio na home (sem 'app_home' no registry); o RPA NF GO passa só o dele."""
+    próprio na home (sem 'app_home' no registry); o RPA NF GO passa só o dele.
+
+    Escritório: qualquer usuário (inclusive comum) só vê/mexe nas
+    credenciais, listas e execuções do PRÓPRIO escritório - só
+    super_admin_global tem o seletor pra escolher QUALQUER escritório
+    (mesmo padrão de _tela_historico/_tela_gerenciar_clientes), pra poder
+    dar suporte sem precisar logar como o cliente."""
     st.title(titulo)
     if st.button("← Início"):
         st.session_state["tela"] = "home"
         st.rerun()
     st.divider()
 
-    escritorio_id = st.session_state.get("escritorio_id")
+    eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
+    if eh_global:
+        escritorios = auth.carregar_escritorios()
+        if not escritorios:
+            st.info("Nenhum escritório cadastrado ainda.")
+            return
+        escritorio_id = st.selectbox(
+            "Escritório",
+            list(escritorios.keys()),
+            format_func=lambda eid: escritorios.get(eid, {}).get("nome", eid),
+            index=list(escritorios.keys()).index(st.session_state.get("escritorio_id"))
+            if st.session_state.get("escritorio_id") in escritorios else 0,
+        )
+    else:
+        escritorio_id = st.session_state.get("escritorio_id")
     usuario = st.session_state.get("usuario_logado")
 
     if modulos is None:
