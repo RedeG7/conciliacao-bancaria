@@ -13,13 +13,34 @@ rpa_empresas. Diferencas:
     movimento - ver rpa/issnet/processar.py), não é escolha da planilha.
 """
 
+import unicodedata
 from io import BytesIO
 
 from openpyxl import load_workbook
 
 COLUNAS_OBRIGATORIAS = ["Código da Empresa", "CNPJ/CPF", "Município"]
 COLUNA_RAZAO_SOCIAL = "Razão Social"
-MUNICIPIOS_ALVO = {"GOIÂNIA", "APARECIDA DE GOIÂNIA"}
+
+
+def _sem_acento(texto: str) -> str:
+    """Remove acentos (NFKD + descarta marcas de combinação) - usado só
+    pra COMPARAR município, nunca pra guardar (ver _normalizar_municipio).
+    Bug real confirmado numa planilha do usuário: 15 de 18 empresas de
+    Goiânia vinham digitadas como "GOIANIA" (sem circunflexo) em vez de
+    "GOIÂNIA" - a comparação exata antiga descartava elas silenciosamente
+    da lista, sem nenhum aviso (só "3 empresas encontradas" em vez de 18)."""
+    return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii")
+
+
+# Chave: município sem acento (pra comparar tolerando planilha digitada
+# sem acento) -> valor: grafia CANÔNICA com acento, que é a mesma usada
+# como chave em rpa/issnet/urls.py PORTAL_URLS - guardar qualquer coisa
+# diferente disso faria o login por município falhar depois ("município
+# desconhecido para issnet") mesmo a empresa tendo sido aceita aqui.
+_MUNICIPIOS_ALVO = {
+    _sem_acento("GOIÂNIA"): "GOIÂNIA",
+    _sem_acento("APARECIDA DE GOIÂNIA"): "APARECIDA DE GOIÂNIA",
+}
 
 
 class PlanilhaInvalida(Exception):
@@ -57,8 +78,9 @@ def ler_empresas(conteudo: bytes) -> list[dict]:
         if not codigo:
             continue
 
-        municipio = str(ws.cell(row=linha, column=mapa["Município"]).value or "").strip().upper()
-        if municipio not in MUNICIPIOS_ALVO:
+        municipio_bruto = str(ws.cell(row=linha, column=mapa["Município"]).value or "").strip().upper()
+        municipio = _MUNICIPIOS_ALVO.get(_sem_acento(municipio_bruto))
+        if municipio is None:
             continue
 
         razao_social = ""
