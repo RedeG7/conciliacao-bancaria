@@ -1679,20 +1679,23 @@ _APPS_HOME = [
         "tela": "rpa_hub",
     },
     {
-        "id": "rpa_nfgo",
-        "icone": "🧾",
-        "titulo": "RPA NF GO",
-        "descricao": "Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO, com quantidade de notas e print da consulta.",
-        "tela": "rpa_nfgo",
-    },
-    {
         "id": "rpa_folha",
         "icone": "📋",
         "titulo": "RPA — Folha de Pagamento",
         "descricao": "Fechamento da folha no Domínio Folha. Ainda roda por automação assistida, sem tela própria aqui.",
         "tela": None,
     },
+    {
+        "id": "rpa_nfgo",
+        "icone": "🧾",
+        "titulo": "RPA NF GO",
+        "descricao": "Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO, com quantidade de notas e print da consulta.",
+        "tela": "rpa_nfgo",
+    },
 ]
+
+
+_CARDS_POR_LINHA = 3
 
 
 def _apps_permitidos_efetivos(escritorio_id: str, usuario: str) -> set:
@@ -1760,31 +1763,40 @@ def _tela_home() -> None:
         st.info("Nenhum aplicativo liberado para o seu usuário ainda — fale com o administrador do seu escritório.")
         return
 
-    colunas = st.columns(len(_apps_visiveis))
-    for coluna, app in zip(colunas, _apps_visiveis):
-        with coluna:
-            with st.container(border=True):
-                # titulo+descricao num min-height fixo (em vez de
-                # st.caption separado): garante que os 3 cards tenham a
-                # mesma altura e o botao "Abrir" comece sempre na mesma
-                # posicao, mesmo com textos de tamanhos diferentes.
-                st.markdown(
-                    f"<div style='text-align:center;font-size:3rem;margin-bottom:0.4rem;'>{app['icone']}</div>"
-                    f"<div style='min-height:150px;'>"
-                    f"<div style='text-align:center;font-weight:600;margin-bottom:0.3rem;'>{app['titulo']}</div>"
-                    f"<div style='text-align:center;color:rgba(250,250,250,0.6);font-size:0.875rem;'>"
-                    f"{app['descricao']}</div>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                if app["tela"]:
-                    if st.button("Abrir", key=f"home_abrir_{app['tela']}",
-                                 use_container_width=True, type="primary"):
-                        st.session_state["tela"] = app["tela"]
-                        st.rerun()
-                else:
-                    st.button("Em breve", key="home_abrir_rpa_folha",
-                              use_container_width=True, disabled=True)
+    # grade de _CARDS_POR_LINHA: app novo entra na linha de baixo com o
+    # mesmo tamanho de card, em vez de espremer todos numa linha só (a
+    # última linha incompleta fica alinhada à esquerda, colunas vazias).
+    for inicio in range(0, len(_apps_visiveis), _CARDS_POR_LINHA):
+        colunas = st.columns(_CARDS_POR_LINHA)
+        for coluna, app in zip(colunas, _apps_visiveis[inicio:inicio + _CARDS_POR_LINHA]):
+            _card_app(coluna, app)
+
+
+def _card_app(coluna, app: dict) -> None:
+    """Um card da home (ícone, título, descrição e botão Abrir/Em breve)."""
+    with coluna:
+        with st.container(border=True):
+            # titulo+descricao num min-height fixo (em vez de
+            # st.caption separado): garante que os 3 cards tenham a
+            # mesma altura e o botao "Abrir" comece sempre na mesma
+            # posicao, mesmo com textos de tamanhos diferentes.
+            st.markdown(
+                f"<div style='text-align:center;font-size:3rem;margin-bottom:0.4rem;'>{app['icone']}</div>"
+                f"<div style='min-height:150px;'>"
+                f"<div style='text-align:center;font-weight:600;margin-bottom:0.3rem;'>{app['titulo']}</div>"
+                f"<div style='text-align:center;color:rgba(250,250,250,0.6);font-size:0.875rem;'>"
+                f"{app['descricao']}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if app["tela"]:
+                if st.button("Abrir", key=f"home_abrir_{app['tela']}",
+                             use_container_width=True, type="primary"):
+                    st.session_state["tela"] = app["tela"]
+                    st.rerun()
+            else:
+                st.button("Em breve", key="home_abrir_rpa_folha",
+                          use_container_width=True, disabled=True)
 
 
 _renderizar_cookie_pendente()
