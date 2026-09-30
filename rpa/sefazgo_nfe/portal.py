@@ -235,11 +235,49 @@ def _formulario_consulta_visivel(page: Page, timeout: int = TIMEOUT_CURTO_MS) ->
         _existe(page, ["Pesquisar", "Consultar"], timeout=1_000) is not None
 
 
+# Injetado em toda página da sessão (context.add_init_script): o portal
+# abre telas em janela nova (card "Acesso Restrito", link "Baixar XML NFE"
+# - confirmado nos prints da execução real). O worker trabalha sempre com o
+# mesmo objeto page, então tudo que abriria janela nova passa a abrir NA
+# MESMA aba: links/forms com target _blank/_new e window.open(). Frames com
+# nome (target="main" num frameset) continuam funcionando normalmente.
+_SCRIPT_MESMA_ABA = """
+(() => {
+  const nova = (t) => !t || ['_blank', '_new'].includes(String(t).toLowerCase());
+  const abrirOriginal = window.open;
+  window.open = function (url, nome, ...resto) {
+    try {
+      if (nome && !nova(nome) && window.top.frames[nome]) return abrirOriginal.call(window, url, nome, ...resto);
+    } catch (e) {}
+    if (url) {
+      try { window.top.location.href = new URL(url, location.href).href; }
+      catch (e) { location.href = url; }
+    }
+    return window;
+  };
+  document.addEventListener('click', (e) => {
+    const alvo = e.target && e.target.closest ? e.target.closest('a[target], area[target]') : null;
+    if (alvo && nova(alvo.getAttribute('target'))) alvo.setAttribute('target', '_top');
+  }, true);
+  document.addEventListener('submit', (e) => {
+    const f = e.target;
+    if (f && f.getAttribute && f.hasAttribute('target') && nova(f.getAttribute('target'))) f.setAttribute('target', '_top');
+  }, true);
+})();
+"""
+
+
+def preparar_sessao(page: Page) -> None:
+    """Chamado uma vez antes do login: vale para todas as navegações
+    seguintes do contexto (add_init_script roda em cada página nova)."""
+    page.context.add_init_script(_SCRIPT_MESMA_ABA)
+
+
 def _clicar_e_seguir(page: Page, textos: list[str], timeout: int) -> str | None:
-    """Clica e, se o portal abrir o destino numa aba nova (comum nos cards
-    do painel "Portal de Aplicações e Serviços"), traz a página atual para
-    a mesma URL e fecha a aba nova - o worker trabalha sempre com o mesmo
-    objeto page; a sessão é a mesma (cookies do contexto)."""
+    """Clica e segue o destino. Com _SCRIPT_MESMA_ABA quase tudo já abre na
+    própria aba; se mesmo assim surgir uma aba nova, espera ela sair do
+    about:blank (window.open costuma nascer em branco e só depois carregar
+    o endereço), traz a página de trabalho para a mesma URL e fecha a aba."""
     antes = set(page.context.pages)
     clicado = _clicar(page, textos, timeout=timeout)
     if clicado is None:
@@ -248,6 +286,12 @@ def _clicar_e_seguir(page: Page, textos: list[str], timeout: int) -> str | None:
         novas = [p for p in page.context.pages if p not in antes and not p.is_closed()]
         if novas:
             aba = novas[0]
+            destino = ""
+            for _ in range(40):  # até ~20s para o endereço de verdade aparecer
+                destino = aba.url
+                if destino and destino != "about:blank":
+                    break
+                aba.wait_for_timeout(500)
             try:
                 aba.wait_for_load_state("domcontentloaded", timeout=TIMEOUT_PADRAO_MS)
             except PlaywrightTimeoutError:
@@ -279,6 +323,7 @@ def _abrir_menu_baixar_xml(page: Page, timeout: int = TIMEOUT_PADRAO_MS) -> None
 
 
 def login(page: Page, cpf: str, senha: str) -> None:
+    preparar_sessao(page)
     page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
 
     # LOGIN_URL já cai direto no formulário de login (confirmado na execução
