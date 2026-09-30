@@ -1357,6 +1357,16 @@ def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
                     col.caption(f"⚠️ {linha['observacao']}")
 
 
+def _resumo_empresas_planilha(empresas: list[dict], eh_nfgo: bool) -> str:
+    """'2 empresa(s)' - no RPA NF GO cada empresa vira duas linhas de fila
+    (ENTRADA e SAIDA, ver rpa/sefazgo_nfe/planilha.py), então conta só as
+    empresas e mostra as consultas à parte, em vez de len(empresas)."""
+    if not eh_nfgo:
+        return f"{len(empresas)} empresa(s)"
+    qtd = len({(e["codigo"], e.get("inscricao_estadual")) for e in empresas})
+    return f"{qtd} empresa(s) ({len(empresas)} consultas: Entrada e Saída)"
+
+
 def _bloco_credenciais_certificado_senha(
     modulo_id: str, modulo_info: dict, escritorio_id: str, usuario: str,
 ) -> dict | None:
@@ -1560,7 +1570,7 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs")
             except Exception as exc:
                 st.error(str(exc))
             else:
-                st.success(f"{len(empresas)} empresa(s) encontradas na planilha para esta rotina.")
+                st.success(_resumo_empresas_planilha(empresas, _eh_nfgo) + " encontrada(s) na planilha para esta rotina.")
                 with st.expander("Ver empresas identificadas"):
                     if _eh_nfgo:
                         st.dataframe(
@@ -1587,7 +1597,7 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs")
                     _flash(
                         "flash_rpa_hub",
                         f"✅ Execução #{execucao_id} criada — competência {competencia_escolhida}, "
-                        f"{len(empresas)} empresa(s) na fila.",
+                        f"{_resumo_empresas_planilha(empresas, _eh_nfgo)} na fila.",
                     )
                     st.rerun()
 
