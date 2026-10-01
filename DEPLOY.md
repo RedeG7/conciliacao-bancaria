@@ -221,8 +221,16 @@ $env:DATABASE_URL="postgresql://conciliacao:SENHA_DO_ENV@127.0.0.1:5432/concilia
 $env:RPA_ENC_KEY="mesma chave do .env do VPS"
 $env:WORKER_MODULOS="sefazgo_nfe"
 $env:RPA_SALVAR_EM_DISCO="1"
+# a Cloudflare do formulario "Consulta de Notas Recebidas" as vezes pede
+# "Verify you are human": o robo espera ate 300s alguem clicar na tela
+# (ele mesmo nunca clica nessa verificacao)
+$env:RPA_TEMPO_VERIFICACAO_HUMANA="300"
 python rpa_worker.py
 ```
+
+> No servidor (VPS) ninguem pode confirmar a verificacao da Cloudflare: se
+> ela pedir "Verify you are human", a consulta fica com erro explicando isso
+> - rode essas empresas pelo PC do escritorio.
 
 Os arquivos vão para a "Pasta de destino dos XMLs" informada ao criar a
 execução (ou para `RPA_PASTA_DESTINO`, se definida), com a mesma estrutura
