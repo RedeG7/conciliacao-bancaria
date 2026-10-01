@@ -164,6 +164,34 @@ def esta_na_tela_empresas(win) -> bool:
     return any(s.window_text().strip() == "CPF / CNPJ" for s in statics)
 
 
+def _fechar_aviso_contribuinte_nao_encontrado(win) -> bool:
+    """Detecta o popup 'Atenção / Contribuinte não encontrado.' que o
+    portal mostra quando a busca por CPF/CNPJ não acha ninguém, e clica em
+    OK pra fechar. Sem isso o popup fica aberto bloqueando a página, e a
+    automação da PRÓXIMA empresa (inclusive voltar_para_empresas) acaba
+    clicando nele sem querer em vez do elemento certo - mesma classe de
+    bug já visto com o painel de Downloads do Edge interceptando cliques
+    (ver voltar_para_empresas). Retorna True se achou e fechou o aviso."""
+    textos = win.descendants(control_type="Text")
+    if not any("não encontrado" in t.window_text() for t in textos):
+        return False
+    botoes_ok = [b for b in win.descendants(control_type="Button") if b.window_text().strip().upper() == "OK"]
+    if botoes_ok:
+        try:
+            botoes_ok[0].invoke()
+        except Exception:
+            botoes_ok[0].click_input()
+    else:
+        # sem botão OK identificado por algum motivo - Escape fecha a
+        # maioria dos modais/diálogos como último recurso.
+        try:
+            win.type_keys("{ESC}")
+        except Exception:
+            pass
+    time.sleep(0.5)
+    return True
+
+
 def selecionar_empresa(win, cnpj_cpf: str, codigo: str) -> None:
     """Na tela Empresas: digita o CNPJ/CPF no campo de busca e pressiona
     Enter.
@@ -189,6 +217,11 @@ def selecionar_empresa(win, cnpj_cpf: str, codigo: str) -> None:
 
     prazo = time.time() + TIMEOUT_PADRAO_S
     while time.time() < prazo:
+        if _fechar_aviso_contribuinte_nao_encontrado(win):
+            raise ErroAttended(
+                f"[selecionar_empresa] empresa {codigo} ({cnpj_cpf}) não encontrada no portal "
+                "(\"Contribuinte não encontrado\")"
+            )
         if not esta_na_tela_empresas(win):
             return  # navegou sozinho pra dentro da empresa - nada mais a fazer
         time.sleep(0.5)
@@ -782,12 +815,17 @@ def processar_empresa(
     return {"movimento": "DMS sem movimento — REST processado", "arquivos": arquivos}
 
 
-def processar_planilha(caminho_planilha: Path, pasta_raiz: Path) -> None:
+def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, deve_parar=None) -> None:
     """Loop completo: lê a planilha (mesmo leiaute/validação do Hub web -
     rpa.issnet.planilha), processa cada empresa (seleciona, gera DMS,
     salva, REST se sem movimento), fecha e volta pra Empresas antes da
     próxima. Erro numa empresa não aborta as outras - mesma filosofia do
-    worker Playwright: continua a partir da próxima."""
+    worker Playwright: continua a partir da próxima.
+
+    deve_parar: callable opcional (sem argumento, retorna bool) checado
+    ANTES de cada empresa - nunca no meio de uma, pra sempre parar numa
+    borda limpa (navegador na tela Empresas, nada pela metade). Usado
+    pelo botão "Parar" da GUI (ver gui.py _parar)."""
     from rpa.issnet import planilha as planilha_mod
     from rpa.issnet.competencia import calcular_competencia_anterior
 
@@ -807,6 +845,10 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path) -> None:
 
     resultados = []
     for empresa in empresas:
+        if deve_parar and deve_parar():
+            print("\n⏹ Parado pelo usuário.")
+            break
+
         codigo, cnpj = empresa["codigo"], empresa["cnpj_cpf"]
         print(f"\n=== Empresa {codigo} ({cnpj}) ===")
         try:
@@ -844,7 +886,7 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path) -> None:
 # login, sem configuração nenhuma além disso.
 # ---------------------------------------------------------------------------
 
-def processar_execucao_hub(token: str, pasta_raiz: Path) -> None:
+def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None) -> None:
     """Versão sincronizada com o Hub: em vez de ler uma planilha local,
     pega a execução PENDENTE mais recente do módulo issnet_rest_dms criada
     na tela do Hub (upload de planilha lá, mesmo fluxo de sempre) e
@@ -853,7 +895,15 @@ def processar_execucao_hub(token: str, pasta_raiz: Path) -> None:
     automatizado. Confere a licença antes de processar qualquer coisa.
 
     token: sessão obtida via hub_api.login(usuario, senha) - o mesmo tipo
-    de token usado no cookie do navegador (30 dias de validade)."""
+    de token usado no cookie do navegador (30 dias de validade).
+
+    deve_parar: callable opcional (sem argumento, retorna bool) checado
+    ANTES de cada empresa - nunca no meio de uma (ver processar_planilha).
+    Se parar com empresas ainda PENDENTE, elas ficam assim no Hub mesmo
+    (nunca marcadas erro só por não terem rodado) - reabrir_execucao_se_incompleta
+    (rpa/core.py, chamada pela tela do Hub) já cobre esse caso exatamente
+    (execução "interrompida no meio"), então dá pra continuar depois
+    rodando o script de novo sem perder nada."""
     from rpa.issnet.competencia import calcular_competencia_anterior
 
     if not hub_api.verificar_licenca(token):
@@ -888,6 +938,10 @@ def processar_execucao_hub(token: str, pasta_raiz: Path) -> None:
 
     alguma_concluida = False
     for empresa in empresas:
+        if deve_parar and deve_parar():
+            print("\n⏹ Parado pelo usuário — empresas restantes continuam pendentes no Hub, pode retomar depois.")
+            break
+
         codigo, cnpj = empresa["codigo"], empresa["cnpj_cpf"]
         print(f"\n=== Empresa {codigo} ({cnpj}) ===")
         hub_api.marcar_rodando(token, empresa["id"])

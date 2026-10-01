@@ -173,6 +173,7 @@ class App(tk.Tk):
         self.minsize(600, 520)
         self._config = _carregar_config()
         self._rodando = False
+        self._evento_parar = threading.Event()
         self._montar_ui()
         if getattr(sys, "frozen", False):
             # garante que o atalho fixo da Área de Trabalho aponte pra
@@ -251,8 +252,12 @@ class App(tk.Tk):
         ttk.Button(f3, text="Procurar...", command=self._escolher_pasta).grid(row=0, column=1, padx=8, pady=6)
         f3.columnconfigure(0, weight=1)
 
-        self.btn_iniciar = ttk.Button(self, text="▶  Iniciar processamento", command=self._iniciar)
-        self.btn_iniciar.pack(pady=(4, 8))
+        f_acoes = ttk.Frame(self)
+        f_acoes.pack(pady=(4, 8))
+        self.btn_iniciar = ttk.Button(f_acoes, text="▶  Iniciar processamento", command=self._iniciar)
+        self.btn_iniciar.pack(side="left", padx=4)
+        self.btn_parar = ttk.Button(f_acoes, text="⏹  Parar", command=self._parar, state="disabled")
+        self.btn_parar.pack(side="left", padx=4)
 
         f4 = ttk.LabelFrame(self, text="Andamento")
         f4.pack(fill="both", expand=True, **pad)
@@ -368,12 +373,25 @@ class App(tk.Tk):
         _salvar_config(self._config_atual())
 
         self._rodando = True
+        self._evento_parar.clear()
         self.btn_iniciar.configure(state="disabled", text="Processando...")
+        self.btn_parar.configure(state="normal", text="⏹  Parar")
         self.txt_log.configure(state="normal")
         self.txt_log.delete("1.0", "end")
         self.txt_log.configure(state="disabled")
 
         threading.Thread(target=self._rodar, args=(modo, planilha, hub_usuario, hub_senha, pasta), daemon=True).start()
+
+    def _parar(self) -> None:
+        """Sinaliza pra parar ANTES da próxima empresa (ver `deve_parar` em
+        processar_planilha/processar_execucao_hub) - nunca interrompe no
+        meio de uma empresa, pra nunca deixar o navegador/arquivo pela
+        metade. Por isso o processamento ainda continua rodando por um
+        tempinho depois do clique, até terminar a empresa atual."""
+        if not self._rodando:
+            return
+        self._evento_parar.set()
+        self.btn_parar.configure(state="disabled", text="Parando...")
 
     def _obter_token_hub(self, usuario: str, senha: str) -> str:
         """Reusa a sessão salva se a senha não foi digitada de novo (mesmo
@@ -393,10 +411,10 @@ class App(tk.Tk):
         try:
             with contextlib.redirect_stdout(saida):
                 if modo == "planilha":
-                    core.processar_planilha(Path(planilha), Path(pasta))
+                    core.processar_planilha(Path(planilha), Path(pasta), deve_parar=self._evento_parar.is_set)
                 else:
                     token = self._obter_token_hub(hub_usuario, hub_senha)
-                    core.processar_execucao_hub(token, Path(pasta))
+                    core.processar_execucao_hub(token, Path(pasta), deve_parar=self._evento_parar.is_set)
             self.after(0, self._log, "\n✅ Terminado.")
         except core.hub_api.ErroHubApi as exc:
             erro_msg = str(exc)
@@ -411,11 +429,16 @@ class App(tk.Tk):
             self.after(0, self._finalizar, erro_msg)
 
     def _finalizar(self, erro_msg: "str | None" = None) -> None:
+        parado_pelo_usuario = self._evento_parar.is_set()
         self._rodando = False
+        self._evento_parar.clear()
         self.btn_iniciar.configure(state="normal", text="▶  Iniciar processamento")
+        self.btn_parar.configure(state="disabled", text="⏹  Parar")
         self._trazer_para_frente()
         if erro_msg:
             messagebox.showerror("Concluído com erro", f"O processamento parou:\n\n{erro_msg}")
+        elif parado_pelo_usuario:
+            messagebox.showinfo("Parado", "Processamento interrompido a pedido. Veja o resumo na caixa Andamento.")
         else:
             messagebox.showinfo("Concluído", "Processamento concluído! Veja o resumo na caixa Andamento.")
 
