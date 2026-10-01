@@ -164,17 +164,30 @@ def esta_na_tela_empresas(win) -> bool:
     return any(s.window_text().strip() == "CPF / CNPJ" for s in statics)
 
 
-def _fechar_aviso_contribuinte_nao_encontrado(win) -> bool:
-    """Detecta o popup 'Atenção / Contribuinte não encontrado.' que o
-    portal mostra quando a busca por CPF/CNPJ não acha ninguém, e clica em
-    OK pra fechar. Sem isso o popup fica aberto bloqueando a página, e a
-    automação da PRÓXIMA empresa (inclusive voltar_para_empresas) acaba
-    clicando nele sem querer em vez do elemento certo - mesma classe de
-    bug já visto com o painel de Downloads do Edge interceptando cliques
-    (ver voltar_para_empresas). Retorna True se achou e fechou o aviso."""
+def _fechar_popup_atencao(win) -> "str | None":
+    """Detecta QUALQUER popup modal 'Atenção' que o portal mostra (o
+    portal reusa esse MESMO modal genérico pra vários avisos - "Contribuinte
+    não encontrado." foi o primeiro confirmado ao vivo, mas pode aparecer
+    com outra mensagem) e clica em OK pra fechar. Sem isso o popup fica
+    aberto bloqueando a página, e a automação seguinte (inclusive
+    voltar_para_empresas da PRÓXIMA empresa) acaba clicando nele sem
+    querer em vez do elemento certo - mesma classe de bug já vista com o
+    painel de Downloads do Edge interceptando cliques (ver
+    voltar_para_empresas). Retorna o texto da mensagem (pra aparecer no
+    log/erro) ou None se não achou nenhum popup."""
     textos = win.descendants(control_type="Text")
-    if not any("não encontrado" in t.window_text() for t in textos):
-        return False
+    titulo = next((t for t in textos if t.window_text().strip() == "Atenção"), None)
+    if titulo is None:
+        return None
+
+    rect_titulo = titulo.rectangle()
+    proximos = [
+        t for t in textos
+        if t.window_text().strip() and t.window_text().strip() != "Atenção"
+        and 0 < (t.rectangle().top - rect_titulo.bottom) < 150
+    ]
+    mensagem = proximos[0].window_text().strip() if proximos else "(mensagem não identificada)"
+
     botoes_ok = [b for b in win.descendants(control_type="Button") if b.window_text().strip().upper() == "OK"]
     if botoes_ok:
         try:
@@ -189,7 +202,7 @@ def _fechar_aviso_contribuinte_nao_encontrado(win) -> bool:
         except Exception:
             pass
     time.sleep(0.5)
-    return True
+    return mensagem
 
 
 def selecionar_empresa(win, cnpj_cpf: str, codigo: str) -> None:
@@ -217,10 +230,10 @@ def selecionar_empresa(win, cnpj_cpf: str, codigo: str) -> None:
 
     prazo = time.time() + TIMEOUT_PADRAO_S
     while time.time() < prazo:
-        if _fechar_aviso_contribuinte_nao_encontrado(win):
+        mensagem_popup = _fechar_popup_atencao(win)
+        if mensagem_popup is not None:
             raise ErroAttended(
-                f"[selecionar_empresa] empresa {codigo} ({cnpj_cpf}) não encontrada no portal "
-                "(\"Contribuinte não encontrado\")"
+                f"[selecionar_empresa] empresa {codigo} ({cnpj_cpf}) — popup \"Atenção\" do portal: {mensagem_popup}"
             )
         if not esta_na_tela_empresas(win):
             return  # navegou sozinho pra dentro da empresa - nada mais a fazer
