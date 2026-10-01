@@ -32,6 +32,7 @@ aquela linha (empresa + tipo) como ERRO e segue para a próxima.
 from __future__ import annotations
 
 import itertools
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -246,18 +247,44 @@ def _fixar(escopo, item):
         return item
 
 
+def _focar(campo) -> None:
+    """Clique no campo; se algo estiver por cima (confirmado na execução
+    real: o calendário da data final fica aberto cobrindo a Inscrição
+    Estadual), põe o foco direto no campo, sem depender do clique."""
+    try:
+        campo.click(timeout=3_000)
+    except PlaywrightTimeoutError:
+        campo.focus(timeout=TIMEOUT_CURTO_MS)
+
+
+def _fechar_calendario(page: Page) -> None:
+    """Fecha o calendário (datepicker) que abre ao digitar nas datas do
+    Período - senão ele fica por cima do campo Inscrição Estadual."""
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    for escopo in _escopos(page):
+        try:
+            escopo.evaluate("""() => document.querySelectorAll(
+                '#ui-datepicker-div, .ui-datepicker, .datepicker-dropdown, .datepicker.dropdown-menu'
+            ).forEach(e => { e.style.display = 'none'; })""")
+        except Exception:
+            continue
+
+
 def _preencher(campo, valor: str) -> None:
     """fill() direto; se o campo tiver máscara que rejeita o texto colado
     (CPF, data, IE), apaga e digita só os dígitos, tecla por tecla."""
     digitos = re.sub(r"\D", "", valor)
-    campo.click(timeout=TIMEOUT_PADRAO_MS)
+    _focar(campo)
     try:
         campo.fill(valor, timeout=TIMEOUT_CURTO_MS)
     except PlaywrightTimeoutError:
         pass
     atual = re.sub(r"\D", "", campo.input_value(timeout=TIMEOUT_CURTO_MS) or "")
     if atual != digitos:
-        campo.click(timeout=TIMEOUT_CURTO_MS)
+        _focar(campo)
         campo.press("Control+a")
         campo.press("Delete")
         campo.press("Home")
@@ -285,7 +312,15 @@ def _formulario_consulta_visivel(page: Page, timeout: int = TIMEOUT_CURTO_MS) ->
         _existe(page, ["Tipo de notas", "Consulta de Notas", "Pesquisar", "Consultar"], timeout=1_000) is not None
 
 
-def _aguardar_verificacao_cloudflare(page: Page, timeout_ms: int = 30_000) -> None:
+# Tempo que o robô espera a verificação da Cloudflare do formulário. No
+# servidor: 30s (só passa se for automática). Rodando no PC do escritório,
+# com uma pessoa olhando a tela, defina RPA_TEMPO_VERIFICACAO_HUMANA=300
+# para dar tempo de alguém clicar em "Verify you are human" quando a
+# Cloudflare pedir - o robô nunca clica nessa verificação.
+TEMPO_VERIFICACAO_S = int(os.environ.get("RPA_TEMPO_VERIFICACAO_HUMANA", "30") or "30")
+
+
+def _aguardar_verificacao_cloudflare(page: Page, timeout_ms: int | None = None) -> None:
     """O formulário tem uma verificação da Cloudflare (Turnstile) que, num
     navegador comum, passa sozinha ("Sucesso!"). O robô só ESPERA ela passar
     sozinha - não clica nem tenta contornar a verificação. Se não passar no
@@ -300,6 +335,8 @@ def _aguardar_verificacao_cloudflare(page: Page, timeout_ms: int = 30_000) -> No
             continue
     if not tem_widget and not any("challenges.cloudflare.com" in (f.url or "") for f in page.frames):
         return
+    if timeout_ms is None:
+        timeout_ms = TEMPO_VERIFICACAO_S * 1_000
     esperado = 0
     while esperado <= timeout_ms:
         for escopo in _escopos(page):
@@ -312,8 +349,10 @@ def _aguardar_verificacao_cloudflare(page: Page, timeout_ms: int = 30_000) -> No
         page.wait_for_timeout(1_000)
         esperado += 1_000
     raise ErroPortal(
-        "[consulta] a verificação da Cloudflare do formulário não foi concluída automaticamente "
-        f"em {timeout_ms // 1000}s — o portal não liberou a consulta para o navegador do robô"
+        "[consulta] a verificação da Cloudflare do formulário ('Verify you are human') não foi "
+        f"concluída em {timeout_ms // 1000}s — no servidor ninguém pode confirmar. Rode pelo PC do "
+        "escritório (worker local, ver DEPLOY.md) com RPA_TEMPO_VERIFICACAO_HUMANA=300 e confirme "
+        "na tela quando a Cloudflare pedir"
     )
 
 
@@ -686,7 +725,9 @@ def pesquisar(page: Page, data_inicial: str, data_final: str, inscricao_estadual
     """Preenche o formulário e clica em Pesquisar. tipo: 'ENTRADA' | 'SAIDA'."""
     inicio, fim = _campos_periodo(page)
     _preencher(inicio, data_inicial)
+    _fechar_calendario(page)
     _preencher(fim, data_final)
+    _fechar_calendario(page)
 
     campo_ie = _campo(
         page, ["Inscrição Estadual", "Inscricao Estadual"],
