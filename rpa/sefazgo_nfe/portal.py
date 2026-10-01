@@ -410,7 +410,9 @@ def _insistir(page: Page, textos: list[str], chegou, tentativas: int = 6, espera
             if chegou():
                 return True
             if _relogar_se_pedir(page):
-                continue
+                # Passo 2 -> 3 do roteiro: depois da nova autenticação o
+                # portal VOLTA ao menu; clica de novo já, sem esperar
+                break
             page.wait_for_timeout(1_000)
     return chegou()
 
@@ -459,10 +461,15 @@ def _autenticar(page: Page, cpf: str, senha: str) -> None:
          "xpath=//input[@type='password']/preceding::input[not(@type) or @type='text' or @type='tel'][1]"],
     )
     campo_senha = _campo(page, ["Senha"], ["input[type=password]"])
-    if campo_cpf is None or campo_senha is None:
-        raise ErroPortal(f"[login] campos de CPF/senha não encontrados na tela de login (página: {page.url})")
-
-    _preencher(campo_cpf, cpf)
+    if campo_senha is None:
+        raise ErroPortal(f"[login] campo de senha não encontrado na tela de login (página: {page.url})")
+    if campo_cpf is not None:
+        _preencher(campo_cpf, cpf)
+    elif not _cpf_ja_preenchido(page):
+        raise ErroPortal(f"[login] campo de CPF não encontrado na tela de login (página: {page.url})")
+    # Passo 2 do roteiro do escritório: "Baixar XML NFE" abre a tela "Acesso
+    # Restrito - Este módulo requer nova autenticação" com o CPF já
+    # preenchido (pode vir travado) - aí só a senha é informada.
     campo_senha.fill(senha, timeout=TIMEOUT_PADRAO_MS)
     # "Autenticar": texto real do botão no Portal de Aplicações e Serviços
     # (tela de login confirmada pelo print da primeira execução)
@@ -484,6 +491,21 @@ def _autenticar(page: Page, cpf: str, senha: str) -> None:
     # "Deseja salvar a senha?" -> Depois (pode ser do próprio portal; o do
     # navegador nem aparece no Chromium do Playwright)
     _clicar_se_existir(page, ["Depois", "Agora não", "Agora nao", "Lembrar depois"], timeout=2_000)
+
+
+def _cpf_ja_preenchido(page: Page) -> bool:
+    """CPF já vem preenchido (e possivelmente somente leitura) na tela de
+    nova autenticação do Acesso Restrito - confirmado no roteiro (Passo 2)."""
+    for escopo in _escopos(page):
+        try:
+            valores = escopo.locator(
+                "xpath=//input[@type='password']/preceding::input[not(@type) or @type='text' or @type='tel'][1]"
+            ).evaluate_all("els => els.map(e => e.value || '')")
+        except Exception:
+            continue
+        if any(len(re.sub(r"\D", "", v)) == 11 for v in valores):
+            return True
+    return False
 
 
 def _relogar_se_pedir(page: Page) -> bool:
