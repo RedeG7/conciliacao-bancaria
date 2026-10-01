@@ -45,7 +45,11 @@ URL_CONSULTA = "https://nfeweb.sefaz.go.gov.br/nfeweb/sites/nfe/consulta-notas-r
 # o login e o menu ficam em www.sefaz.go.gov.br, mas o formulário "Baixar
 # XML NFE" abre em nfeweb.sefaz.go.gov.br (OpenUrl2 do menu, visto no log
 # da execução real) - o certificado, se cadastrado, vale para os dois
-CERTIFICADO_ORIGINS = ["https://www.sefaz.go.gov.br", "https://nfeweb.sefaz.go.gov.br"]
+# (o login em si redireciona para portal.sefaz.go.gov.br/portalsefaz-apps/
+# auth/login-form - confirmado acessando o portal real)
+CERTIFICADO_ORIGINS = [
+    "https://www.sefaz.go.gov.br", "https://portal.sefaz.go.gov.br", "https://nfeweb.sefaz.go.gov.br",
+]
 
 TIMEOUT_PADRAO_MS = 20_000
 TIMEOUT_CURTO_MS = 4_000
@@ -514,6 +518,15 @@ def abrir_formulario(page: Page) -> None:
     page.goto(URL_CONSULTA, wait_until="domcontentloaded", timeout=60_000)
     if _esperar_formulario(page, TIMEOUT_PADRAO_MS):
         return
+    # confirmado no portal real: abrir URL_CONSULTA sem a sessão criada pelo
+    # menu "Baixar XML NFE" mostra só "Você não tem permissão para acessar
+    # esta página" (o OpenUrl2 do menu é quem libera o acesso)
+    if _existe(page, ["não tem permissão", "nao tem permissao"], timeout=1_000):
+        raise ErroPortal(
+            "[consulta] o site das notas respondeu 'Você não tem permissão para acessar esta página' — "
+            "o menu 'Baixar XML NFE' do Acesso Restrito não abriu o formulário (CPF sem acesso ao "
+            f"serviço ou sessão perdida no caminho; página atual: {page.url})"
+        )
     raise ErroPortal(
         "[consulta] tela 'Consulta de Notas Recebidas' (Período / Inscrição Estadual) não abriu — "
         f"sessão pode ter expirado ou o menu mudou de nome (página atual: {page.url})"
