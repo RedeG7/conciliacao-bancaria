@@ -330,6 +330,24 @@ def obter_execucao(execucao_id: int, escritorio_id: str) -> Optional[dict]:
     return linha
 
 
+def limpar_execucoes_modulo(modulo: str) -> int:
+    """MANUTENÇÃO/TESTE - apaga TODAS as execuções de um módulo, de
+    QUALQUER escritório (rpa_empresas cai junto via ON DELETE CASCADE do
+    schema). Destrutivo e IRREVERSÍVEL - usado só pra reiniciar a
+    numeração em teste (pedido explícito do usuário pra verificar o
+    isolamento por escritório do zero), nunca em uso normal. Sem botão
+    fixo na UI pra isso - ver app_conciliacao.py _tela_rpa_manual pelo
+    botão temporário (super_admin_global + confirmação em duas etapas)
+    que chama essa função; remover dos dois lados depois de usar uma
+    vez. Retorna quantas execuções foram apagadas."""
+    with auth.conectar() as conn:
+        linhas = conn.execute(
+            "DELETE FROM rpa_execucoes WHERE modulo = %s RETURNING id", (modulo,)
+        ).fetchall()
+        conn.commit()
+    return len(linhas)
+
+
 def listar_empresas(execucao_id: int) -> list[dict]:
     with auth.conectar() as conn:
         linhas = conn.execute(

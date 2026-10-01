@@ -1142,6 +1142,31 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
     st.divider()
     _flash("flash_rpa_manual")
     st.subheader("Listas de controle")
+
+    # BOTAO TEMPORARIO DE MANUTENCAO - pedido explicito do usuario pra
+    # apagar TODAS as listas (de qualquer escritorio) e reiniciar a
+    # numeracao do zero, pra testar se o isolamento por escritorio
+    # (listar_execucoes ja filtra por escritorio_id) aparece certo numa
+    # lista vazia. So super_admin_global ve, e exige dois cliques
+    # (checkbox de confirmacao + botao) pra nao apagar sem querer.
+    # REMOVER essa caixa inteira depois de usar uma vez - ver
+    # rpa_core.limpar_execucoes_modulo.
+    if st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL:
+        with st.expander("🛠️ Manutenção (temporário) — apagar TODAS as listas deste módulo"):
+            st.warning(
+                "Apaga TODAS as execuções/listas do módulo (de QUALQUER escritório, não só o "
+                "selecionado) e os PDFs/XMLs junto — irreversível. Só pra reiniciar a numeração "
+                "em teste."
+            )
+            _confirma_limpar = st.checkbox(
+                "Confirmo que quero apagar TUDO deste módulo, de todos os escritórios",
+                key=f"confirma_limpar_tudo_{modulo_id}",
+            )
+            if st.button("🗑️ Apagar todas as listas agora", disabled=not _confirma_limpar, key=f"btn_limpar_tudo_{modulo_id}"):
+                qtd = rpa_core.limpar_execucoes_modulo(modulo_id)
+                _flash("flash_rpa_manual", f"✅ {qtd} lista(s) apagada(s) — numeração reiniciada.")
+                st.rerun()
+
     rpa_core.limpar_arquivos_vencidos()
     execucoes = rpa_core.listar_execucoes(escritorio_id, modulo_id)
     if not execucoes:
