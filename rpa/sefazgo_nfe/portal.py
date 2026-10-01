@@ -45,7 +45,11 @@ URL_CONSULTA = "https://nfeweb.sefaz.go.gov.br/nfeweb/sites/nfe/consulta-notas-r
 # o login e o menu ficam em www.sefaz.go.gov.br, mas o formulário "Baixar
 # XML NFE" abre em nfeweb.sefaz.go.gov.br (OpenUrl2 do menu, visto no log
 # da execução real) - o certificado, se cadastrado, vale para os dois
-CERTIFICADO_ORIGINS = ["https://www.sefaz.go.gov.br", "https://nfeweb.sefaz.go.gov.br"]
+# (o login em si redireciona para portal.sefaz.go.gov.br/portalsefaz-apps/
+# auth/login-form - confirmado acessando o portal real)
+CERTIFICADO_ORIGINS = [
+    "https://www.sefaz.go.gov.br", "https://portal.sefaz.go.gov.br", "https://nfeweb.sefaz.go.gov.br",
+]
 
 TIMEOUT_PADRAO_MS = 20_000
 TIMEOUT_CURTO_MS = 4_000
@@ -390,16 +394,50 @@ def _clicar_e_seguir(page: Page, textos: list[str], timeout: int) -> str | None:
 TEXTOS_MENU_XML = ["Baixar XML NF-e", "Baixar XML NFe", "Baixar XML NFE", "Download de XML", "Baixar XML"]
 
 
-def _abrir_menu_baixar_xml(page: Page, timeout: int = TIMEOUT_PADRAO_MS) -> None:
-    """Painel pós-login ("Portal de Aplicações e Serviços", confirmado pelo
-    print da execução real) -> card "Acesso Restrito" (ASP) -> menu Baixar
-    XML NF-e. Se o menu já estiver visível (já dentro do ASP), pula o card."""
-    if _existe(page, TEXTOS_MENU_XML, timeout=1_000) is None:
-        _clicar_e_seguir(page, ["Acesso Restrito"], timeout=timeout)
-        _relogar_se_pedir(page)
-        _clicar_se_existir(page, ["Depois", "Agora não", "Agora nao"], timeout=1_500)
-    _clicar_e_seguir(page, TEXTOS_MENU_XML, timeout=timeout)
-    _relogar_se_pedir(page)
+def _insistir(page: Page, textos: list[str], chegou, tentativas: int = 6, espera_ms: int = 8_000) -> bool:
+    """Clica até a próxima página abrir (pedido do escritório: "colocar uma
+    persistência ao chegar na tela e clicar até abrir a próxima página").
+    A cada tentativa: se o link ainda está na tela, clica; espera até
+    espera_ms pela próxima página (chegou()), entrando de novo com CPF/senha
+    se o portal pedir login no caminho. Sistemas antigos da SEFAZ às vezes
+    ignoram o primeiro clique (página ainda carregando scripts)."""
+    for _ in range(tentativas):
+        if chegou():
+            return True
+        if _existe(page, textos, timeout=0):
+            _clicar_e_seguir(page, textos, timeout=TIMEOUT_CURTO_MS)
+        for _ in range(espera_ms // 1_000):
+            if chegou():
+                return True
+            if _relogar_se_pedir(page):
+                # Passo 2 -> 3 do roteiro: depois da nova autenticação o
+                # portal VOLTA ao menu; clica de novo já, sem esperar
+                break
+            page.wait_for_timeout(1_000)
+    return chegou()
+
+
+def _abrir_menu_baixar_xml(page: Page) -> None:
+    """Painel pós-login ("Portal de Aplicações e Serviços") -> card "Acesso
+    Restrito" (ASP) -> "Baixar XML NFE" -> "Consulta de Notas Recebidas",
+    clicando de novo em cada passo até a página seguinte abrir."""
+    def no_formulario() -> bool:
+        return _formulario_consulta_visivel(page, timeout=0)
+
+    def no_menu_asp() -> bool:
+        return no_formulario() or _existe(page, TEXTOS_MENU_XML, timeout=0) is not None
+
+    if not _insistir(page, ["Acesso Restrito"], no_menu_asp):
+        raise ErroPortal(
+            "[menu] cliquei várias vezes em 'Acesso Restrito' e o menu com 'Baixar XML NFE' não abriu "
+            f"(página atual: {page.url})"
+        )
+    _clicar_se_existir(page, ["Depois", "Agora não", "Agora nao"], timeout=1_000)
+    if not _insistir(page, TEXTOS_MENU_XML, no_formulario):
+        raise ErroPortal(
+            "[menu] cliquei várias vezes em 'Baixar XML NFE' e a tela 'Consulta de Notas Recebidas' não abriu "
+            f"(página atual: {page.url})"
+        )
 
 
 # CPF/senha da sessão atual: o portal pede login DE NOVO ao entrar no site
@@ -423,10 +461,15 @@ def _autenticar(page: Page, cpf: str, senha: str) -> None:
          "xpath=//input[@type='password']/preceding::input[not(@type) or @type='text' or @type='tel'][1]"],
     )
     campo_senha = _campo(page, ["Senha"], ["input[type=password]"])
-    if campo_cpf is None or campo_senha is None:
-        raise ErroPortal(f"[login] campos de CPF/senha não encontrados na tela de login (página: {page.url})")
-
-    _preencher(campo_cpf, cpf)
+    if campo_senha is None:
+        raise ErroPortal(f"[login] campo de senha não encontrado na tela de login (página: {page.url})")
+    if campo_cpf is not None:
+        _preencher(campo_cpf, cpf)
+    elif not _cpf_ja_preenchido(page):
+        raise ErroPortal(f"[login] campo de CPF não encontrado na tela de login (página: {page.url})")
+    # Passo 2 do roteiro do escritório: "Baixar XML NFE" abre a tela "Acesso
+    # Restrito - Este módulo requer nova autenticação" com o CPF já
+    # preenchido (pode vir travado) - aí só a senha é informada.
     campo_senha.fill(senha, timeout=TIMEOUT_PADRAO_MS)
     # "Autenticar": texto real do botão no Portal de Aplicações e Serviços
     # (tela de login confirmada pelo print da primeira execução)
@@ -450,6 +493,21 @@ def _autenticar(page: Page, cpf: str, senha: str) -> None:
     _clicar_se_existir(page, ["Depois", "Agora não", "Agora nao", "Lembrar depois"], timeout=2_000)
 
 
+def _cpf_ja_preenchido(page: Page) -> bool:
+    """CPF já vem preenchido (e possivelmente somente leitura) na tela de
+    nova autenticação do Acesso Restrito - confirmado no roteiro (Passo 2)."""
+    for escopo in _escopos(page):
+        try:
+            valores = escopo.locator(
+                "xpath=//input[@type='password']/preceding::input[not(@type) or @type='text' or @type='tel'][1]"
+            ).evaluate_all("els => els.map(e => e.value || '')")
+        except Exception:
+            continue
+        if any(len(re.sub(r"\D", "", v)) == 11 for v in valores):
+            return True
+    return False
+
+
 def _relogar_se_pedir(page: Page) -> bool:
     """Se a tela atual for de login, entra com as credenciais da sessão."""
     if not _CREDENCIAIS or not _tela_de_login(page):
@@ -463,19 +521,21 @@ def login(page: Page, cpf: str, senha: str) -> None:
     preparar_sessao(page)
     page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
 
-    # LOGIN_URL já cai direto no formulário de login (confirmado na execução
-    # real); só navega pelos menus se a senha ainda não estiver na tela
-    if not _tela_de_login(page):
-        page.wait_for_timeout(2_000)
-        if not _tela_de_login(page):
-            _abrir_menu_baixar_xml(page, timeout=TIMEOUT_CURTO_MS)
+    # LOGIN_URL redireciona para portal.sefaz.go.gov.br/portalsefaz-apps/
+    # auth/login-form (confirmado no portal real). Na execução real o robô
+    # olhou a página ANTES do redirecionamento terminar, não viu a senha e
+    # desistiu com "campos não encontrados" - mesmo o login acontecendo logo
+    # depois. Agora espera (até 30s) a tela estabilizar em algo conhecido.
+    for _ in range(30):
+        if (_tela_de_login(page) or _formulario_consulta_visivel(page, timeout=0)
+                or _existe(page, ["Acesso Restrito"] + TEXTOS_MENU_XML, timeout=0)):
+            break
+        page.wait_for_timeout(1_000)
 
-    if not _tela_de_login(page):
-        if _formulario_consulta_visivel(page, timeout=1_000):
-            return  # sessão ainda válida (reaproveitada)
-        raise ErroPortal("[login] campos de CPF/senha não encontrados na tela de Acesso Restrito")
-
-    _autenticar(page, cpf, senha)
+    if _tela_de_login(page):
+        _autenticar(page, cpf, senha)
+    # daqui em diante o caminho é sempre o mesmo (card Acesso Restrito >
+    # Baixar XML NFE > formulário), entrando de novo se o portal pedir login
     abrir_formulario(page)
 
 
@@ -508,12 +568,29 @@ def abrir_formulario(page: Page) -> None:
     if _esperar_formulario(page, 3_000):
         return
     _clicar_se_existir(page, ["Depois"], timeout=1_000)
-    _abrir_menu_baixar_xml(page)
-    if _esperar_formulario(page, TIMEOUT_PADRAO_MS):
+    erro_menu = None
+    try:
+        _abrir_menu_baixar_xml(page)
+    except ErroPortal as exc:
+        # última tentativa abaixo (URL direta); se também falhar, o erro do
+        # menu (que diz em qual passo parou) é o que vai para a tela
+        erro_menu = exc
+    if _esperar_formulario(page, 3_000):
         return
     page.goto(URL_CONSULTA, wait_until="domcontentloaded", timeout=60_000)
     if _esperar_formulario(page, TIMEOUT_PADRAO_MS):
         return
+    if erro_menu is not None:
+        raise erro_menu
+    # confirmado no portal real: abrir URL_CONSULTA sem a sessão criada pelo
+    # menu "Baixar XML NFE" mostra só "Você não tem permissão para acessar
+    # esta página" (o OpenUrl2 do menu é quem libera o acesso)
+    if _existe(page, ["não tem permissão", "nao tem permissao"], timeout=1_000):
+        raise ErroPortal(
+            "[consulta] o site das notas respondeu 'Você não tem permissão para acessar esta página' — "
+            "o menu 'Baixar XML NFE' do Acesso Restrito não abriu o formulário (CPF sem acesso ao "
+            f"serviço ou sessão perdida no caminho; página atual: {page.url})"
+        )
     raise ErroPortal(
         "[consulta] tela 'Consulta de Notas Recebidas' (Período / Inscrição Estadual) não abriu — "
         f"sessão pode ter expirado ou o menu mudou de nome (página atual: {page.url})"
