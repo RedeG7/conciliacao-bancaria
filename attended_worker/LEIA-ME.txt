@@ -51,7 +51,9 @@ USO NORMAL — COM JANELA (recomendado, sem terminal)
    empresa).
 
    A pasta de destino é organizada automaticamente como:
-   PASTA_ESCOLHIDA\{código da empresa}\{competência MMAAAA}\arquivo.pdf
+   PASTA_ESCOLHIDA\{código da empresa}-\{competência MMAAAA}\arquivo.pdf
+   (ex.: C:\Prefeituras\92-\082026\92 DMS 08 2026.pdf — o código vem
+   seguido de um traço no nome da pasta)
 
    As escolhas ficam salvas (issnet_attended_config.json, na mesma pasta
    do .exe) — na próxima vez já vêm preenchidas.

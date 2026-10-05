@@ -792,7 +792,10 @@ def processar_empresa(
     através deste mecanismo, só documentado do Playwright)."""
     selecionar_empresa(win, cnpj_cpf, codigo)
 
-    pasta_empresa = pasta_raiz / codigo / competencia_pasta
+    # pasta da empresa = "{codigo}-" (traço colado no código, ex. "92-"),
+    # padrão de nome de pasta do escritório - o resto do caminho
+    # (competência, nome dos arquivos) segue como sempre foi.
+    pasta_empresa = pasta_raiz / f"{codigo}-" / competencia_pasta
     arquivos: list[Path] = []
 
     abrir_livro_fiscal(win)
