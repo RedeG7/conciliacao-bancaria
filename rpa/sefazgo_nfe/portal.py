@@ -343,6 +343,32 @@ def _preencher(campo, valor: str) -> None:
         campo.dispatch_event("blur")
     except Exception:
         pass
+    _garantir_valor(campo, valor)
+
+
+def _garantir_valor(campo, valor: str) -> None:
+    """Confere o valor e, se a página tiver apagado (ex.: ao perder o foco),
+    põe de novo só com input/change - sem blur, que é o que apagava."""
+    digitos = re.sub(r"\D", "", valor)
+    try:
+        atual = re.sub(r"\D", "", campo.input_value(timeout=TIMEOUT_CURTO_MS) or "")
+    except Exception:
+        return
+    if atual == digitos:
+        return
+    campo.evaluate("""(e, v) => {
+      const so = e.readOnly; if (so) e.readOnly = false;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(e, v);
+      for (const t of ['input', 'change']) e.dispatchEvent(new Event(t, { bubbles: true }));
+      if (so) e.readOnly = true;
+    }""", valor)
+    atual = re.sub(r"\D", "", campo.input_value(timeout=TIMEOUT_CURTO_MS) or "")
+    if atual != digitos:
+        try:
+            descricao = campo.evaluate(_JS_DESCREVER_CAMPO)
+        except Exception:
+            descricao = "(não deu para ler o campo)"
+        raise ErroPortal(f"[preencher] a página apagou '{valor}' do campo e não aceitou de novo. Campo: {descricao}")
 
 
 def _clicar_se_existir(page: Page, textos: list[str], timeout: int = 2_000) -> bool:
@@ -702,6 +728,29 @@ def _listar_inputs(page: Page) -> list[str]:
     return itens
 
 
+def _campo_depois_do_texto(page: Page, padrao: str):
+    """Primeiro campo de texto editável logo depois de um texto da tela -
+    para rótulos que não estão ligados ao campo no HTML (confirmado na
+    execução real com "Inscrição Estadual")."""
+    for escopo in _escopos(page):
+        rotulo = escopo.get_by_text(re.compile(padrao, re.I))
+        try:
+            qtd = rotulo.count()
+        except Exception:
+            continue
+        for i in range(min(qtd, 3)):
+            seguinte = rotulo.nth(i).locator(
+                "xpath=following::input[(@type='text' or @type='tel' or @type='number' or not(@type))"
+                " and not(@disabled) and not(@readonly)][1]"
+            )
+            try:
+                if seguinte.count() and seguinte.first.is_visible():
+                    return _fixar(escopo, seguinte.first)
+            except Exception:
+                continue
+    return None
+
+
 def _campos_periodo(page: Page):
     inicio = _campo(
         page, ["Data inicial", "Data Início", "Data Inicio", "Período inicial", "Periodo inicial"],
@@ -796,11 +845,21 @@ def pesquisar(page: Page, data_inicial: str, data_final: str, inscricao_estadual
 
     campo_ie = _campo(
         page, ["Inscrição Estadual", "Inscricao Estadual"],
-        ["input[name*=inscricao i]", "input[id*=inscricao i]", "input[name=ie i]", "input[id=ie i]"],
-    )
+        ["input[name*=inscricao i]", "input[id*=inscricao i]", "input[name*=insc i]", "input[id*=insc i]",
+         "input[name*=estadual i]", "input[id*=estadual i]", "input[name=ie i]", "input[id=ie i]"],
+    ) or _campo_depois_do_texto(page, r"^\s*Inscri[çc][ãa]o\s+Estadual")
     if campo_ie is None:
-        raise ErroPortal("[consulta] campo Inscrição Estadual não encontrado")
+        raise ErroPortal(
+            "[consulta] campo Inscrição Estadual não encontrado — campos de texto na tela: "
+            + "; ".join(_listar_inputs(page))[:600]
+        )
     _preencher(campo_ie, inscricao_estadual)
+
+    # conferência final antes de pesquisar: na execução real as datas
+    # apareceram vazias no print, apesar de preenchidas - a página apaga o
+    # valor quando o campo perde o foco. Repõe sem disparar o blur.
+    for campo, valor in ((inicio, data_inicial), (fim, data_final), (campo_ie, inscricao_estadual)):
+        _garantir_valor(campo, valor)
 
     _marcar_opcao(page, ["Tipo de notas", "Tipo de nota", "Tipo da nota", "Tipo de Operação", "Tipo"], TEXTOS_TIPO[tipo])
     _marcar_opcao(page, ["Modelo da NF-e", "Modelo"], ["Todos", "Todas"])
