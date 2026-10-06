@@ -273,27 +273,76 @@ def _fechar_calendario(page: Page) -> None:
             continue
 
 
+# Põe o valor direto no campo e avisa a página (mesmo efeito de escolher o
+# dia no calendário): usado quando o campo é somente leitura ou recusa a
+# digitação. Se a página usar o datepicker do jQuery UI, usa a API dele.
+_JS_DEFINIR_VALOR = """(e, v) => {
+  const eraSoLeitura = e.readOnly;
+  if (eraSoLeitura) e.readOnly = false;
+  try {
+    if (window.jQuery && jQuery(e).hasClass('hasDatepicker')) jQuery(e).datepicker('setDate', v);
+  } catch (x) {}
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  setter.call(e, v);
+  for (const t of ['input', 'change', 'keyup', 'blur']) e.dispatchEvent(new Event(t, { bubbles: true }));
+  if (eraSoLeitura) e.readOnly = true;
+  return e.value;
+}"""
+
+_JS_DESCREVER_CAMPO = """e => `<${e.tagName.toLowerCase()} id="${e.id}" name="${e.getAttribute('name') || ''}" `
+  + `type="${e.type}" readonly=${e.readOnly} disabled=${e.disabled} class="${e.className}" value="${e.value}">`"""
+
+
 def _preencher(campo, valor: str) -> None:
-    """fill() direto; se o campo tiver máscara que rejeita o texto colado
-    (CPF, data, IE), apaga e digita só os dígitos, tecla por tecla."""
+    """Preenche e CONFERE o valor. Em ordem:
+      1. fill() direto (campo comum);
+      2. apaga e digita só os dígitos, tecla por tecla (máscara de CPF/data/IE);
+      3. põe o valor direto no campo via JS (campo somente leitura ou que
+         recusa digitação - comum no Período, que abre um calendário).
+    Se nada pegar, o erro descreve o campo (id/nome/somente leitura/valor)
+    para o próximo ajuste ser exato."""
     digitos = re.sub(r"\D", "", valor)
-    _focar(campo)
+
+    def valor_atual() -> str:
+        return re.sub(r"\D", "", campo.input_value(timeout=TIMEOUT_CURTO_MS) or "")
+
     try:
-        campo.fill(valor, timeout=TIMEOUT_CURTO_MS)
-    except PlaywrightTimeoutError:
-        pass
-    atual = re.sub(r"\D", "", campo.input_value(timeout=TIMEOUT_CURTO_MS) or "")
-    if atual != digitos:
+        so_leitura = bool(campo.evaluate("e => e.readOnly || e.disabled"))
+    except Exception:
+        so_leitura = False
+
+    if not so_leitura:
         _focar(campo)
-        campo.press("Control+a")
-        campo.press("Delete")
-        campo.press("Home")
-        campo.press_sequentially(digitos, delay=60)
-        atual = re.sub(r"\D", "", campo.input_value(timeout=TIMEOUT_CURTO_MS) or "")
-        if atual != digitos:
-            raise ErroPortal(f"[preencher] campo não aceitou o valor (ficou '{atual}', esperado '{digitos}')")
-    campo.dispatch_event("change")
-    campo.dispatch_event("blur")
+        try:
+            campo.fill(valor, timeout=TIMEOUT_CURTO_MS)
+        except PlaywrightTimeoutError:
+            pass
+        if valor_atual() != digitos:
+            try:
+                _focar(campo)
+                campo.press("Control+a")
+                campo.press("Delete")
+                campo.press("Home")
+                campo.press_sequentially(digitos, delay=60)
+            except PlaywrightTimeoutError:
+                pass
+
+    if so_leitura or valor_atual() != digitos:
+        campo.evaluate(_JS_DEFINIR_VALOR, valor)
+
+    if valor_atual() != digitos:
+        try:
+            descricao = campo.evaluate(_JS_DESCREVER_CAMPO)
+        except Exception:
+            descricao = "(não deu para ler o campo)"
+        raise ErroPortal(
+            f"[preencher] o campo não aceitou '{valor}' (ficou '{valor_atual()}'). Campo: {descricao}"
+        )
+    try:
+        campo.dispatch_event("change")
+        campo.dispatch_event("blur")
+    except Exception:
+        pass
 
 
 def _clicar_se_existir(page: Page, textos: list[str], timeout: int = 2_000) -> bool:
@@ -640,6 +689,19 @@ def abrir_formulario(page: Page) -> None:
 # Consulta
 # ---------------------------------------------------------------------------
 
+def _listar_inputs(page: Page) -> list[str]:
+    """Resumo dos inputs visíveis (diagnóstico para a mensagem de erro)."""
+    itens = []
+    for escopo in _escopos(page):
+        try:
+            itens += escopo.evaluate("""() => [...document.querySelectorAll('input:not([type=hidden])')]
+              .filter(e => e.offsetParent !== null)
+              .map(e => `${e.id || e.getAttribute('name') || '?'}=${e.value}${e.readOnly ? '(ro)' : ''}`)""")
+        except Exception:
+            continue
+    return itens
+
+
 def _campos_periodo(page: Page):
     inicio = _campo(
         page, ["Data inicial", "Data Início", "Data Inicio", "Período inicial", "Periodo inicial"],
@@ -666,7 +728,10 @@ def _campos_periodo(page: Page):
         )
         if seguintes.count() >= 2:
             return seguintes.nth(0), seguintes.nth(1)
-    raise ErroPortal("[consulta] campos do Período (data inicial/final) não encontrados")
+    raise ErroPortal(
+        "[consulta] campos do Período (data inicial/final) não encontrados — campos de texto na tela: "
+        + "; ".join(_listar_inputs(page))[:600]
+    )
 
 
 def _selecionar_no_select(select, textos: list[str]) -> bool:
