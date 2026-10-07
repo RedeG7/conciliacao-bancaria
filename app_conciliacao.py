@@ -1512,6 +1512,42 @@ def _bloco_credenciais_certificado_senha(
     return cred_portal
 
 
+def _bloco_programa_nfgo() -> None:
+    """Download do programa do PC do RPA NF GO (attended_worker/gui_nfgo.py):
+    a consulta de notas da SEFAZ-GO tem verificação da Cloudflare que não
+    passa no navegador do servidor, então quem processa a fila é o Edge do
+    escritório. O .exe é montado no deploy (job build-nfgo-exe)."""
+    st.subheader("Programa do PC (processa a fila)")
+    st.caption(
+        "A consulta de notas da SEFAZ-GO só libera no navegador do escritório. Crie a execução "
+        "aqui e processe pelo programa RPA NF GO: ele abre o Edge, você entra com o certificado "
+        "do escritório até a tela \"Consulta de Notas Recebidas\" e clica em Iniciar. Os "
+        "resultados (quantidades, print e ZIP) voltam para a grade abaixo."
+    )
+    _pasta_attended = Path(__file__).parent / "attended_worker"
+    _exe = _pasta_attended / "dist" / "nfgo_attended.exe"
+    if not _exe.exists():
+        st.warning("O programa ainda não está disponível para download nesta versão do Hub.")
+        return
+    _zip = io.BytesIO()
+    with zipfile.ZipFile(_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(_exe, arcname="nfgo_attended.exe")
+        _leia = _pasta_attended / "LEIA-ME_NFGO.txt"
+        if _leia.exists():
+            zf.write(_leia, arcname="LEIA-ME.txt")
+    _versao_arq = _pasta_attended / "VERSION_NFGO"
+    _versao = _versao_arq.read_text(encoding="utf-8").strip() if _versao_arq.exists() else ""
+    st.download_button(
+        f"📥 Baixar programa RPA NF GO{f' v{_versao}' if _versao else ''} (.zip)",
+        _zip.getvalue(), file_name="rpa_nf_go.zip", type="primary", key="download_programa_nfgo",
+    )
+    st.caption(
+        "Extraia e dê duplo clique no .exe (cria o atalho \"RPA NF GO\" na Área de Trabalho e se "
+        "atualiza sozinho). O Windows pode avisar 'aplicativo desconhecido' (SmartScreen): "
+        "'Mais informações' → 'Executar assim mesmo'."
+    )
+
+
 def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs") -> None:
     """Hub de RPAs do escritório: cadastro de credenciais de procurador,
     upload de planilha e acompanhamento das execuções, por módulo (ISS Web
@@ -1578,7 +1614,12 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs")
     competencia_escolhida = f"{_data_competencia.month:02d}/{_data_competencia.year}"
 
     tipo_auth = modulo_info.get("tipo_auth", "senha")
-    if tipo_auth == "certificado_senha":
+    if modulo_id == "sefazgo_nfe":
+        # roda no programa do PC (Edge do escritório, certificado do
+        # escritório) - não usa credencial guardada no Hub
+        _bloco_programa_nfgo()
+        cred = True
+    elif tipo_auth == "certificado_senha":
         cred = _bloco_credenciais_certificado_senha(modulo_id, modulo_info, escritorio_id, usuario)
     else:
         st.subheader("Credenciais do procurador")
@@ -1644,11 +1685,10 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs")
                 "Pasta de destino dos XMLs",
                 value=_ultima_pasta,
                 key=f"pasta_destino_{modulo_id}",
-                help="Onde os arquivos são gravados quando o robô roda no PC do escritório "
-                     "(worker local com RPA_SALVAR_EM_DISCO=1). Dentro dela: "
-                     "RPA NF GO / CÓDIGO - EMPRESA / MMAAAA / ENTRADA e SAIDA, com "
-                     "ENTRADA_MMAAAA.zip, SAIDA_MMAAAA.zip e o print de cada consulta. Rodando no "
-                     "servidor, os mesmos arquivos ficam no \"Baixar tudo (.zip)\" abaixo, na mesma estrutura.",
+                help="Referência da pasta usada no PC do escritório (no programa RPA NF GO você "
+                     "escolhe a pasta de verdade). Dentro dela: RPA NF GO / CÓDIGO - EMPRESA / MMAAAA / "
+                     "ENTRADA e SAIDA, com ENTRADA_MMAAAA.zip, SAIDA_MMAAAA.zip e o print de cada consulta. "
+                     "Os mesmos arquivos também ficam no \"Baixar tudo (.zip)\" abaixo.",
             )
         st.caption("Colunas esperadas: " + " · ".join(modulo_info["colunas_planilha"]))
         st.download_button(
@@ -1684,7 +1724,10 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs")
                             ],
                             use_container_width=True, hide_index=True,
                         )
-                if st.button("🚀 Iniciar processamento", type="primary"):
+                if st.button(
+                    "🚀 Criar execução (processar no programa do PC)" if _eh_nfgo else "🚀 Iniciar processamento",
+                    type="primary",
+                ):
                     execucao_id = rpa_core.criar_execucao(
                         escritorio_id, modulo_id, conteudo, up_planilha.name, usuario, empresas,
                         competencia_escolhida, pasta_destino=pasta_destino.strip(),

@@ -7,13 +7,48 @@ on:
       - "**.md"
 
 jobs:
+  # programa do PC do RPA NF GO (attended_worker/gui_nfgo.py): o .exe so
+  # pode ser montado no Windows; vai pra imagem da app, de onde o Hub
+  # serve o download (/api/attended-nfgo/download). Se falhar, o deploy
+  # segue sem o .exe (o Hub mostra que o download nao esta disponivel).
+  build-nfgo-exe:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Montar nfgo_attended.exe
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pywinauto requests pillow pyinstaller
+          ./attended_worker/build_nfgo.ps1 -Python python
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nfgo-attended-exe
+          path: attended_worker/dist/nfgo_attended.exe
+          retention-days: 7
+
   build-and-push:
+    needs: build-nfgo-exe
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: nfgo-attended-exe
+          path: attended_worker/dist
 
       - uses: docker/setup-buildx-action@v3
 

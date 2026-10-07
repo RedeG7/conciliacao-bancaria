@@ -34,6 +34,11 @@ app = FastAPI(title="Hub RedeG7 - API attended", docs_url=None, redoc_url=None)
 _RAIZ = Path(__file__).resolve().parent
 _VERSAO_PATH = _RAIZ / "attended_worker" / "VERSION"
 _EXE_PATH = _RAIZ / "attended_worker" / "dist" / "issnet_attended.exe"
+# programa do PC do RPA NF GO (attended_worker/gui_nfgo.py) - versão e .exe
+# próprios (é um programa separado do ISS Net); o .exe é montado num runner
+# Windows no deploy (.github/workflows/deploy.yml) e entra na imagem
+_VERSAO_NFGO_PATH = _RAIZ / "attended_worker" / "VERSION_NFGO"
+_EXE_NFGO_PATH = _RAIZ / "attended_worker" / "dist" / "nfgo_attended.exe"
 
 
 @app.on_event("startup")
@@ -125,10 +130,19 @@ def execucao_pendente(modulo: str, authorization: Optional[str] = Header(None)):
     if execucao is None:
         return {"execucao_id": None, "empresas": []}
     empresas = rpa_core.listar_empresas_pendentes(execucao["id"])
+    # campos a mais (obrigacao, razao_social, inscricao_estadual,
+    # competencia, pasta_destino): usados pelo programa do RPA NF GO; o do
+    # ISS Net só lê id/codigo/cnpj_cpf e ignora o resto
     return {
         "execucao_id": execucao["id"],
+        "competencia": execucao.get("competencia") or "",
+        "pasta_destino": execucao.get("pasta_destino") or "",
         "empresas": [
-            {"id": e["id"], "codigo": e["codigo"], "cnpj_cpf": e["cnpj_cpf"]}
+            {
+                "id": e["id"], "codigo": e["codigo"], "cnpj_cpf": e["cnpj_cpf"],
+                "obrigacao": e.get("obrigacao") or "", "razao_social": e.get("razao_social") or "",
+                "inscricao_estadual": e.get("inscricao_estadual") or "",
+            }
             for e in empresas
         ],
     }
@@ -152,20 +166,34 @@ class EmpresaConcluirBody(BaseModel):
     pdf_nome: str = ""
     xml_zip_base64: Optional[str] = None
     xml_zip_nome: str = ""
+    # RPA NF GO (opcionais - o programa do ISS Net não manda):
+    # status ERRO = download incompleto (arquivos ficam gravados)
+    status: str = rpa_core.STATUS_CONCLUIDO
+    erro: str = ""
+    qtd_notas_portal: Optional[int] = None
+    qtd_xml: Optional[int] = None
+    evidencia_base64: Optional[str] = None
+    observacao: str = ""
 
 
 @app.post("/api/empresas/{empresa_id}/concluir")
 def empresa_concluir(empresa_id: int, body: EmpresaConcluirBody, authorization: Optional[str] = Header(None)):
     usuario = _usuario_autenticado(authorization)
     _empresa_pertence_ao_escritorio(empresa_id, usuario["escritorio_id"])
+    status = body.status if body.status in (rpa_core.STATUS_CONCLUIDO, rpa_core.STATUS_ERRO) else rpa_core.STATUS_CONCLUIDO
     rpa_core.atualizar_empresa(
         empresa_id,
-        status=rpa_core.STATUS_CONCLUIDO,
+        status=status,
         movimento=body.movimento,
+        erro=body.erro,
         pdf=base64.b64decode(body.pdf_base64) if body.pdf_base64 else None,
         pdf_nome=body.pdf_nome,
         xml_zip=base64.b64decode(body.xml_zip_base64) if body.xml_zip_base64 else None,
         xml_zip_nome=body.xml_zip_nome,
+        qtd_notas_portal=body.qtd_notas_portal,
+        qtd_xml=body.qtd_xml,
+        evidencia_png=base64.b64decode(body.evidencia_base64) if body.evidencia_base64 else None,
+        observacao=body.observacao,
     )
     return {"ok": True}
 
@@ -179,6 +207,62 @@ def empresa_erro(empresa_id: int, body: EmpresaErroBody, authorization: Optional
     usuario = _usuario_autenticado(authorization)
     _empresa_pertence_ao_escritorio(empresa_id, usuario["escritorio_id"])
     rpa_core.atualizar_empresa(empresa_id, status=rpa_core.STATUS_ERRO, erro=body.erro)
+    return {"ok": True}
+
+
+def _execucao_do_escritorio(execucao_id: int, escritorio_id: str) -> dict:
+    execucao = rpa_core.obter_execucao(execucao_id, escritorio_id)
+    if execucao is None:
+        raise HTTPException(status_code=404, detail="Execução não encontrada")
+    return execucao
+
+
+@app.post("/api/execucoes/{execucao_id}/iniciar")
+def execucao_iniciar(execucao_id: int, authorization: Optional[str] = Header(None)):
+    """Programa do PC começou a processar: execução vira RODANDO (assim o
+    botão "Cancelar processamento" da tela grava o pedido em vez de
+    cancelar na hora, e o programa confere com /situacao)."""
+    usuario = _usuario_autenticado(authorization)
+    _execucao_do_escritorio(execucao_id, usuario["escritorio_id"])
+    with auth.conectar() as conn:
+        conn.execute(
+            "UPDATE rpa_execucoes SET status = %s, iniciado_em = now() WHERE id = %s",
+            (rpa_core.STATUS_RODANDO, execucao_id),
+        )
+        conn.commit()
+    return {"ok": True}
+
+
+@app.get("/api/execucoes/{execucao_id}/situacao")
+def execucao_situacao(execucao_id: int, authorization: Optional[str] = Header(None)):
+    usuario = _usuario_autenticado(authorization)
+    execucao = _execucao_do_escritorio(execucao_id, usuario["escritorio_id"])
+    return {"status": execucao["status"], "cancelar_solicitado": bool(execucao.get("cancelar_solicitado"))}
+
+
+class ExecucaoInterromperBody(BaseModel):
+    motivo: str = ""
+
+
+@app.post("/api/execucoes/{execucao_id}/interromper")
+def execucao_interromper(execucao_id: int, body: ExecucaoInterromperBody, authorization: Optional[str] = Header(None)):
+    """Cancelamento pedido na tela ou parada do programa (sessão do portal
+    perdida etc.): o que não terminou vira ERRO com o motivo e a execução
+    fica ERRO - aparece o Reprocessar na tela."""
+    usuario = _usuario_autenticado(authorization)
+    _execucao_do_escritorio(execucao_id, usuario["escritorio_id"])
+    motivo = (body.motivo or rpa_core.MOTIVO_CANCELADO)[:500]
+    with auth.conectar() as conn:
+        conn.execute(
+            "UPDATE rpa_empresas SET status = %s, erro = %s, atualizado_em = now() "
+            "WHERE execucao_id = %s AND status IN (%s, %s)",
+            (rpa_core.STATUS_ERRO, motivo, execucao_id, rpa_core.STATUS_PENDENTE, rpa_core.STATUS_RODANDO),
+        )
+        conn.execute(
+            "UPDATE rpa_execucoes SET status = %s, concluido_em = now(), cancelar_solicitado = false WHERE id = %s",
+            (rpa_core.STATUS_ERRO, execucao_id),
+        )
+        conn.commit()
     return {"ok": True}
 
 
@@ -208,6 +292,19 @@ def execucao_concluir(execucao_id: int, body: ExecucaoConcluirBody, authorizatio
 def attended_versao():
     versao = _VERSAO_PATH.read_text(encoding="utf-8").strip() if _VERSAO_PATH.exists() else "0.0"
     return {"versao": versao}
+
+
+@app.get("/api/attended-nfgo/versao")
+def attended_nfgo_versao():
+    versao = _VERSAO_NFGO_PATH.read_text(encoding="utf-8").strip() if _VERSAO_NFGO_PATH.exists() else "0.0"
+    return {"versao": versao}
+
+
+@app.get("/api/attended-nfgo/download")
+def attended_nfgo_download():
+    if not _EXE_NFGO_PATH.exists():
+        raise HTTPException(status_code=404, detail="Executável não encontrado")
+    return FileResponse(_EXE_NFGO_PATH, media_type="application/octet-stream", filename="nfgo_attended.exe")
 
 
 @app.get("/api/attended/download")
