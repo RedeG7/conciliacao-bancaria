@@ -22,6 +22,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends xvfb \
     && rm -rf /var/lib/apt/lists/*
 
+# Google Chrome (além do Chromium acima): o RPA NF GO usa o Chrome de
+# verdade (rpa/registry.py "navegador") porque a verificação da Cloudflare
+# da SEFAZ-GO pediu confirmação humana no Chromium. Instalação não-fatal:
+# se falhar, a imagem sai só com o Chromium e o worker volta pra ele.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl gnupg ca-certificates \
+    && (playwright install --with-deps chrome || echo "AVISO: Google Chrome nao instalado - worker usa o Chromium") \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY auth.py rpa_worker.py entrypoint-worker.sh ./
 COPY rpa/ ./rpa/
 RUN chmod +x entrypoint-worker.sh

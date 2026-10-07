@@ -68,6 +68,20 @@ def _salvar_arquivos_em_disco(execucao: dict, arquivos: dict) -> None:
         log.info("Execução %s: gravado %s", execucao["id"], destino)
 
 
+def _abrir_navegador(pw, modulo_info: dict):
+    """Chromium do Playwright por padrão; módulo pode pedir outro canal
+    ("chrome" = Google Chrome, "msedge" = Edge) em rpa/registry.py, e
+    RPA_NAVEGADOR sobrepõe (ex.: worker local). Se o canal pedido não
+    estiver instalado, volta pro Chromium em vez de falhar a execução."""
+    canal = (os.environ.get("RPA_NAVEGADOR") or modulo_info.get("navegador") or "").strip()
+    if canal and canal != "chromium":
+        try:
+            return pw.chromium.launch(headless=False, channel=canal)
+        except Exception as exc:
+            log.warning("Navegador '%s' indisponível (%s) — usando o Chromium do Playwright", canal, str(exc).splitlines()[0])
+    return pw.chromium.launch(headless=False)
+
+
 def processar_execucao(execucao: dict) -> None:
     execucao_id = execucao["id"]
     modulo = execucao["modulo"]
@@ -98,7 +112,7 @@ def processar_execucao(execucao: dict) -> None:
         # pra sempre com Chromium headless=True. headed reduz o risco de
         # bloqueio (sem garantia total contra Cloudflare); issweb também
         # roda assim, sem problema conhecido nesse modo.
-        browser = pw.chromium.launch(headless=False)
+        browser = _abrir_navegador(pw, modulo_info)
         context = registry.criar_contexto(modulo, browser, credencial)
         page = context.new_page()
 
