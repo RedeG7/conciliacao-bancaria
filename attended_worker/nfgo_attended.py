@@ -1130,17 +1130,26 @@ def _voltar_ao_historico(log) -> None:
         raise ErroAttended("[download] não achei o botão 'Histórico de Downloads de XMLs' no formulário")
 
 
+_VISTOS: set = set()   # arquivos já vistos no histórico nesta sessão
+
+
+class ErroDownloadPendente(ErroAttended):
+    """O pedido foi feito, mas o arquivo não foi baixado a tempo - fica na
+    lista pra baixar depois do histórico (ex.: Entrada, ao terminar a Saída)."""
+
+
+def _prefixo_pedido(ie: str, data_inicial: str, data_final: str) -> str:
+    return "_".join(re.sub(r"\D", "", x) for x in (ie, data_inicial, data_final)).lower() + "_"
+
+
 def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
     """Baixar todos os arquivos > Baixar documentos e eventos > Baixar. O
-    portal cria uma linha no "Histórico de Download de XMLs" (Aguardando...
-    -> Concluído). Espera a linha DESTE pedido - a mais nova com a mesma IE e
-    período, que ainda não foi baixada - ficar Concluída (atualizando a
-    página) e clica no "Baixar XML" DELA (não em linhas antigas, que davam o
-    arquivo errado). Confere que o arquivo baixado tem o nome da linha."""
-    pastas_download = _pastas_download()
+    portal cria uma linha no "Histórico de Downloads de XMLs" (Aguardando...
+    -> Em processamento... -> Concluído); espera a linha DESTE pedido e
+    baixa (ver _aguardar_e_baixar)."""
+    prefixo = _prefixo_pedido(ie, data_inicial, data_final)
+    antes = set(_VISTOS)  # o que já existia no histórico antes deste pedido
     referencia = time.time()
-    so_digitos = [re.sub(r"\D", "", x) for x in (ie, data_inicial, data_final)]
-    prefixo = "_".join(so_digitos).lower() + "_"
 
     botao = _achar(win, ["Baixar todos os arquivos", "Baixar todos"])
     if botao is None:
@@ -1159,8 +1168,24 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
     _acionar(baixar)
     log("  Pedido de download enviado — aguardando a linha deste pedido no histórico do portal...")
     time.sleep(3)
+    try:
+        return _aguardar_e_baixar(prefixo, referencia, antes, log, TIMEOUT_FILA_DOWNLOAD_S, mais_recente=True)
+    except ErroDownloadPendente as exc:
+        exc.pedido = {"prefixo": prefixo, "referencia": referencia, "antes": antes}
+        raise
 
-    prazo = time.time() + TIMEOUT_FILA_DOWNLOAD_S
+
+def _aguardar_e_baixar(prefixo: str, referencia: float, antes: set, log, timeout: float,
+                       mais_recente: bool = True) -> Path:
+    """No histórico, acha a linha do pedido: mesma IE/período, que NÃO
+    estava no histórico antes do pedido (antes), pedida depois do clique
+    (Data de Solicitação, com tolerância de relógio) e ainda não baixada.
+    Entre as que sobrarem: mais_recente=True pega a última solicitada (o
+    pedido atual); False pega a mais antiga (Entrada pendente, quando a
+    Saída da mesma empresa já foi baixada). Espera Concluído (F5 a cada
+    20 s), clica no Baixar XML da linha e espera o arquivo com esse nome."""
+    pastas_download = _pastas_download()
+    prazo = time.time() + timeout
     ultimo_refresh = time.time()
     ultima_volta = 0.0
     alvo = None
@@ -1187,35 +1212,21 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
             if not (no_formulario(w) and _abrir_historico(w, log)):
                 _voltar_ao_historico(log)
             continue
-        # a mais nova (em cima) com esta IE e período, pedida agora (não uma
-        # linha antiga do mesmo período) e que ainda não baixamos
-        # o ÚLTIMO pedido (maior Data de Solicitação) feito nesta rodada e
-        # ainda não baixado - de preferência com a IE/período desta consulta
-        def _recente(l):
-            return l["arquivo"] not in _JA_BAIXADOS and (
-                l["solicitado_em"] is None or l["solicitado_em"] >= referencia - TOLERANCIA_RELOGIO_S)
-        por_data = sorted(linhas, key=lambda l: (l["solicitado_em"] or 0, -l["topo"]), reverse=True)
-        desta = [l for l in por_data if l["arquivo"].lower().startswith(prefixo)]
-        nossa = next((l for l in desta if _recente(l)), None)
-        if nossa is None:
-            outra = next((l for l in por_data if _recente(l)), None)
-            if outra is not None and outra["solicitado_em"] is not None:
-                if estado_anterior != "outra:" + outra["arquivo"]:
-                    log(f"  ⚠️  O pedido mais recente no histórico é {outra['arquivo']} (esperava {prefixo}*.zip) "
-                        "— baixando o último solicitado.")
-                    estado_anterior = "outra:" + outra["arquivo"]
-                nossa = outra
+
+        def _deste_pedido(l):
+            return (l["arquivo"].lower().startswith(prefixo) and l["arquivo"] not in antes
+                    and l["arquivo"] not in _JA_BAIXADOS
+                    and (l["solicitado_em"] is None or l["solicitado_em"] >= referencia - TOLERANCIA_RELOGIO_S))
+        candidatas = sorted((l for l in linhas if _deste_pedido(l)),
+                            key=lambda l: (l["solicitado_em"] or 0, -l["topo"]), reverse=mais_recente)
+        _VISTOS.update(l["arquivo"] for l in linhas)
+        nossa = candidatas[0] if candidatas else None
         if linhas and nossa is None:
-            estado = f"{len(linhas)}|{len(desta)}|{desta[0]['arquivo'] if desta else ''}"
+            desta = [l for l in linhas if l["arquivo"].lower().startswith(prefixo)]
+            estado = f"{len(linhas)}|{len(desta)}"
             if estado != estado_anterior:
-                if desta:
-                    topo = desta[0]
-                    quando = time.strftime("%d/%m %H:%M", time.localtime(topo["solicitado_em"])) if topo["solicitado_em"] else "?"
-                    log(f"  Histórico: {len(linhas)} linha(s); deste pedido ainda nenhuma nova — a mais recente "
-                        f"desta IE/período é {topo['arquivo']} ({topo['situacao'] or '?'}, pedida {quando}"
-                        f"{', já baixada' if topo['arquivo'] in _JA_BAIXADOS else ''}). Aguardando...")
-                else:
-                    log(f"  Histórico: {len(linhas)} linha(s), nenhuma com {prefixo}*.zip ainda. Aguardando...")
+                log(f"  Histórico: {len(linhas)} linha(s), {len(desta)} desta IE/período — nenhuma nova deste "
+                    "pedido ainda. Aguardando...")
                 estado_anterior = estado
         if nossa is not None:
             if nossa["situacao"] != situacao_anterior:
@@ -1244,13 +1255,14 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
             continue
         time.sleep(3)
     if alvo is None:
-        raise ErroAttended(f"[download] a linha deste pedido ({prefixo}*.zip) não ficou 'Concluído' no histórico "
-                           f"em {TIMEOUT_FILA_DOWNLOAD_S // 60} min")
+        raise ErroDownloadPendente(f"[download] a linha deste pedido ({prefixo}*.zip) não ficou 'Concluído' no "
+                                   f"histórico em {int(timeout // 60)} min — tento baixar de novo no fim da empresa")
 
+    referencia_arquivo = time.time() - 5
     prazo = time.time() + 5 * 60
     while time.time() < prazo:
         _checar_parada()
-        arquivo = _novo_arquivo_downloads(pastas_download, referencia, alvo["arquivo"])
+        arquivo = _novo_arquivo_downloads(pastas_download, referencia_arquivo, alvo["arquivo"])
         if arquivo is not None:
             _JA_BAIXADOS.add(alvo["arquivo"])
             try:
@@ -1260,8 +1272,8 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
             return arquivo
         _aceitar_prompt_download(pastas_download[0], log)
         time.sleep(0.7)
-    raise ErroAttended(f"[download] cliquei em Baixar XML de {alvo['arquivo']}, mas o arquivo não chegou em "
-                       f"{', '.join(str(p) for p in pastas_download)} — confira a pasta de downloads do Edge")
+    raise ErroDownloadPendente(f"[download] cliquei em Baixar XML de {alvo['arquivo']}, mas o arquivo não chegou em "
+                               f"{', '.join(str(p) for p in pastas_download)} — confira a pasta de downloads do Edge")
 
 
 # ---------------------------------------------------------------------------
@@ -1306,7 +1318,18 @@ def _baixar_e_salvar(win, pasta: Path, tipo: str, mm_aaaa: str, textos: str, pri
         return {"status": "CONCLUIDO", "movimento": "Sem movimento", "qtd_notas_portal": 0, "qtd_xml": 0,
                 "evidencia_png": print_png, "zip_path": None, "observacao": "", "erro": ""}
 
-    baixado = baixar_todos(win, log, ie, data_inicial, data_final)
+    try:
+        baixado = baixar_todos(win, log, ie, data_inicial, data_final)
+    except ErroDownloadPendente as exc:
+        # pedido feito, arquivo não baixado: guarda o necessário pra baixar
+        # depois do histórico (ver baixar_pendentes)
+        exc.pendente = {**getattr(exc, "pedido", {}), "pasta": pasta, "tipo": tipo, "mm_aaaa": mm_aaaa,
+                        "qtd_portal": qtd_portal, "print_png": print_png}
+        raise
+    return _salvar_zip(baixado, pasta, tipo, mm_aaaa, qtd_portal, print_png)
+
+
+def _salvar_zip(baixado: Path, pasta: Path, tipo: str, mm_aaaa: str, qtd_portal, print_png: bytes) -> dict:
     try:
         zip_bytes = arquivos.padronizar_download(baixado.read_bytes(), baixado.name)
         contagem = arquivos.contar_xmls(zip_bytes)
@@ -1333,6 +1356,29 @@ def _baixar_e_salvar(win, pasta: Path, tipo: str, mm_aaaa: str, textos: str, pri
         "observacao": observacao,
         "erro": observacao if situacao == "INCOMPLETO" else "",
     }
+
+
+def baixar_pendentes(pendentes: list, log) -> list:
+    """Pedidos feitos mas não baixados (ex.: a Entrada demorou na fila e o
+    programa seguiu pra Saída): com a Saída da empresa terminada, volta ao
+    "Histórico de Downloads de XMLs" e baixa cada um - a linha mais ANTIGA
+    desta IE/período que apareceu depois do pedido e não foi baixada (a da
+    Saída já foi). Devolve [(pendente, resultado|None, erro|None)]."""
+    saida = []
+    for p in pendentes:
+        tipo_txt = "Saída" if p["tipo"] == "SAIDA" else "Entrada"
+        log(f"\n↻ Baixando a {tipo_txt} que ficou pendente ({p['prefixo']}*.zip)...")
+        try:
+            baixado = _aguardar_e_baixar(p["prefixo"], p["referencia"], p["antes"], log, 5 * 60, mais_recente=False)
+            r = _salvar_zip(baixado, p["pasta"], p["tipo"], p["mm_aaaa"], p["qtd_portal"], p["print_png"])
+            log(f"  ✅ {tipo_txt} baixada — SEFAZ: {r['qtd_notas_portal']} · XML no ZIP: {r['qtd_xml']} {r['observacao']}")
+            saida.append((p, r, None))
+        except ErroParado:
+            raise
+        except Exception as exc:
+            log(f"  ❌ {tipo_txt} continua sem baixar: {exc}")
+            saida.append((p, None, exc))
+    return saida
 
 
 def _competencia(mm_aaaa: str) -> dict:
@@ -1490,13 +1536,27 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, mm_aaaa: str = 
     definir_credencial(cpf, senha)
     _definir_parada(deve_parar)
     linhas = []
+    pendentes: list = []
     try:
         preparar_portal(log, deve_parar)
     except ErroParado:
         log("⏹ Parado antes de começar.")
         empresas = []
 
-    for empresa in empresas:
+    def _fim_da_empresa(idx: int) -> None:
+        proxima = empresas[idx + 1]["codigo"] if idx + 1 < len(empresas) else None
+        if not pendentes or proxima == empresas[idx]["codigo"]:
+            return
+        for pend, r, _erro in baixar_pendentes(pendentes, log):
+            if r is None:
+                continue
+            linha = pend["linha"]
+            linha.update({"Status": r["status"], "Movimento": r["movimento"], "Qtd SEFAZ": r["qtd_notas_portal"],
+                          "XML no ZIP": r["qtd_xml"], "Observação / erro": r["erro"] or r["observacao"],
+                          "Arquivo": str(r["zip_path"] or ""), "Data/Hora": time.strftime("%d/%m/%Y %H:%M")})
+        pendentes.clear()
+
+    for idx, empresa in enumerate(empresas):
         if deve_parar and deve_parar():
             log("⏹ Parado — o resumo traz o que já foi feito.")
             break
@@ -1521,12 +1581,16 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, mm_aaaa: str = 
                            "Observação / erro": str(exc), "Data/Hora": time.strftime("%d/%m/%Y %H:%M")})
             if isinstance(exc, ErroFatal):
                 break
+            if getattr(exc, "pendente", None):
+                pendentes.append({**exc.pendente, "linha": linhas[-1]})
+            _fim_da_empresa(idx)
             continue
         linhas.append({**base, "Status": r["status"], "Movimento": r["movimento"],
                        "Qtd SEFAZ": r["qtd_notas_portal"], "XML no ZIP": r["qtd_xml"],
                        "Observação / erro": r["erro"] or r["observacao"],
                        "Arquivo": str(r["zip_path"] or ""), "Data/Hora": time.strftime("%d/%m/%Y %H:%M")})
         log(f"  ✅ {r['movimento']} — SEFAZ: {r['qtd_notas_portal']} · XML no ZIP: {r['qtd_xml']} {r['observacao']}")
+        _fim_da_empresa(idx)
 
     resumo = _gravar_resumo(pasta_raiz, competencia["mm_aaaa"], linhas)
     ok = sum(1 for l in linhas if l["Status"] == "CONCLUIDO")
@@ -1593,8 +1657,28 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None, log=pr
 def _processar_lote_hub(token, execucao_id, empresas, competencia, pasta_raiz, deve_parar, log) -> None:
 
     alguma_ok = False
+    pendentes: list = []
+
+    def _fim_da_empresa(idx: int) -> None:
+        """Terminou a última consulta da empresa (Saída): baixa o que ficou
+        pendente dela no histórico e atualiza a grade do Hub."""
+        nonlocal alguma_ok
+        proxima = empresas[idx + 1]["codigo"] if idx + 1 < len(empresas) else None
+        if not pendentes or proxima == empresas[idx]["codigo"]:
+            return
+        for pend, r, _erro in baixar_pendentes(pendentes, log):
+            if r is None:
+                continue
+            hub_api.concluir_consulta_nfgo(
+                token, pend["empresa"]["id"], status=r["status"], movimento=r["movimento"], erro=r["erro"],
+                zip_path=r["zip_path"], evidencia_png=r["evidencia_png"],
+                qtd_notas_portal=r["qtd_notas_portal"], qtd_xml=r["qtd_xml"], observacao=r["observacao"],
+            )
+            alguma_ok = alguma_ok or r["status"] == "CONCLUIDO"
+        pendentes.clear()
+
     try:
-        for empresa in empresas:
+        for idx, empresa in enumerate(empresas):
             situacao = hub_api.situacao_execucao(token, execucao_id)
             if situacao.get("status") not in (None, "RODANDO"):
                 log("⛔ A execução foi cancelada/encerrada no Hub — parando.")
@@ -1626,6 +1710,9 @@ def _processar_lote_hub(token, execucao_id, empresas, competencia, pasta_raiz, d
                 )
                 if isinstance(exc, ErroFatal):
                     raise
+                if getattr(exc, "pendente", None):
+                    pendentes.append({**exc.pendente, "empresa": empresa})
+                _fim_da_empresa(idx)
                 continue
             hub_api.concluir_consulta_nfgo(
                 token, empresa["id"], status=r["status"], movimento=r["movimento"], erro=r["erro"],
@@ -1634,6 +1721,7 @@ def _processar_lote_hub(token, execucao_id, empresas, competencia, pasta_raiz, d
             )
             alguma_ok = alguma_ok or r["status"] == "CONCLUIDO"
             log(f"  ✅ {r['movimento']} — SEFAZ: {r['qtd_notas_portal']} · XML no ZIP: {r['qtd_xml']} {r['observacao']}")
+            _fim_da_empresa(idx)
     except ErroParado as exc:
         motivo = "Cancelado pelo usuário" if "Hub" in str(exc) else "Parado no programa do PC"
         hub_api.interromper_execucao(token, execucao_id, motivo)
