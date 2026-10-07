@@ -408,15 +408,32 @@ _SELETOR_VERIFICACAO = ".cf-turnstile, iframe[src*='challenges.cloudflare.com'],
 
 # linha da fila (rpa_empresas.id) em processamento - definida por
 # processar.py; é por ela que o Hub mostra a imagem e devolve o clique
-_EMPRESA_ATUAL: dict = {"id": None}
+_EMPRESA_ATUAL: dict = {"id": None, "execucao_id": None}
 
 
 def _duracao(ms: int) -> str:
     return f"{ms // 60_000} min" if ms >= 60_000 else f"{ms // 1_000}s"
 
 
-def definir_empresa_atual(empresa_id) -> None:
+def definir_empresa_atual(empresa_id, execucao_id=None) -> None:
     _EMPRESA_ATUAL["id"] = empresa_id
+    _EMPRESA_ATUAL["execucao_id"] = execucao_id
+
+
+def _checar_cancelamento() -> None:
+    """Botão "Cancelar processamento" da tela: nas esperas longas
+    (confirmação da Cloudflare, download) o robô para em segundos em vez de
+    esperar o tempo todo."""
+    execucao_id = _EMPRESA_ATUAL.get("execucao_id")
+    if not execucao_id:
+        return
+    from rpa import core
+    try:
+        cancelado = core.cancelamento_solicitado(execucao_id)
+    except Exception:
+        return
+    if cancelado:
+        raise ErroPortal(core.MOTIVO_CANCELADO)
 
 
 def _verificacao_passou(page: Page) -> bool:
@@ -472,6 +489,7 @@ def _aguardar_verificacao_cloudflare(page: Page, timeout_ms: int | None = None) 
         while esperado <= limite_ms:
             if _verificacao_passou(page):
                 return
+            _checar_cancelamento()
             _mostrar_verificacao(page)
             try:
                 core.pedir_confirmacao_humana(empresa_id, page.screenshot())
@@ -1022,6 +1040,8 @@ def baixar_todos(page: Page) -> tuple[bytes, str]:
         while not downloads and esperado < TIMEOUT_DOWNLOAD_MS:
             page.wait_for_timeout(1_000)
             esperado += 1_000
+            if esperado % 5_000 == 0:
+                _checar_cancelamento()
             # pacote grande: o portal avisa no topo quando fica pronto, com
             # um link pra baixar - clica nele uma vez quando aparecer
             if not clicou_link_topo and esperado % 3_000 == 0:

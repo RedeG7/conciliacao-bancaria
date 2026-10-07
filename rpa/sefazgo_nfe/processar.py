@@ -41,7 +41,7 @@ def processar_empresa(page: Page, empresa: dict, competencia: dict) -> dict:
     pasta = arquivos.pasta_relativa(empresa["codigo"], empresa.get("razao_social") or "", mm_aaaa, tipo)
     nome_print = arquivos.nome_evidencia(tipo, mm_aaaa)
 
-    portal.definir_empresa_atual(empresa.get("id"))
+    portal.definir_empresa_atual(empresa.get("id"), empresa.get("execucao_id"))
     portal.abrir_formulario(page)
     portal.pesquisar(page, competencia["data_inicial"], competencia["data_final"], ie, tipo)
 
