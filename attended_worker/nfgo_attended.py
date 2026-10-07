@@ -947,12 +947,27 @@ def _linhas_historico(win) -> list[dict]:
     return linhas
 
 
-def _abrir_historico(win, log) -> None:
-    botao = _achar(win, ["Histórico de Download de XMLs", "Historico de Download"], tipos=("Button", "Hyperlink"))
-    if botao is not None:
-        _acionar(botao)
-        log("  → abri o 'Histórico de Download de XMLs'")
-        time.sleep(3)
+def _abrir_historico(win, log) -> bool:
+    """Botão "Histórico de Downloads de XMLs" no fim do formulário (invoke
+    não precisa rolar a página)."""
+    botao = _achar(win, ["Histórico de Downloads", "Historico de Downloads", "Histórico de Download",
+                         "Historico de Download"], tipos=("Button", "Hyperlink"))
+    if botao is None:
+        return False
+    _acionar(botao)
+    log("  → abri o 'Histórico de Downloads de XMLs'")
+    time.sleep(3)
+    return True
+
+
+def _voltar_ao_historico(log) -> None:
+    """Saiu da tela do histórico antes de baixar (nova autenticação, outra
+    página...): caminho do escritório - Baixar XML NFE > formulário >
+    "Histórico de Downloads de XMLs" (no fim da página)."""
+    log("  Saiu do histórico antes de baixar — voltando: Baixar XML NFE > Histórico de Downloads de XMLs...")
+    win = preparar_portal(log, timeout=5 * 60)
+    if not _abrir_historico(win, log):
+        raise ErroAttended("[download] não achei o botão 'Histórico de Downloads de XMLs' no formulário")
 
 
 def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
@@ -987,15 +1002,18 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
 
     prazo = time.time() + TIMEOUT_FILA_DOWNLOAD_S
     ultimo_refresh = time.time()
-    abriu_historico = False
+    ultima_volta = 0.0
     alvo = None
     situacao_anterior = ""
     while time.time() < prazo:
         w = conectar_janela()
         linhas = _linhas_historico(w)
-        if not linhas and not abriu_historico:
-            _abrir_historico(w, log)
-            abriu_historico = True
+        if not linhas and time.time() - ultima_volta > 45:
+            # fora do histórico: do formulário é só o botão; de outra tela,
+            # refaz o caminho até ele (o pedido continua na fila do portal)
+            ultima_volta = time.time()
+            if not (no_formulario(w) and _abrir_historico(w, log)):
+                _voltar_ao_historico(log)
             continue
         # a mais nova (em cima) com esta IE e período, pedida agora (não uma
         # linha antiga do mesmo período) e que ainda não baixamos
