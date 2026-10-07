@@ -1,0 +1,31 @@
+RPA NF GO - programa do PC do escritório
+=========================================
+
+Baixa os XMLs de NF-e (Entrada e Saída) da SEFAZ-GO de cada empresa da
+execução criada no Hub (hub.redeg7.com > RPA NF GO), usando o Microsoft Edge
+do próprio PC (onde a verificação da Cloudflare passa normalmente).
+
+Como usar
+---------
+1. No Hub, em "RPA NF GO", envie a planilha e crie a execução (ela fica
+   aguardando o programa do PC).
+2. Abra o programa "RPA NF GO" (atalho na Área de Trabalho).
+3. Clique em "Abrir portal no Edge" e, nessa janela do Edge:
+   entre com o certificado do escritório > Acesso Restrito > Baixar XML NFE
+   (faça a nova autenticação se pedir) e pare na tela
+   "Consulta de Notas Recebidas".
+4. No programa: usuário/senha do Hub, pasta de destino, "Iniciar".
+5. Deixe o Edge em primeiro plano sem mexer até terminar. Se aparecer
+   "Verify you are human", clique você mesmo - o programa espera.
+
+Para cada empresa o programa faz Entrada e depois Saída: período da
+competência (1º ao último dia do mês anterior, ou o mês escolhido no Hub),
+Inscrição Estadual, Pesquisar, print da quantidade, Baixar todos os arquivos,
+e salva em:
+  <pasta>\RPA NF GO\<código - empresa>\<MMAAAA>\ENTRADA\ENTRADA_MMAAAA.zip
+  <pasta>\RPA NF GO\<código - empresa>\<MMAAAA>\SAIDA\SAIDA_MMAAAA.zip
+A grade do Hub recebe a quantidade da SEFAZ, a quantidade de XMLs no ZIP,
+o print e o ZIP.
+
+"Parar" (no programa) ou "Cancelar processamento" (no Hub) param antes da
+próxima consulta; o que faltou aparece como erro com "Reprocessar" no Hub.

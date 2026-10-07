@@ -111,3 +111,52 @@ def concluir_execucao(token: str, execucao_id: int, competencia: str, status: st
         json={"competencia": competencia, "status": status}, timeout=TIMEOUT_PADRAO_S,
     )
     _tratar_resposta(r)
+
+
+# ---------------------------------------------------------------------------
+# RPA NF GO (attended_worker/nfgo_attended.py)
+# ---------------------------------------------------------------------------
+
+def _post(token: str, caminho: str, corpo: Optional[dict] = None, timeout: int = TIMEOUT_PADRAO_S) -> dict:
+    try:
+        r = requests.post(f"{BASE_URL}{caminho}", headers=_cabecalho(token), json=corpo or {}, timeout=timeout)
+    except requests.RequestException as exc:
+        raise ErroHubApi(f"[hub] não consegui conectar em {BASE_URL} - confira a internet") from exc
+    return _tratar_resposta(r)
+
+
+def iniciar_execucao(token: str, execucao_id: int) -> None:
+    _post(token, f"/execucoes/{execucao_id}/iniciar")
+
+
+def situacao_execucao(token: str, execucao_id: int) -> dict:
+    """{'status', 'cancelar_solicitado'} - o programa confere antes de cada
+    consulta se alguém clicou em "Cancelar processamento" no Hub."""
+    try:
+        r = requests.get(f"{BASE_URL}/execucoes/{execucao_id}/situacao", headers=_cabecalho(token), timeout=TIMEOUT_PADRAO_S)
+    except requests.RequestException as exc:
+        raise ErroHubApi(f"[hub] não consegui conectar em {BASE_URL} - confira a internet") from exc
+    return _tratar_resposta(r)
+
+
+def interromper_execucao(token: str, execucao_id: int, motivo: str) -> None:
+    _post(token, f"/execucoes/{execucao_id}/interromper", {"motivo": motivo})
+
+
+def concluir_consulta_nfgo(
+    token: str, empresa_id: int, *, status: str, movimento: str, erro: str = "",
+    zip_path: Optional[Path] = None, evidencia_png: Optional[bytes] = None,
+    qtd_notas_portal: Optional[int] = None, qtd_xml: Optional[int] = None, observacao: str = "",
+) -> None:
+    corpo = {
+        "status": status,
+        "movimento": movimento,
+        "erro": erro,
+        "xml_zip_base64": base64.b64encode(zip_path.read_bytes()).decode() if zip_path else None,
+        "xml_zip_nome": zip_path.name if zip_path else "",
+        "evidencia_base64": base64.b64encode(evidencia_png).decode() if evidencia_png else None,
+        "qtd_notas_portal": qtd_notas_portal,
+        "qtd_xml": qtd_xml,
+        "observacao": observacao,
+    }
+    _post(token, f"/empresas/{empresa_id}/concluir", corpo, timeout=TIMEOUT_UPLOAD_S)
