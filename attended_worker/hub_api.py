@@ -188,6 +188,16 @@ def situacao_execucao(token: str, execucao_id: int) -> dict:
     return _tratar_resposta(r)
 
 
+def credencial_nfgo(token: str) -> dict:
+    """{'cpf', 'senha'} do Acesso Restrito cadastrados no Hub (vazio se não
+    tiver) - fica só em memória no programa."""
+    try:
+        r = _sessao.get(f"{BASE_URL}/credencial-nfgo", headers=_cabecalho(token), timeout=TIMEOUT_PADRAO_S)
+    except requests.RequestException as exc:
+        raise _erro_conexao(exc) from exc
+    return _tratar_resposta(r)
+
+
 def interromper_execucao(token: str, execucao_id: int, motivo: str) -> None:
     _post(token, f"/execucoes/{execucao_id}/interromper", {"motivo": motivo})
 

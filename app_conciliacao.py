@@ -1447,7 +1447,7 @@ def _resumo_empresas_planilha(empresas: list[dict], eh_nfgo: bool) -> str:
 
 
 def _bloco_credenciais_certificado_senha(
-    modulo_id: str, modulo_info: dict, escritorio_id: str, usuario: str,
+    modulo_id: str, modulo_info: dict, escritorio_id: str, usuario: str, com_certificado: bool = True,
 ) -> dict | None:
     """Credenciais do RPA NF GO: CPF + senha do Acesso Restrito da SEFAZ-GO
     (obrigatório - é o que o formulário de login pede) e o certificado A1
@@ -1461,7 +1461,7 @@ def _bloco_credenciais_certificado_senha(
     st.subheader("Credenciais")
     cred_portal = rpa_core.tem_credencial(escritorio_id, sistema_portal)
     cred_cert = rpa_core.tem_credencial(escritorio_id, sistema_cert)
-    col_portal, col_cert = st.columns(2)
+    col_portal, col_cert = st.columns(2) if com_certificado else (st.container(), None)
     with col_portal:
         if cred_portal:
             st.caption(
@@ -1470,14 +1470,14 @@ def _bloco_credenciais_certificado_senha(
             )
         else:
             st.caption("⚠️ CPF/senha do Acesso Restrito ainda não cadastrados (obrigatório).")
-    with col_cert:
+    if col_cert is not None:
         if cred_cert:
-            st.caption(
+            col_cert.caption(
                 f"✅ Certificado — titular {cred_cert['cnpj']} · "
                 f"atualizado em {cred_cert['atualizado_em']:%d/%m/%Y %H:%M} por {cred_cert['atualizado_por']}"
             )
         else:
-            st.caption("ℹ️ Nenhum certificado cadastrado (opcional — só se o portal pedir).")
+            col_cert.caption("ℹ️ Nenhum certificado cadastrado (opcional — só se o portal pedir).")
 
     with st.expander("Cadastrar / atualizar acesso SEFAZ-GO (CPF + senha)"):
         with st.form(f"credencial_portal_form_{modulo_id}", clear_on_submit=True):
@@ -1493,6 +1493,8 @@ def _bloco_credenciais_certificado_senha(
                 _flash("flash_rpa_hub", "✅ Acesso SEFAZ-GO salvo.")
                 st.rerun()
 
+    if not com_certificado:
+        return cred_portal
     with st.expander("Cadastrar / atualizar certificado digital do escritório (A1)"):
         st.caption(
             "Só certificado A1 (arquivo .pfx/.p12) — A3 (token/cartão) não dá pra usar no "
@@ -1524,9 +1526,9 @@ def _bloco_programa_nfgo(escritorio_id: str) -> None:
     st.subheader("Programa do PC (processa a fila)")
     st.caption(
         "A consulta de notas da SEFAZ-GO só libera no navegador do escritório. Crie a execução "
-        "aqui e processe pelo programa RPA NF GO: ele abre o Edge, você entra com o certificado "
-        "do escritório até a tela \"Consulta de Notas Recebidas\" e clica em Iniciar. Os "
-        "resultados (quantidades, print e ZIP) voltam para a grade abaixo."
+        "aqui e processe pelo programa RPA NF GO: ele abre o Edge, confirma o certificado do "
+        "escritório, faz a nova autenticação com o CPF/senha cadastrados abaixo e preenche a "
+        "consulta. Os resultados (quantidades, print e ZIP) voltam para a grade abaixo."
     )
     _pasta_attended = Path(__file__).parent / "attended_worker"
     _exe = _pasta_attended / "dist" / "nfgo_attended.exe"
@@ -1627,6 +1629,9 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs")
         # roda no programa do PC (Edge do escritório, certificado do
         # escritório) - não usa credencial guardada no Hub
         _bloco_programa_nfgo(escritorio_id)
+        # CPF + senha do Acesso Restrito: o programa do PC usa na tela
+        # "Este módulo requer nova autenticação" (o certificado fica no Windows)
+        _bloco_credenciais_certificado_senha(modulo_id, modulo_info, escritorio_id, usuario, com_certificado=False)
         cred = True
     elif tipo_auth == "certificado_senha":
         cred = _bloco_credenciais_certificado_senha(modulo_id, modulo_info, escritorio_id, usuario)

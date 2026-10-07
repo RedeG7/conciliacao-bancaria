@@ -194,6 +194,138 @@ def _edits_abaixo_do_rotulo(win, padrao: str) -> list:
     return campos
 
 
+_MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+          "setembro", "outubro", "novembro", "dezembro"]
+_MESES_EN = ["january", "february", "march", "april", "may", "june", "july", "august",
+             "september", "october", "november", "december"]
+
+
+def _mes_do_texto(texto: str):
+    """'Setembro 2026' / 'set 2026' / 'September 2026' -> (9, 2026)."""
+    t = texto.lower().replace("marco", "março")
+    m = re.search(r"([a-zç]+)\.?\s*(?:de\s*)?(\d{4})", t)
+    if not m:
+        return None
+    nome, ano = m.group(1), int(m.group(2))
+    for lista in (_MESES, _MESES_EN):
+        for i, mes in enumerate(lista):
+            if len(nome) >= 3 and mes.startswith(nome[:3]):
+                return i + 1, ano
+    return None
+
+
+def _escolher_no_calendario(win, edit, data: str, log) -> None:
+    """Campo de data que não aceita digitação: abre o calendário do campo,
+    navega até o mês e clica no dia. Dias repetidos na grade (fim do mês
+    anterior / começo do seguinte): dia <= 15 pega o de cima, > 15 o de baixo."""
+    dia, mes, ano = (int(x) for x in data.split("/"))
+    try:
+        edit.click_input()
+    except Exception:
+        edit.set_focus()
+    time.sleep(0.6)
+    for _ in range(36):
+        w = conectar_janela()
+        cab = None
+        for tipo in ("Text", "Button", "Header", "HeaderItem", "Custom", "DataItem"):
+            for el in _descendentes(w, tipo):
+                mm = _mes_do_texto(_texto(el))
+                if mm and len(_texto(el)) <= 30:
+                    cab = (el, mm)
+                    break
+            if cab:
+                break
+        if cab is None:
+            raise ErroAttended("[data] não achei o calendário do campo de data")
+        el_cab, (m_atual, a_atual) = cab
+        if (a_atual, m_atual) == (ano, mes):
+            break
+        voltar = (a_atual, m_atual) > (ano, mes)
+        nomes = ["«", "‹", "<", "anterior", "prev", "previous", "ant"] if voltar else ["»", "›", ">", "próximo", "proximo", "next", "próx"]
+        rc = el_cab.rectangle()
+        botao = None
+        for tipo in ("Button", "Hyperlink", "Text", "Custom", "HeaderItem", "DataItem"):
+            for el in _descendentes(w, tipo):
+                n = _texto(el).lower()
+                if n in nomes or any(n.startswith(x) for x in nomes if len(x) > 2):
+                    r = el.rectangle()
+                    if abs(r.top - rc.top) <= 25:
+                        botao = el
+                        break
+            if botao:
+                break
+        if botao is None:
+            raise ErroAttended(f"[data] não achei a seta do calendário pra ir até {mes:02d}/{ano}")
+        try:
+            botao.click_input()
+        except Exception:
+            _acionar(botao)
+        time.sleep(0.4)
+    else:
+        raise ErroAttended(f"[data] o calendário não chegou em {mes:02d}/{ano}")
+
+    rc = el_cab.rectangle()
+    candidatos = []
+    for tipo in ("DataItem", "Button", "Text", "Hyperlink", "Custom", "ListItem"):
+        for el in _descendentes(w, tipo):
+            if _texto(el) != str(dia):
+                continue
+            try:
+                r = el.rectangle()
+            except Exception:
+                continue
+            if r.top > rc.bottom - 2 and rc.left - 200 <= r.left <= rc.right + 200 and r.top - rc.bottom < 400:
+                candidatos.append(el)
+        if candidatos:
+            break
+    if not candidatos:
+        raise ErroAttended(f"[data] não achei o dia {dia} no calendário")
+    candidatos.sort(key=lambda e: (e.rectangle().top, e.rectangle().left))
+    alvo = candidatos[0] if dia <= 15 else candidatos[-1]
+    alvo.click_input()
+    time.sleep(0.4)
+    log(f"  (data {data} escolhida no calendário)")
+
+
+def _preencher_data(win, edit, data: str, log) -> None:
+    """Data no formato do portal (01/09/2026). Digitação primeiro (sem Esc,
+    que em alguns calendários desfaz o valor; Tab confirma), depois apagando
+    com Backspace, valor pela acessibilidade e, por fim, pelo calendário."""
+    digitos = re.sub(r"\D", "", data)
+
+    def ok() -> bool:
+        return re.sub(r"\D", "", _valor(edit)) == digitos
+
+    tentativas = [
+        ("^a{DELETE}", data), ("^a{DELETE}", digitos),
+        ("{END}" + "{BACKSPACE}" * 12, data), ("{END}" + "{BACKSPACE}" * 12, digitos),
+    ]
+    for limpar, texto in tentativas:
+        try:
+            edit.set_focus()
+            time.sleep(0.2)
+            edit.type_keys(limpar, pause=0.02, set_foreground=False)
+            edit.type_keys(_literal(texto), pause=0.04, set_foreground=False)
+            time.sleep(0.2)
+            edit.type_keys("{TAB}", set_foreground=False)
+            time.sleep(0.4)
+        except Exception:
+            pass
+        if ok():
+            return
+    try:
+        edit.set_edit_text(data)
+        time.sleep(0.3)
+    except Exception:
+        pass
+    if ok():
+        return
+    antes = _valor(edit)
+    _escolher_no_calendario(win, edit, data, log)
+    if not ok():
+        raise ErroAttended(f"[data] o campo não aceitou {data} (ficou '{_valor(edit)}'; antes '{antes}')")
+
+
 def _marcar_opcao(win, textos: list[str]) -> bool:
     """Radio "Entrada"/"Saída": no portal o texto fica AO LADO do botão e o
     radio não tem nome próprio (por isso "Saída não encontrada" no 1º
@@ -318,15 +450,18 @@ def no_formulario(win) -> bool:
     return "Inscrição Estadual" in textos and ("Tipo de notas" in textos or "Consulta de Notas" in textos)
 
 
-def garantir_formulario(win, timeout: float = TIMEOUT_PADRAO_S):
-    """Volta pro formulário (Nova consulta) se estiver no resultado; se não
-    achar em lugar nenhum, a sessão provavelmente caiu - fatal."""
+def garantir_formulario(win, timeout: float = TIMEOUT_PADRAO_S, log=print):
+    """Volta pro formulário (Nova consulta) se estiver no resultado; se
+    sumiu (sessão caiu / pediu nova autenticação), refaz o caminho com
+    preparar_portal; só é fatal se nem assim voltar."""
     if no_formulario(win):
         return win
     botao = _achar(win, ["Nova consulta", "Nova Consulta", "Nova pesquisa"])
     if botao is not None:
         _acionar(botao)
     win2 = _esperar(lambda: (lambda w: w if no_formulario(w) else None)(conectar_janela()), timeout, 1)
+    if win2 is None:
+        win2 = preparar_portal(log, timeout=5 * 60)
     if win2 is None:
         raise ErroFatal(
             "A tela 'Consulta de Notas Recebidas' não está aberta no Edge (sessão expirada?). Faça o "
@@ -335,57 +470,164 @@ def garantir_formulario(win, timeout: float = TIMEOUT_PADRAO_S):
     return win2
 
 
-TIMEOUT_CHEGAR_FORMULARIO_S = 15 * 60  # tempo pra pessoa logar (certificado/nova autenticação)
+TIMEOUT_CHEGAR_FORMULARIO_S = 15 * 60  # tempo máximo até chegar no formulário
 _PASSOS_ATE_FORMULARIO = [
-    # (textos do botão/link, rótulo pro log) - clicados sozinhos quando
-    # aparecem; login com certificado e nova autenticação ficam com a pessoa
+    # (textos do botão/link, rótulo pro log) - clicados sozinhos quando aparecem
     (["Baixar XML NFE", "Baixar XML NF-e"], "Baixar XML NFE"),
     (["Acesso Restrito"], "Acesso Restrito"),
 ]
 
+# CPF/senha do Acesso Restrito cadastrados no Hub (tela do RPA NF GO) - só
+# em memória enquanto o programa roda; usados na "nova autenticação"
+_CREDENCIAL = {"cpf": "", "senha": ""}
+_ULTIMA_AUTENTICACAO = {"quando": 0.0, "falhou": False}
 
-def preparar_portal(log=print, deve_parar=None):
-    """Garante o Edge na tela "Consulta de Notas Recebidas" antes do lote.
+
+def definir_credencial(cpf: str, senha: str) -> None:
+    _CREDENCIAL.update(cpf=re.sub(r"\D", "", cpf or ""), senha=senha or "")
+    _ULTIMA_AUTENTICACAO.update(quando=0.0, falhou=False)
+
+
+def _literal(texto: str) -> str:
+    """type_keys trata + ^ % ~ ( ) { } [ ] como comandos - escapa pra
+    digitar a senha exatamente como ela é."""
+    return "".join(f"{{{c}}}" if c in "+^%~(){}[]" else c for c in texto)
+
+
+def _janelas_edge() -> list:
+    try:
+        return [w for w in Desktop(backend="uia").windows(class_name="Chrome_WidgetWin_1")
+                if "edge" in (w.window_text() or "").lower()]
+    except Exception:
+        return []
+
+
+def _confirmar_certificado(log) -> bool:
+    """Janela "Selecionar um certificado" do Edge (login com certificado do
+    escritório): confirma o certificado que o Edge já deixa selecionado."""
+    for janela in _janelas_edge():
+        try:
+            candidatos = [janela] + janela.descendants(control_type="Window")
+        except Exception:
+            continue
+        for dlg in candidatos:
+            if "certificado" not in _texto(dlg).lower() and "certificate" not in _texto(dlg).lower():
+                continue
+            ok = _achar(dlg, ["OK"], tipos=("Button",), exato=True)
+            if ok is not None:
+                _acionar(ok)
+                log("  → confirmei o certificado na janela do Edge")
+                time.sleep(2)
+                return True
+    return False
+
+
+def _tela_autenticacao(win, textos: str) -> bool:
+    t = textos.lower()
+    if "consulta de notas" in t:
+        return False
+    return "nova autentica" in t or (
+        _achar(win, ["Autenticar"], tipos=("Button",)) is not None and len(_descendentes(win, "Edit")) >= 2
+    )
+
+
+def _eh_senha(edit) -> bool:
+    try:
+        return bool(edit.element_info.element.CurrentIsPassword)
+    except Exception:
+        return False
+
+
+def _autenticar(win, log) -> None:
+    """Tela "Este módulo requer nova autenticação com seu CPF e Senha":
+    preenche com o CPF/senha cadastrados no Hub e clica em Autenticar.
+    Só UMA tentativa por vez (senha errada repetida pode bloquear o
+    acesso); se voltar a pedir logo em seguida, para e avisa."""
+    if not _CREDENCIAL["senha"]:
+        if not _ULTIMA_AUTENTICACAO["falhou"]:
+            log("  ⚠️  O portal pediu CPF e senha, mas não há credencial cadastrada no Hub "
+                "(RPA NF GO > Credenciais). Preencha na janela do Edge ou cadastre no Hub.")
+            _ULTIMA_AUTENTICACAO["falhou"] = True
+        return
+    if _ULTIMA_AUTENTICACAO["falhou"]:
+        return
+    if time.time() - _ULTIMA_AUTENTICACAO["quando"] < 60:
+        log("  ⚠️  O portal pediu a senha de novo logo depois de autenticar — confira o CPF/senha "
+            "cadastrados no Hub. Não vou tentar de novo sozinho (evita bloquear o acesso).")
+        _ULTIMA_AUTENTICACAO["falhou"] = True
+        return
+    edits = _descendentes(win, "Edit")
+    senha = next((e for e in edits if _eh_senha(e)), None)
+    if senha is None and len(edits) >= 2:
+        senha = edits[1]
+    cpf = next((e for e in edits if e is not senha), None)
+    if senha is None:
+        return
+    if cpf is not None and not re.sub(r"\D", "", _valor(cpf)) and _CREDENCIAL["cpf"]:
+        try:
+            cpf.set_focus()
+            cpf.type_keys(_CREDENCIAL["cpf"], pause=0.03, set_foreground=False)
+        except Exception:
+            pass
+    try:
+        senha.set_focus()
+        senha.type_keys("^a{DELETE}", set_foreground=False)
+        senha.type_keys(_literal(_CREDENCIAL["senha"]), with_spaces=True, pause=0.03, set_foreground=False)
+    except Exception as exc:
+        log(f"  ⚠️  Não consegui digitar a senha: {exc}")
+        return
+    botao = _achar(win, ["Autenticar"], tipos=("Button",))
+    if botao is not None:
+        _acionar(botao)
+    else:
+        senha.type_keys("{ENTER}", set_foreground=False)
+    _ULTIMA_AUTENTICACAO["quando"] = time.time()
+    log("  → nova autenticação feita com o CPF/senha do Hub")
+    time.sleep(3)
+
+
+def preparar_portal(log=print, deve_parar=None, timeout: float = TIMEOUT_CHEGAR_FORMULARIO_S):
+    """Garante o Edge na tela "Consulta de Notas Recebidas".
 
     - Edge não aberto no portal -> abre sozinho (Acesso Restrito).
-    - Enquanto não chega no formulário, clica sozinho no que reconhece
-      (card "Acesso Restrito", "Baixar XML NFE") e espera a pessoa fazer o
-      que é dela (escolher o certificado, nova autenticação, verificação).
-    - Chegou no formulário -> devolve a janela e o lote começa sem precisar
-      clicar em Iniciar de novo."""
+    - Janela do certificado -> confirma o certificado selecionado.
+    - "Este módulo requer nova autenticação" -> CPF/senha do Hub + Autenticar.
+    - Card "Acesso Restrito" / "Baixar XML NFE" -> clica.
+    - "Verify you are human" -> espera a pessoa (nunca clica).
+    Chegou no formulário -> devolve a janela."""
     win = _janela_portal()
+    if win is not None and no_formulario(win):
+        return conectar_janela()
     if win is None:
         log("Edge não estava aberto no portal da SEFAZ — abrindo agora...")
         abrir_portal()
-        win = _esperar(_janela_portal, 60, 1)
-        if win is None:
-            raise ErroFatal("Abri o Edge, mas não achei a janela do portal da SEFAZ. Confira se o Edge abriu e clique em Iniciar de novo.")
-    else:
-        win = conectar_janela()
-    if no_formulario(win):
-        return win
 
-    log("Aguardando chegar na tela 'Consulta de Notas Recebidas'.\n"
-        "  Se pedir, escolha o certificado do escritório e faça a nova autenticação na janela do Edge —\n"
-        "  o programa clica sozinho em 'Acesso Restrito' e 'Baixar XML NFE' e começa quando a tela abrir.")
+    log("Indo até a tela 'Consulta de Notas Recebidas'...")
     ultimo_clique: dict = {}
-    prazo = time.time() + TIMEOUT_CHEGAR_FORMULARIO_S
+    avisou_verificacao = False
+    prazo = time.time() + timeout
     while time.time() < prazo:
         if deve_parar and deve_parar():
             raise ErroAttended("Parado antes de começar.")
+        _confirmar_certificado(log)
         win = _janela_portal()
         if win is not None:
             if no_formulario(win):
                 log("✔ Tela 'Consulta de Notas Recebidas' aberta — começando.")
                 return conectar_janela()
-            pagina = _todos_os_textos(win).lower()
-            # tela de login/nova autenticação/certificado é da pessoa: não
-            # clica em nada (um "Acesso Restrito" no cabeçalho a tiraria dali)
-            if any(t in pagina for t in ("nova autentica", "autenticar", "selecione um certificado", "verify you are human")):
+            textos = _todos_os_textos(win)
+            if _tela_autenticacao(win, textos):
+                _autenticar(win, log)
                 time.sleep(2)
                 continue
-            for textos, rotulo in _PASSOS_ATE_FORMULARIO:
-                el = _achar(win, textos, tipos=("Hyperlink", "Button", "ListItem"))
+            if "verify you are human" in textos.lower():
+                if not avisou_verificacao:
+                    log("  ⚠️  A Cloudflare pediu confirmação: clique em 'Verify you are human' no Edge.")
+                    avisou_verificacao = True
+                time.sleep(2)
+                continue
+            for textos_botao, rotulo in _PASSOS_ATE_FORMULARIO:
+                el = _achar(win, textos_botao, tipos=("Hyperlink", "Button", "ListItem"))
                 # não repete o mesmo clique antes de a página ter tempo de abrir
                 if el is not None and time.time() - ultimo_clique.get(rotulo, 0) > 10:
                     try:
@@ -396,7 +638,8 @@ def preparar_portal(log=print, deve_parar=None):
                         pass
                     break
         time.sleep(2)
-    raise ErroFatal("Passaram 15 minutos sem chegar na tela 'Consulta de Notas Recebidas'. Clique em Iniciar de novo quando ela estiver aberta.")
+    raise ErroFatal(f"Passaram {int(timeout // 60)} minutos sem chegar na tela 'Consulta de Notas Recebidas'. "
+                    "Clique em Iniciar de novo quando ela estiver aberta.")
 
 
 def _aguardar_verificacao(win, log) -> None:
@@ -435,16 +678,20 @@ def pesquisar(win, data_inicial: str, data_final: str, ie: str, tipo: str, log):
         raise ErroAttended(f"[consulta] opção '{TEXTOS_TIPO[tipo][0]}' (Tipo de notas) não encontrada")
     # "Modelo da NF-e" já vem "Todos" (prints do escritório) - não mexe
 
-    _preencher(periodo[0], data_inicial)
+    _preencher_data(win, periodo[0], data_inicial, log)
     _fechar_calendario(win)
-    _preencher(periodo[1], data_final)
+    _preencher_data(win, periodo[1], data_final, log)
     _fechar_calendario(win)
 
     # confere tudo de novo (a página pode apagar campo ao perder o foco)
     for campo, valor in ((periodo[0], data_inicial), (periodo[1], data_final), (campo_ie, ie)):
         if re.sub(r"\D", "", _valor(campo)) != re.sub(r"\D", "", valor):
-            _preencher(campo, valor)
+            if campo is campo_ie:
+                _preencher(campo, valor)
+            else:
+                _preencher_data(win, campo, valor, log)
             _fechar_calendario(win)
+    log(f"  Período {_valor(periodo[0])} a {_valor(periodo[1])} · IE {_valor(campo_ie)} · {TEXTOS_TIPO[tipo][0]}")
     if not _opcao_marcada(win, TEXTOS_TIPO[tipo]):
         _marcar_opcao(win, TEXTOS_TIPO[tipo])
 
@@ -669,7 +916,7 @@ def processar_consulta(empresa: dict, competencia: dict, pasta_raiz: Path, log) 
     ).split("/"))
     pasta.mkdir(parents=True, exist_ok=True)
 
-    win = garantir_formulario(conectar_janela())
+    win = garantir_formulario(conectar_janela(), log=log)
     win = pesquisar(win, competencia["data_inicial"], competencia["data_final"], ie, tipo, log)
 
     textos = _todos_os_textos(win)
@@ -844,7 +1091,14 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None, log=pr
     log(f"Execução #{execucao_id} — competência {competencia['mm_aaaa']} "
         f"({competencia['data_inicial']} a {competencia['data_final']}), {len(empresas)} consulta(s).")
 
-    preparar_portal(log, deve_parar)  # abre o Edge se preciso e espera chegar no formulário
+    try:
+        cred = hub_api.credencial_nfgo(token)
+        definir_credencial(cred.get("cpf", ""), cred.get("senha", ""))
+        if not cred.get("senha"):
+            log("ℹ️  Sem CPF/senha do Acesso Restrito no Hub — se o portal pedir nova autenticação, preencha no Edge.")
+    except hub_api.ErroHubApi as exc:
+        log(f"⚠️  Não consegui ler o CPF/senha do Hub ({exc}) — se o portal pedir, preencha no Edge.")
+    preparar_portal(log, deve_parar)  # abre o Edge se preciso e vai até o formulário
     hub_api.iniciar_execucao(token, execucao_id)
 
     alguma_ok = False
