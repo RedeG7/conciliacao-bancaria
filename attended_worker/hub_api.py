@@ -20,9 +20,47 @@ from typing import Optional
 
 import requests
 
+try:
+    # usa os certificados do Windows (não só os do Python): em PC com
+    # antivírus/proxy que inspeciona HTTPS, o certificado do site chega
+    # assinado por uma raiz que só o Windows conhece - sem isso a conexão
+    # falha com erro de SSL mesmo com a internet funcionando
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass
+
+from requests.adapters import HTTPAdapter  # noqa: E402
+from urllib3.util.retry import Retry  # noqa: E402
+
 BASE_URL = "https://hub.redeg7.com/api"
 TIMEOUT_PADRAO_S = 20
 TIMEOUT_UPLOAD_S = 90
+
+
+# repete sozinho falhas de conexão rápidas (rede oscilando, Hub reiniciando
+# no deploy) antes de desistir - só conexão/leitura, nunca uma resposta 4xx
+_sessao = requests.Session()
+_sessao.mount("https://", HTTPAdapter(max_retries=Retry(
+    total=4, connect=4, read=2, status=0, backoff_factor=1, allowed_methods=None, raise_on_status=False,
+)))
+
+
+def _erro_conexao(exc: Exception) -> "ErroHubApi":
+    """Mensagem com o motivo real (SSL, DNS, tempo esgotado...) - só "confira
+    a internet" não ajudava a descobrir o problema."""
+    motivo = str(exc)
+    if "CERTIFICATE_VERIFY_FAILED" in motivo or "SSLError" in type(exc).__name__ or "SSL" in motivo:
+        dica = "certificado de segurança recusado (antivírus/proxy inspecionando HTTPS?)"
+    elif "NameResolution" in motivo or "getaddrinfo" in motivo:
+        dica = "não achou o endereço (DNS/internet)"
+    elif "timed out" in motivo.lower() or "Timeout" in type(exc).__name__:
+        dica = "tempo esgotado (internet lenta ou Hub fora do ar)"
+    elif "refused" in motivo.lower() or "10061" in motivo:
+        dica = "conexão recusada (Hub reiniciando? tente de novo em 1 minuto)"
+    else:
+        dica = "falha de conexão"
+    return ErroHubApi(f"[hub] não consegui conectar em {BASE_URL} - {dica}. Detalhe: {type(exc).__name__}: {motivo[:300]}")
 
 
 class ErroHubApi(Exception):
@@ -44,9 +82,9 @@ def login(usuario: str, senha: str) -> dict:
     """Retorna {'token', 'escritorio_id', 'nome'} ou levanta ErroHubApi se
     usuário/senha estiverem errados."""
     try:
-        r = requests.post(f"{BASE_URL}/login", json={"usuario": usuario, "senha": senha}, timeout=TIMEOUT_PADRAO_S)
+        r = _sessao.post(f"{BASE_URL}/login", json={"usuario": usuario, "senha": senha}, timeout=TIMEOUT_PADRAO_S)
     except requests.RequestException as exc:
-        raise ErroHubApi(f"[hub] não consegui conectar em {BASE_URL} - confira a internet") from exc
+        raise _erro_conexao(exc) from exc
     return _tratar_resposta(r)
 
 
@@ -56,26 +94,26 @@ def _cabecalho(token: str) -> dict:
 
 def verificar_licenca(token: str) -> bool:
     try:
-        r = requests.get(f"{BASE_URL}/licenca", headers=_cabecalho(token), timeout=TIMEOUT_PADRAO_S)
+        r = _sessao.get(f"{BASE_URL}/licenca", headers=_cabecalho(token), timeout=TIMEOUT_PADRAO_S)
     except requests.RequestException as exc:
-        raise ErroHubApi(f"[hub] não consegui conectar em {BASE_URL} - confira a internet") from exc
+        raise _erro_conexao(exc) from exc
     return bool(_tratar_resposta(r)["liberado"])
 
 
 def execucao_pendente(token: str, modulo: str) -> dict:
     """Retorna {'execucao_id': int|None, 'empresas': [{'id','codigo','cnpj_cpf'}]}."""
     try:
-        r = requests.get(
+        r = _sessao.get(
             f"{BASE_URL}/execucao-pendente", params={"modulo": modulo},
             headers=_cabecalho(token), timeout=TIMEOUT_PADRAO_S,
         )
     except requests.RequestException as exc:
-        raise ErroHubApi(f"[hub] não consegui conectar em {BASE_URL} - confira a internet") from exc
+        raise _erro_conexao(exc) from exc
     return _tratar_resposta(r)
 
 
 def marcar_rodando(token: str, empresa_id: int) -> None:
-    r = requests.post(f"{BASE_URL}/empresas/{empresa_id}/rodando", headers=_cabecalho(token), timeout=TIMEOUT_PADRAO_S)
+    r = _sessao.post(f"{BASE_URL}/empresas/{empresa_id}/rodando", headers=_cabecalho(token), timeout=TIMEOUT_PADRAO_S)
     _tratar_resposta(r)
 
 
@@ -90,7 +128,7 @@ def concluir_empresa(
         "xml_zip_base64": base64.b64encode(xml_path.read_bytes()).decode() if xml_path else None,
         "xml_zip_nome": xml_path.name if xml_path else "",
     }
-    r = requests.post(
+    r = _sessao.post(
         f"{BASE_URL}/empresas/{empresa_id}/concluir", headers=_cabecalho(token),
         json=body, timeout=TIMEOUT_UPLOAD_S,
     )
@@ -98,7 +136,7 @@ def concluir_empresa(
 
 
 def erro_empresa(token: str, empresa_id: int, erro: str) -> None:
-    r = requests.post(
+    r = _sessao.post(
         f"{BASE_URL}/empresas/{empresa_id}/erro", headers=_cabecalho(token),
         json={"erro": erro}, timeout=TIMEOUT_PADRAO_S,
     )
@@ -106,7 +144,7 @@ def erro_empresa(token: str, empresa_id: int, erro: str) -> None:
 
 
 def concluir_execucao(token: str, execucao_id: int, competencia: str, status: str) -> None:
-    r = requests.post(
+    r = _sessao.post(
         f"{BASE_URL}/execucoes/{execucao_id}/concluir", headers=_cabecalho(token),
         json={"competencia": competencia, "status": status}, timeout=TIMEOUT_PADRAO_S,
     )
@@ -119,9 +157,9 @@ def concluir_execucao(token: str, execucao_id: int, competencia: str, status: st
 
 def _post(token: str, caminho: str, corpo: Optional[dict] = None, timeout: int = TIMEOUT_PADRAO_S) -> dict:
     try:
-        r = requests.post(f"{BASE_URL}{caminho}", headers=_cabecalho(token), json=corpo or {}, timeout=timeout)
+        r = _sessao.post(f"{BASE_URL}{caminho}", headers=_cabecalho(token), json=corpo or {}, timeout=timeout)
     except requests.RequestException as exc:
-        raise ErroHubApi(f"[hub] não consegui conectar em {BASE_URL} - confira a internet") from exc
+        raise _erro_conexao(exc) from exc
     return _tratar_resposta(r)
 
 
@@ -133,9 +171,9 @@ def situacao_execucao(token: str, execucao_id: int) -> dict:
     """{'status', 'cancelar_solicitado'} - o programa confere antes de cada
     consulta se alguém clicou em "Cancelar processamento" no Hub."""
     try:
-        r = requests.get(f"{BASE_URL}/execucoes/{execucao_id}/situacao", headers=_cabecalho(token), timeout=TIMEOUT_PADRAO_S)
+        r = _sessao.get(f"{BASE_URL}/execucoes/{execucao_id}/situacao", headers=_cabecalho(token), timeout=TIMEOUT_PADRAO_S)
     except requests.RequestException as exc:
-        raise ErroHubApi(f"[hub] não consegui conectar em {BASE_URL} - confira a internet") from exc
+        raise _erro_conexao(exc) from exc
     return _tratar_resposta(r)
 
 

@@ -125,6 +125,10 @@ def licenca(authorization: Optional[str] = Header(None)):
 @app.get("/api/execucao-pendente")
 def execucao_pendente(modulo: str, authorization: Optional[str] = Header(None)):
     usuario = _usuario_autenticado(authorization)
+    try:
+        rpa_core.registrar_contato_pc(usuario["escritorio_id"], modulo, usuario.get("usuario") or usuario.get("nome") or "")
+    except Exception:
+        pass  # só informativo pra tela - nunca derruba a consulta da fila
     execucoes = rpa_core.listar_execucoes(usuario["escritorio_id"], modulo)
     execucao = next((e for e in execucoes if e["status"] == rpa_core.STATUS_PENDENTE), None)
     if execucao is None:
@@ -237,6 +241,10 @@ def execucao_iniciar(execucao_id: int, authorization: Optional[str] = Header(Non
 def execucao_situacao(execucao_id: int, authorization: Optional[str] = Header(None)):
     usuario = _usuario_autenticado(authorization)
     execucao = _execucao_do_escritorio(execucao_id, usuario["escritorio_id"])
+    try:
+        rpa_core.registrar_contato_pc(usuario["escritorio_id"], execucao["modulo"], usuario.get("usuario") or "")
+    except Exception:
+        pass
     return {"status": execucao["status"], "cancelar_solicitado": bool(execucao.get("cancelar_solicitado"))}
 
 

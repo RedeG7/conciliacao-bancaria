@@ -10,3 +10,5 @@ pdfplumber>=0.11,<1
 # nao precisa mais de psycopg/cryptography (tunel SSH + acesso direto ao
 # Postgres do VPS, mecanismo antigo removido).
 requests>=2.31,<3
+# usa os certificados do Windows nas conexoes com o Hub (ver hub_api.py)
+truststore>=0.9

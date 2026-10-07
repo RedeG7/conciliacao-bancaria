@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -170,12 +171,16 @@ class App(tk.Tk):
         self._rodando = False
         self._evento_parar = threading.Event()
         self._hub_token = self._config.get("hub_token", "")
+        self._automatico = False          # rodada atual veio do "aguardar execuções"
+        self._ignorar_ate: dict = {}      # execucao_id -> hora até quando não pega de novo sozinho
+        self._vigiando = False
         self._montar_ui()
         if getattr(sys, "frozen", False):
             threading.Thread(
                 target=_atualizar_atalho_desktop, args=(Path(sys.executable).resolve(), False), daemon=True,
             ).start()
         self.after(800, self._checar_atualizacao)
+        self.after(3000, self._vigiar)
 
     def _montar_ui(self) -> None:
         pad = {"padx": 10, "pady": 6}
@@ -222,6 +227,16 @@ class App(tk.Tk):
         self.btn_parar = ttk.Button(f_acoes, text="⏹  Parar", command=self._parar, state="disabled")
         self.btn_parar.pack(side="left", padx=4)
 
+        f_auto = ttk.Frame(self)
+        f_auto.pack(fill="x", padx=10)
+        self.aguardar_var = tk.BooleanVar(value=self._config.get("aguardar_hub", True))
+        ttk.Checkbutton(
+            f_auto, variable=self.aguardar_var, command=self._salvar_aguardar,
+            text="Ficar aguardando o Hub: ao criar uma execução ou clicar em Reprocessar no Hub, começa sozinho",
+        ).pack(anchor="w")
+        self.lbl_aguardando = ttk.Label(f_auto, text="", foreground="#555")
+        self.lbl_aguardando.pack(anchor="w")
+
         f4 = ttk.LabelFrame(self, text="Andamento")
         f4.pack(fill="both", expand=True, **pad)
         self.txt_log = tk.Text(f4, height=14, state="disabled", wrap="word")
@@ -251,7 +266,64 @@ class App(tk.Tk):
             "pasta_raiz": self.pasta_var.get().strip(),
             "hub_usuario": self.hub_usuario_var.get().strip(),
             "hub_token": self._hub_token,
+            "aguardar_hub": bool(self.aguardar_var.get()),
         }
+
+    def _salvar_aguardar(self) -> None:
+        self._config.update(self._config_atual())
+        _salvar_config(self._config)
+        if not self.aguardar_var.get():
+            self.lbl_aguardando.configure(text="")
+
+    # ------------------------------------------------------------------
+    # aguardar execuções do Hub: com o programa aberto, confere a fila a
+    # cada 30 s e começa sozinho (o Reprocessar/criar execução no Hub vira
+    # o "comando" pro PC). Usa a sessão salva - precisa ter feito o
+    # Iniciar com a senha uma vez.
+    # ------------------------------------------------------------------
+
+    INTERVALO_VIGIA_MS = 30_000
+
+    def _vigiar(self) -> None:
+        self.after(self.INTERVALO_VIGIA_MS, self._vigiar)
+        usuario = self.hub_usuario_var.get().strip()
+        if (
+            self._rodando or self._vigiando or not self.aguardar_var.get()
+            or not self._hub_token or self._config.get("hub_usuario") != usuario
+            or not self.pasta_var.get().strip()
+        ):
+            if self.aguardar_var.get() and not self._rodando and not self._hub_token:
+                self.lbl_aguardando.configure(text="Para aguardar o Hub, clique em Iniciar uma vez com a senha (a sessão fica salva).")
+            return
+        self._vigiando = True
+        threading.Thread(target=self._vigiar_bg, args=(self._hub_token,), daemon=True).start()
+
+    def _vigiar_bg(self, token: str) -> None:
+        try:
+            pendente = hub_api.execucao_pendente(token, core.MODULO)
+        except hub_api.ErroHubApi as exc:
+            texto = f"⚠️ Sem contato com o Hub ({time.strftime('%H:%M')}): {str(exc)[:120]}"
+            if "faça login de novo" in str(exc):
+                self._hub_token = ""
+                texto = "Sessão do Hub expirou — digite a senha e clique em Iniciar."
+            self.after(0, self.lbl_aguardando.configure, {"text": texto})
+            self._vigiando = False
+            return
+        execucao_id = pendente.get("execucao_id")
+        self._vigiando = False
+        if execucao_id and time.time() >= self._ignorar_ate.get(execucao_id, 0):
+            self.after(0, self._iniciar_automatico, execucao_id)
+        else:
+            self.after(0, self.lbl_aguardando.configure,
+                       {"text": f"🟢 Aguardando execuções do Hub — última conferência às {time.strftime('%H:%M:%S')}"})
+
+    def _iniciar_automatico(self, execucao_id: int) -> None:
+        if self._rodando:
+            return
+        self._automatico = True
+        self._execucao_auto = execucao_id
+        self.lbl_aguardando.configure(text=f"▶ Execução #{execucao_id} recebida do Hub — processando...")
+        self._comecar(self.hub_usuario_var.get().strip(), "", self.pasta_var.get().strip())
 
     def _iniciar(self) -> None:
         if self._rodando:
@@ -270,6 +342,10 @@ class App(tk.Tk):
             messagebox.showwarning("Faltou informação", "Informe a senha (primeira vez usando este usuário, ou sessão expirada).")
             return
 
+        self._automatico = False
+        self._comecar(usuario, senha, pasta)
+
+    def _comecar(self, usuario: str, senha: str, pasta: str) -> None:
         _salvar_config(self._config_atual())
         self._rodando = True
         self._evento_parar.clear()
@@ -318,6 +394,21 @@ class App(tk.Tk):
     def _finalizar(self, erro_msg: "str | None" = None) -> None:
         parado = self._evento_parar.is_set()
         self._rodando = False
+        if self._automatico:
+            # rodada sozinha: sem janela de aviso (ninguém pode estar no PC);
+            # se falhou antes de terminar, não pega a mesma execução de novo
+            # por 20 min (senão reabriria o Edge sem parar)
+            self._automatico = False
+            self.btn_iniciar.configure(state="normal", text="▶  Iniciar processamento")
+            self.btn_parar.configure(state="disabled", text="⏹  Parar")
+            self._evento_parar.clear()
+            if erro_msg or parado:
+                self._ignorar_ate[self._execucao_auto] = time.time() + 20 * 60
+                self.lbl_aguardando.configure(
+                    text=f"⚠️ Execução #{self._execucao_auto} parou — tento de novo em 20 min, ou clique em Iniciar.")
+            else:
+                self.lbl_aguardando.configure(text=f"✅ Execução #{self._execucao_auto} concluída às {time.strftime('%H:%M')} — aguardando o Hub.")
+            return
         self._evento_parar.clear()
         self.btn_iniciar.configure(state="normal", text="▶  Iniciar processamento")
         self.btn_parar.configure(state="disabled", text="⏹  Parar")
