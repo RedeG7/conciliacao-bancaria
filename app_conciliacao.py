@@ -1312,7 +1312,8 @@ def _linhas_grade_nfgo(execucao: dict, empresas_exec: list[dict]) -> list[dict]:
             "Data/Hora": max(atualizados).strftime("%d/%m/%Y %H:%M") if atualizados else "",
             "Observação": " | ".join(observacoes),
         })
-    return grade
+    # célula vazia em vez de "None" (consulta ainda não feita)
+    return [{k: ("" if v is None else v) for k, v in linha.items()} for linha in grade]
 
 
 def _montar_zip_nfgo(execucao: dict, empresas_exec: list[dict]) -> bytes:
@@ -1356,8 +1357,18 @@ def _botao_cancelar_execucao(execucao: dict, coluna, prefixo: str) -> None:
     if execucao["status"] not in (rpa_core.STATUS_PENDENTE, rpa_core.STATUS_RODANDO):
         return
     if execucao.get("cancelar_solicitado"):
-        coluna.caption("⛔ Cancelamento solicitado — o robô para na próxima etapa (clique em 🔄 Atualizar status).")
+        coluna.caption("⛔ Cancelamento solicitado — o robô para na próxima etapa. Se o programa do PC "
+                       "foi fechado ou travou, force o cancelamento:")
+        if coluna.button("⛔ Forçar cancelamento", key=f"{prefixo}_forcar_{execucao['id']}"):
+            qtd = rpa_core.forcar_cancelamento(execucao["id"], st.session_state.get("escritorio_id"))
+            _flash("flash_rpa_hub", f"⛔ Execução cancelada ({qtd} consulta(s) marcadas) — use 🔁 Reprocessar quando quiser.")
+            st.rerun()
         return
+    if execucao["status"] == rpa_core.STATUS_RODANDO and execucao.get("modulo") in rpa_core.MODULOS_PC:
+        contato = rpa_core.ultimo_contato_pc(st.session_state.get("escritorio_id"), execucao["modulo"])
+        if contato is None or (contato["segundos"] or 0) > rpa_core.PC_SEM_CONTATO_S:
+            coluna.warning("⚠️ O programa do PC parou de responder — se ele foi fechado, clique em "
+                           "Cancelar processamento para liberar o Reprocessar.")
     if coluna.button("⛔ Cancelar processamento", key=f"{prefixo}_{execucao['id']}"):
         resultado = rpa_core.solicitar_cancelamento(execucao["id"], st.session_state.get("escritorio_id"))
         if resultado == "cancelada":

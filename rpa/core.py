@@ -613,20 +613,36 @@ def atualizar_empresa(
 MOTIVO_CANCELADO = "Cancelado pelo usuário"
 
 
+# módulos processados pelo programa do PC (não pelo worker do servidor) e
+# quanto tempo sem contato dele conta como "fechado"
+MODULOS_PC = {"sefazgo_nfe"}
+PC_SEM_CONTATO_S = 120
+
+
 def solicitar_cancelamento(execucao_id: int, escritorio_id: str) -> str:
     """Tela: execução ainda na fila (PENDENTE) é cancelada na hora - as
     empresas pendentes viram ERRO "Cancelado pelo usuário" (aparece o
     Reprocessar). Execução RODANDO só recebe o pedido; o worker para na
     próxima etapa e marca o restante (ver cancelamento_solicitado).
-    Retorna 'cancelada', 'solicitado' ou 'nada'."""
+    Retorna 'cancelada', 'solicitado' ou 'nada'.
+
+    Programa do PC (attended) sem contato há mais de PC_SEM_CONTATO_S: não
+    tem quem leia o pedido (fechado/travado) - cancela na hora também."""
     with auth.conectar() as conn:
         execucao = conn.execute(
-            "SELECT status FROM rpa_execucoes WHERE id = %s AND escritorio_id = %s FOR UPDATE",
+            "SELECT status, modulo FROM rpa_execucoes WHERE id = %s AND escritorio_id = %s FOR UPDATE",
             (execucao_id, escritorio_id),
         ).fetchone()
         if not execucao:
             return "nada"
-        if execucao["status"] == STATUS_PENDENTE:
+        pc_parado = False
+        if execucao["status"] == STATUS_RODANDO and execucao["modulo"] in MODULOS_PC:
+            contato = conn.execute(
+                "SELECT EXTRACT(EPOCH FROM now() - visto_em)::int AS segundos FROM rpa_pc_contato "
+                "WHERE escritorio_id = %s AND modulo = %s", (escritorio_id, execucao["modulo"]),
+            ).fetchone()
+            pc_parado = contato is None or (contato["segundos"] or 0) > PC_SEM_CONTATO_S
+        if execucao["status"] == STATUS_PENDENTE or pc_parado:
             conn.execute(
                 "UPDATE rpa_empresas SET status = %s, erro = %s, atualizado_em = now() "
                 "WHERE execucao_id = %s AND status IN (%s, %s)",
@@ -651,6 +667,30 @@ def cancelamento_solicitado(execucao_id: int) -> bool:
             "SELECT cancelar_solicitado FROM rpa_execucoes WHERE id = %s", (execucao_id,)
         ).fetchone()
     return bool(linha and linha["cancelar_solicitado"])
+
+
+def forcar_cancelamento(execucao_id: int, escritorio_id: str) -> int:
+    """Tela, "Forçar cancelamento": execução presa em RODANDO (programa do PC
+    fechado/travado no meio) - o que não terminou vira ERRO "Cancelado pelo
+    usuário" e a execução fica ERRO (aparece o Reprocessar). Retorna quantas
+    linhas foram marcadas."""
+    with auth.conectar() as conn:
+        execucao = conn.execute(
+            "SELECT id FROM rpa_execucoes WHERE id = %s AND escritorio_id = %s", (execucao_id, escritorio_id),
+        ).fetchone()
+        if not execucao:
+            return 0
+        linhas = conn.execute(
+            "UPDATE rpa_empresas SET status = %s, erro = %s, atualizado_em = now() "
+            "WHERE execucao_id = %s AND status IN (%s, %s) RETURNING id",
+            (STATUS_ERRO, MOTIVO_CANCELADO, execucao_id, STATUS_PENDENTE, STATUS_RODANDO),
+        ).fetchall()
+        conn.execute(
+            "UPDATE rpa_execucoes SET status = %s, concluido_em = now(), cancelar_solicitado = false WHERE id = %s",
+            (STATUS_ERRO, execucao_id),
+        )
+        conn.commit()
+    return len(linhas)
 
 
 def cancelar_restantes(execucao_id: int) -> int:
