@@ -1255,8 +1255,6 @@ _STATUS_NFGO = {
 def _status_linha_nfgo(linha: dict | None) -> str:
     if linha is None:
         return "—"
-    if linha.get("interacao_pedida_em") and linha["status"] == rpa_core.STATUS_RODANDO:
-        return "🔒 Aguardando seu clique"
     if linha["status"] == rpa_core.STATUS_CONCLUIDO:
         return "➖ Sem movimento" if linha.get("movimento") == "Sem movimento" else "✅ Concluído"
     return _STATUS_NFGO.get(linha["status"], linha["status"])
@@ -1265,7 +1263,7 @@ def _status_linha_nfgo(linha: dict | None) -> str:
 def _status_empresa_nfgo(linhas: list[dict]) -> str:
     """Status consolidado da empresa (Entrada + Saída): o pior dos dois."""
     status = [_status_linha_nfgo(l) for l in linhas]
-    for rotulo in ("🔒 Aguardando seu clique", "❌ Erro", "🔄 Executando", "⏳ Aguardando"):
+    for rotulo in ("❌ Erro", "🔄 Executando", "⏳ Aguardando"):
         if rotulo in status:
             return rotulo
     if all(s == "➖ Sem movimento" for s in status):
@@ -1369,37 +1367,6 @@ def _botao_cancelar_execucao(execucao: dict, coluna, prefixo: str) -> None:
         st.rerun()
 
 
-def _painel_confirmacao_humana(linha: dict) -> None:
-    """A verificação da Cloudflare do formulário pediu "Verify you are
-    human": mostra a imagem da tela do robô e repassa o clique da PESSOA
-    (no ponto clicado da imagem) para o navegador do robô - um clique por
-    vez, feito por quem está olhando. Ver rpa/sefazgo_nfe/portal.py."""
-    from PIL import Image
-
-    tipo = (linha.get("obrigacao") or "").title()
-    st.warning(
-        f"🔒 **A SEFAZ pede confirmação** — {linha['codigo']} · {tipo}. Clique no quadro "
-        "**\"Verify you are human\"** na imagem abaixo (o robô espera até 5 min). Depois clique em "
-        "**🔄 Atualizar imagem** para ver o resultado."
-    )
-    imagem = Image.open(io.BytesIO(bytes(linha["interacao_png"])))
-    try:
-        from streamlit_image_coordinates import streamlit_image_coordinates
-    except ImportError:
-        st.image(imagem)
-        st.error("Componente de clique na imagem não instalado (streamlit-image-coordinates).")
-        return
-    clique = streamlit_image_coordinates(imagem, key=f"clique_nfgo_{linha['id']}_{linha.get('clique_em')}")
-    if clique and clique.get("width"):
-        escala_x = imagem.width / clique["width"]
-        escala_y = imagem.height / clique["height"]
-        x, y = round(clique["x"] * escala_x), round(clique["y"] * escala_y)
-        rpa_core.registrar_clique(linha["id"], x, y, st.session_state.get("usuario_logado") or "")
-        st.success(f"Clique enviado ao robô (ponto {x}, {y}). Aguarde alguns segundos e atualize a imagem.")
-    if st.button("🔄 Atualizar imagem", key=f"atualizar_clique_{linha['id']}"):
-        st.rerun()
-
-
 def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
     """Execução do RPA NF GO: grade Código | Empresa | CNPJ | IE |
     Competência | XML Entrada | XML Saída | Total | Status | Data/Hora e,
@@ -1416,10 +1383,7 @@ def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
         f"Entrada: {total_entrada} XMLs | Saída: {total_saida} XMLs | {execucao['status']}"
         f"{f' ({erros} consulta(s) com erro)' if erros else ''}"
     )
-    aguardando_clique = any(
-        e.get("interacao_png") and e["status"] == rpa_core.STATUS_RODANDO for e in empresas_exec
-    )
-    with st.expander(titulo, expanded=aguardando_clique):
+    with st.expander(titulo):
         _pasta = f" · Pasta: {execucao['pasta_destino']}" if execucao.get("pasta_destino") else ""
         st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}{_pasta}")
         if concluidas and execucao.get("concluido_em"):
@@ -1440,10 +1404,6 @@ def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
                 qtd = rpa_core.reprocessar_falhas(execucao["id"])
                 _flash("flash_rpa_hub", f"✅ {qtd} consulta(s) voltaram para a fila — o worker processa em instantes.")
                 st.rerun()
-
-        for linha in empresas_exec:
-            if linha.get("interacao_png") and linha["status"] == rpa_core.STATUS_RODANDO:
-                _painel_confirmacao_humana(linha)
 
         st.dataframe(_linhas_grade_nfgo(execucao, empresas_exec), use_container_width=True, hide_index=True)
 
