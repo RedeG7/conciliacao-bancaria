@@ -159,6 +159,12 @@ def garantir_schema() -> None:
             ADD COLUMN IF NOT EXISTS clique_em TIMESTAMPTZ,
             ADD COLUMN IF NOT EXISTS clique_por TEXT
         """)
+        # botão "Cancelar processamento" da tela: o worker confere entre
+        # uma empresa e outra (e nas esperas longas do RPA NF GO) e para
+        conn.execute("""
+            ALTER TABLE rpa_execucoes
+            ADD COLUMN IF NOT EXISTS cancelar_solicitado BOOLEAN NOT NULL DEFAULT false
+        """)
         conn.commit()
 
 
@@ -391,7 +397,7 @@ def reprocessar_falhas(execucao_id: int) -> int:
         ).fetchall()
         if linhas:
             conn.execute(
-                "UPDATE rpa_execucoes SET status = %s, concluido_em = NULL WHERE id = %s",
+                "UPDATE rpa_execucoes SET status = %s, concluido_em = NULL, cancelar_solicitado = false WHERE id = %s",
                 (STATUS_PENDENTE, execucao_id),
             )
         conn.commit()
@@ -628,3 +634,65 @@ def registrar_clique(empresa_id: int, x: int, y: int, usuario: str) -> None:
             WHERE id = %s AND interacao_pedida_em IS NOT NULL
         """, (int(x), int(y), usuario, empresa_id))
         conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Cancelamento pela tela
+# ---------------------------------------------------------------------------
+
+MOTIVO_CANCELADO = "Cancelado pelo usuário"
+
+
+def solicitar_cancelamento(execucao_id: int, escritorio_id: str) -> str:
+    """Tela: execução ainda na fila (PENDENTE) é cancelada na hora - as
+    empresas pendentes viram ERRO "Cancelado pelo usuário" (aparece o
+    Reprocessar). Execução RODANDO só recebe o pedido; o worker para na
+    próxima etapa e marca o restante (ver cancelamento_solicitado).
+    Retorna 'cancelada', 'solicitado' ou 'nada'."""
+    with auth.conectar() as conn:
+        execucao = conn.execute(
+            "SELECT status FROM rpa_execucoes WHERE id = %s AND escritorio_id = %s FOR UPDATE",
+            (execucao_id, escritorio_id),
+        ).fetchone()
+        if not execucao:
+            return "nada"
+        if execucao["status"] == STATUS_PENDENTE:
+            conn.execute(
+                "UPDATE rpa_empresas SET status = %s, erro = %s, atualizado_em = now() "
+                "WHERE execucao_id = %s AND status IN (%s, %s)",
+                (STATUS_ERRO, MOTIVO_CANCELADO, execucao_id, STATUS_PENDENTE, STATUS_RODANDO),
+            )
+            conn.execute(
+                "UPDATE rpa_execucoes SET status = %s, concluido_em = now(), cancelar_solicitado = false WHERE id = %s",
+                (STATUS_ERRO, execucao_id),
+            )
+            conn.commit()
+            return "cancelada"
+        if execucao["status"] == STATUS_RODANDO:
+            conn.execute("UPDATE rpa_execucoes SET cancelar_solicitado = true WHERE id = %s", (execucao_id,))
+            conn.commit()
+            return "solicitado"
+    return "nada"
+
+
+def cancelamento_solicitado(execucao_id: int) -> bool:
+    with auth.conectar() as conn:
+        linha = conn.execute(
+            "SELECT cancelar_solicitado FROM rpa_execucoes WHERE id = %s", (execucao_id,)
+        ).fetchone()
+    return bool(linha and linha["cancelar_solicitado"])
+
+
+def cancelar_restantes(execucao_id: int) -> int:
+    """Worker: marca as empresas que não terminaram como canceladas e limpa
+    o pedido. Retorna quantas foram marcadas."""
+    with auth.conectar() as conn:
+        linhas = conn.execute(
+            "UPDATE rpa_empresas SET status = %s, erro = %s, atualizado_em = now(), "
+            "interacao_png = NULL, interacao_pedida_em = NULL "
+            "WHERE execucao_id = %s AND status IN (%s, %s) RETURNING id",
+            (STATUS_ERRO, MOTIVO_CANCELADO, execucao_id, STATUS_PENDENTE, STATUS_RODANDO),
+        ).fetchall()
+        conn.execute("UPDATE rpa_execucoes SET cancelar_solicitado = false WHERE id = %s", (execucao_id,))
+        conn.commit()
+    return len(linhas)

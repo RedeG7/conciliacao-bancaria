@@ -134,7 +134,13 @@ def processar_execucao(execucao: dict) -> None:
             return
 
         alguma_concluida = False
+        cancelada = False
         for empresa in empresas:
+            if core.cancelamento_solicitado(execucao_id):
+                qtd = core.cancelar_restantes(execucao_id)
+                log.warning("Execução %s: cancelada pelo usuário — %s consulta(s) não processada(s)", execucao_id, qtd)
+                cancelada = True
+                break
             log.info("Execução %s: processando empresa %s (%s)", execucao_id, empresa["codigo"], empresa["obrigacao"])
             core.marcar_empresa_status(empresa["id"], core.STATUS_RODANDO)
             try:
@@ -174,7 +180,12 @@ def processar_execucao(execucao: dict) -> None:
 
     # CONCLUIDO só se pelo menos uma empresa terminou com sucesso — senão o
     # status agregado ficaria enganoso (ex.: "CONCLUIDO" com 0/4 concluídas).
-    status_final = core.STATUS_CONCLUIDO if alguma_concluida else core.STATUS_ERRO
+    if core.cancelamento_solicitado(execucao_id):
+        # pedido chegou durante a última empresa
+        core.cancelar_restantes(execucao_id)
+        cancelada = True
+    # cancelada = ERRO (aparece o Reprocessar para o que não terminou)
+    status_final = core.STATUS_CONCLUIDO if alguma_concluida and not cancelada else core.STATUS_ERRO
     core.marcar_execucao_concluida(execucao_id, competencia["mm_aaaa"], status_final)
     log.info("Execução %s: finalizada (%s)", execucao_id, status_final)
 

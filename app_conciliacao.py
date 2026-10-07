@@ -1351,6 +1351,24 @@ def _montar_zip_nfgo(execucao: dict, empresas_exec: list[dict]) -> bytes:
     return buffer.getvalue()
 
 
+def _botao_cancelar_execucao(execucao: dict, coluna, prefixo: str) -> None:
+    """"⛔ Cancelar processamento": na fila, cancela na hora; rodando, o
+    worker para na próxima etapa. O que não terminou vira erro "Cancelado
+    pelo usuário" e o botão Reprocessar aparece (ver rpa_core)."""
+    if execucao["status"] not in (rpa_core.STATUS_PENDENTE, rpa_core.STATUS_RODANDO):
+        return
+    if execucao.get("cancelar_solicitado"):
+        coluna.caption("⛔ Cancelamento solicitado — o robô para na próxima etapa (clique em 🔄 Atualizar status).")
+        return
+    if coluna.button("⛔ Cancelar processamento", key=f"{prefixo}_{execucao['id']}"):
+        resultado = rpa_core.solicitar_cancelamento(execucao["id"], st.session_state.get("escritorio_id"))
+        if resultado == "cancelada":
+            _flash("flash_rpa_hub", "⛔ Execução cancelada — use 🔁 Reprocessar quando quiser rodar de novo.")
+        elif resultado == "solicitado":
+            _flash("flash_rpa_hub", "⛔ Cancelamento solicitado — o robô para na próxima etapa; depois use 🔁 Reprocessar.")
+        st.rerun()
+
+
 def _painel_confirmacao_humana(linha: dict) -> None:
     """A verificação da Cloudflare do formulário pediu "Verify you are
     human": mostra a imagem da tela do robô e repassa o clique da PESSOA
@@ -1406,7 +1424,8 @@ def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
         st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}{_pasta}")
         if concluidas and execucao.get("concluido_em"):
             _barra_retencao_arquivos(execucao["concluido_em"])
-        _cols_acoes = st.columns(2)
+        _cols_acoes = st.columns(3)
+        _botao_cancelar_execucao(execucao, _cols_acoes[2], "cancelar_nfgo")
         if any(e.get("xml_zip") or e.get("evidencia_png") for e in empresas_exec):
             _cols_acoes[0].download_button(
                 "📦 Baixar tudo (.zip, uma pasta por empresa/competência/tipo)",
@@ -1747,7 +1766,8 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs")
             st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}")
             if concluidas and execucao.get("concluido_em"):
                 _barra_retencao_arquivos(execucao["concluido_em"])
-            _cols_acoes = st.columns(2)
+            _cols_acoes = st.columns(3)
+            _botao_cancelar_execucao(execucao, _cols_acoes[2], "cancelar")
             if concluidas:
                 _pasta_competencia_zip = (execucao.get("competencia") or "sem-competencia").replace("/", "")
                 _cols_acoes[0].download_button(
