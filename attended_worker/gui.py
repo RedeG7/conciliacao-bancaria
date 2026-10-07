@@ -290,9 +290,12 @@ class App(tk.Tk):
     # ações
     # ------------------------------------------------------------------
 
-    def _abrir_portal(self) -> None:
+    def _url_portal(self) -> str:
         slug = MUNICIPIOS[self.municipio_var.get()]
-        url = f"https://www.issnetonline.com.br/{slug}/online/login/login.aspx"
+        return f"https://www.issnetonline.com.br/{slug}/online/login/login.aspx"
+
+    def _abrir_portal(self) -> None:
+        url = self._url_portal()
         try:
             subprocess.Popen(["cmd", "/c", "start", "msedge", "--force-renderer-accessibility", url])
         except Exception as exc:
@@ -380,7 +383,12 @@ class App(tk.Tk):
         self.txt_log.delete("1.0", "end")
         self.txt_log.configure(state="disabled")
 
-        threading.Thread(target=self._rodar, args=(modo, planilha, hub_usuario, hub_senha, pasta), daemon=True).start()
+        # URL lida aqui (thread principal) - StringVar.get() de dentro da
+        # thread de processamento não é seguro no Tkinter.
+        url_portal = self._url_portal()
+        threading.Thread(
+            target=self._rodar, args=(modo, planilha, hub_usuario, hub_senha, pasta, url_portal), daemon=True,
+        ).start()
 
     def _parar(self) -> None:
         """Sinaliza pra parar ANTES da próxima empresa (ver `deve_parar` em
@@ -405,16 +413,22 @@ class App(tk.Tk):
         _salvar_config(self._config_atual())
         return self._hub_token
 
-    def _rodar(self, modo: str, planilha: str, hub_usuario: str, hub_senha: str, pasta: str) -> None:
+    def _rodar(
+        self, modo: str, planilha: str, hub_usuario: str, hub_senha: str, pasta: str, url_portal: str,
+    ) -> None:
         saida = _LogParaWidget(self)
         erro_msg = None
         try:
             with contextlib.redirect_stdout(saida):
                 if modo == "planilha":
-                    core.processar_planilha(Path(planilha), Path(pasta), deve_parar=self._evento_parar.is_set)
+                    core.processar_planilha(
+                        Path(planilha), Path(pasta), deve_parar=self._evento_parar.is_set, url_portal=url_portal,
+                    )
                 else:
                     token = self._obter_token_hub(hub_usuario, hub_senha)
-                    core.processar_execucao_hub(token, Path(pasta), deve_parar=self._evento_parar.is_set)
+                    core.processar_execucao_hub(
+                        token, Path(pasta), deve_parar=self._evento_parar.is_set, url_portal=url_portal,
+                    )
             self.after(0, self._log, "\n✅ Terminado.")
         except core.hub_api.ErroHubApi as exc:
             erro_msg = str(exc)

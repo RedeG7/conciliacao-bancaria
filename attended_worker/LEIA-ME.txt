@@ -50,6 +50,10 @@ USO NORMAL — COM JANELA (recomendado, sem terminal)
    de texto da própria janela; no final mostra um resumo (OK/ERRO por
    empresa).
 
+   Se o portal ficar em branco ou a janela sumir no meio do lote, o
+   programa reabre o portal do município no Edge sozinho (o login do
+   certificado digital fica salvo no navegador) e continua.
+
    A pasta de destino é organizada automaticamente como:
    PASTA_ESCOLHIDA\{código da empresa}-\{competência MMAAAA}\arquivo.pdf
    (ex.: C:\Prefeituras\92-\082026\92 DMS 08 2026.pdf — o código vem

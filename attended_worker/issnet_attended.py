@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -138,6 +139,48 @@ def conectar_janela():
         "Não achei a janela do navegador logada no portal. Confirme que está aberto "
         "(com --force-renderer-accessibility) e logado."
     )
+
+
+def recuperar_portal(url_portal: str, timeout: float = 60):
+    """Reabre o portal no Edge e espera cair na tela 'Empresas' - usado
+    quando a página some ou fica em branco (bug do portal). Como o login
+    por certificado digital fica salvo no navegador, abrir de novo a URL
+    do portal entra direto, sem logar de novo (confirmado pelo usuário).
+    Devolve a janela já conectada. Não confirmei ao vivo em QUAL página o
+    portal cai depois de reaberto - se não for a tela 'Empresas', levanta
+    ErroAttended com mensagem clara em vez de seguir às cegas."""
+    print("  Portal em branco/não encontrado — reabrindo no Edge (a sessão do certificado fica salva)...")
+    subprocess.Popen(["cmd", "/c", "start", "msedge", "--force-renderer-accessibility", url_portal])
+    prazo = time.time() + timeout
+    while time.time() < prazo:
+        time.sleep(3)
+        try:
+            win = conectar_janela()
+            if esta_na_tela_empresas(win):
+                print("  Portal reaberto, na tela Empresas.")
+                return win
+        except Exception:
+            continue
+    raise ErroAttended(
+        "[recuperar_portal] reabri o portal no Edge, mas não chegou na tela 'Empresas' em "
+        f"{int(timeout)}s - confira se o login do certificado continua válido e volte pra "
+        "tela 'Empresas' na mão."
+    )
+
+
+def _garantir_tela_empresas(win, url_portal):
+    """Antes de cada empresa: se a janela não está na tela 'Empresas'
+    (página em branco, portal travado, janela perdida), reabre o portal.
+    Sem url_portal (modo linha de comando) não faz nada - comportamento
+    antigo."""
+    if not url_portal:
+        return win
+    try:
+        if esta_na_tela_empresas(win):
+            return win
+    except Exception:
+        pass
+    return recuperar_portal(url_portal)
 
 
 def _achar_edit_por_rotulo(win, rotulo: str):
@@ -831,7 +874,7 @@ def processar_empresa(
     return {"movimento": "DMS sem movimento — REST processado", "arquivos": arquivos}
 
 
-def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, deve_parar=None) -> None:
+def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, deve_parar=None, url_portal=None) -> None:
     """Loop completo: lê a planilha (mesmo leiaute/validação do Hub web -
     rpa.issnet.planilha), processa cada empresa (seleciona, gera DMS,
     salva, REST se sem movimento), fecha e volta pra Empresas antes da
@@ -841,7 +884,11 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, deve_parar=None
     deve_parar: callable opcional (sem argumento, retorna bool) checado
     ANTES de cada empresa - nunca no meio de uma, pra sempre parar numa
     borda limpa (navegador na tela Empresas, nada pela metade). Usado
-    pelo botão "Parar" da GUI (ver gui.py _parar)."""
+    pelo botão "Parar" da GUI (ver gui.py _parar).
+
+    url_portal: URL de login do município (opcional). Se informada, o
+    script reabre o portal sozinho quando a janela não é achada ou a
+    página fica em branco no meio do lote (ver recuperar_portal)."""
     from rpa.issnet import planilha as planilha_mod
     from rpa.issnet.competencia import calcular_competencia_anterior
 
@@ -849,7 +896,12 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, deve_parar=None
     comp = calcular_competencia_anterior()
     competencia_pasta = comp["mm_aaaa_arquivo"].replace(" ", "")  # "MMAAAA"
 
-    win = conectar_janela()
+    try:
+        win = conectar_janela()
+    except ErroAttended:
+        if not url_portal:
+            raise
+        win = recuperar_portal(url_portal)
     print(f"Janela conectada: {win.window_text()}")
     if not esta_na_tela_empresas(win):
         raise ErroAttended(
@@ -865,6 +917,7 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, deve_parar=None
             print("\n⏹ Parado pelo usuário.")
             break
 
+        win = _garantir_tela_empresas(win, url_portal)
         codigo, cnpj = empresa["codigo"], empresa["cnpj_cpf"]
         print(f"\n=== Empresa {codigo} ({cnpj}) ===")
         try:
@@ -902,7 +955,7 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, deve_parar=None
 # login, sem configuração nenhuma além disso.
 # ---------------------------------------------------------------------------
 
-def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None) -> None:
+def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None, url_portal=None) -> None:
     """Versão sincronizada com o Hub: em vez de ler uma planilha local,
     pega a execução PENDENTE mais recente do módulo issnet_rest_dms criada
     na tela do Hub (upload de planilha lá, mesmo fluxo de sempre) e
@@ -919,7 +972,13 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None) -> Non
     (nunca marcadas erro só por não terem rodado) - reabrir_execucao_se_incompleta
     (rpa/core.py, chamada pela tela do Hub) já cobre esse caso exatamente
     (execução "interrompida no meio"), então dá pra continuar depois
-    rodando o script de novo sem perder nada."""
+    rodando o script de novo sem perder nada.
+
+    url_portal: URL de login do município (opcional) - reabre o portal
+    sozinho se a janela sumir/ficar em branco (ver recuperar_portal). A
+    checagem roda ANTES de marcar a empresa como rodando, então se não
+    conseguir recuperar o lote para sem marcar erro em quem nem chegou a
+    rodar."""
     from rpa.issnet.competencia import calcular_competencia_anterior
 
     if not hub_api.verificar_licenca(token):
@@ -942,7 +1001,12 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None) -> Non
     comp = calcular_competencia_anterior()
     competencia_pasta = comp["mm_aaaa_arquivo"].replace(" ", "")
 
-    win = conectar_janela()
+    try:
+        win = conectar_janela()
+    except ErroAttended:
+        if not url_portal:
+            raise
+        win = recuperar_portal(url_portal)
     print(f"Janela conectada: {win.window_text()}")
     if not esta_na_tela_empresas(win):
         raise ErroAttended(
@@ -958,6 +1022,7 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None) -> Non
             print("\n⏹ Parado pelo usuário — empresas restantes continuam pendentes no Hub, pode retomar depois.")
             break
 
+        win = _garantir_tela_empresas(win, url_portal)
         codigo, cnpj = empresa["codigo"], empresa["cnpj_cpf"]
         print(f"\n=== Empresa {codigo} ({cnpj}) ===")
         hub_api.marcar_rodando(token, empresa["id"])
