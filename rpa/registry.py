@@ -65,6 +65,13 @@ MODULOS = {
         # o Hub mostra este módulo num card próprio (RPA NF GO), fora da
         # tela "RPA — Fechamento REST/DMS" - ver _APPS_HOME em app_conciliacao.py
         "app_home": "rpa_nfgo",
+        # Google Chrome em vez do Chromium do Playwright: a verificação da
+        # Cloudflare do formulário "Consulta de Notas Recebidas" passa
+        # sozinha no Chrome do escritório e pediu "Verify you are human" no
+        # Chromium do servidor (prints da execução real). Só troca o
+        # navegador - o robô continua sem clicar/contornar a verificação.
+        # Sem Chrome instalado, o worker volta pro Chromium (ver rpa_worker.py).
+        "navegador": "chrome",
     },
 }
 
