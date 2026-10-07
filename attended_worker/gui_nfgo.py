@@ -503,20 +503,75 @@ class App(tk.Tk):
             threading.Thread(target=self._baixar_e_atualizar_bg, args=(versao_nova,), daemon=True).start()
             self._log(f"Baixando a versão {versao_nova}...")
 
+    def _falha_atualizacao(self, erro: str) -> None:
+        self.lbl_aguardando.configure(text="")
+        if messagebox.askyesno(
+            "Erro na atualização",
+            f"Não consegui baixar a versão nova:\n{erro}\n\n"
+            "Abrir o Hub no navegador para baixar por lá? (RPA NF GO > Baixar programa)",
+        ):
+            _abrir_hub()
+
+    def _baixar_com_retomada(self, url: str, destino: Path, tentativas: int = 5) -> None:
+        """Baixa em pedaços; se a conexão cair no meio (erro 10054 - visto num
+        PC do escritório), tenta de novo continuando de onde parou (Range)."""
+        destino.unlink(missing_ok=True)
+        ultimo_erro = None
+        for tentativa in range(1, tentativas + 1):
+            ja = destino.stat().st_size if destino.exists() else 0
+            cabecalho = {"Range": f"bytes={ja}-"} if ja else {}
+            try:
+                with requests.get(url, headers=cabecalho, stream=True, timeout=60) as r:
+                    if r.status_code == 416:  # já estava completo
+                        return
+                    r.raise_for_status()
+                    modo = "ab" if ja and r.status_code == 206 else "wb"
+                    total = int(r.headers.get("Content-Length") or 0) + (ja if modo == "ab" else 0)
+                    baixado = ja if modo == "ab" else 0
+                    with destino.open(modo) as f:
+                        for pedaco in r.iter_content(chunk_size=262144):
+                            f.write(pedaco)
+                            baixado += len(pedaco)
+                            if total:
+                                self.after(0, self.lbl_aguardando.configure,
+                                           {"text": f"Baixando atualização... {baixado * 100 // total}%"})
+                    if total and baixado < total:
+                        raise IOError(f"download incompleto ({baixado} de {total} bytes)")
+                    return
+            except Exception as exc:
+                ultimo_erro = exc
+                self.after(0, self._log, f"  tentativa {tentativa}/{tentativas} falhou: {exc}")
+                time.sleep(min(2 * tentativa, 10))
+        raise ultimo_erro or IOError("download falhou")
+
     def _baixar_e_atualizar_bg(self, versao_nova: str) -> None:
+        import zipfile
+        exe_novo = Path(sys.executable).resolve().with_name(f"nfgo_attended_v{versao_nova}.exe")
+        temp_zip = exe_novo.with_suffix(".zip.part")
         try:
-            r = requests.get(f"{hub_api.BASE_URL}/attended-nfgo/download", timeout=300)
-            r.raise_for_status()
-            exe_novo = Path(sys.executable).resolve().with_name(f"nfgo_attended_v{versao_nova}.exe")
-            exe_novo.write_bytes(r.content)
+            try:
+                # .zip primeiro (antivírus/firewall costuma cortar .exe), .exe como reserva
+                self._baixar_com_retomada(f"{hub_api.BASE_URL}/attended-nfgo/download-zip", temp_zip)
+                with zipfile.ZipFile(temp_zip) as zf:
+                    exe_novo.write_bytes(zf.read("nfgo_attended.exe"))
+            except Exception as exc_zip:
+                self.after(0, self._log, f"  .zip não deu ({exc_zip}); tentando o .exe direto...")
+                self._baixar_com_retomada(f"{hub_api.BASE_URL}/attended-nfgo/download", exe_novo)
         except Exception as exc:
-            self.after(0, messagebox.showerror, "Erro na atualização", f"Não consegui baixar a versão nova: {exc}")
+            self.after(0, self._falha_atualizacao, str(exc))
             return
+        finally:
+            temp_zip.unlink(missing_ok=True)
         # arquivo novo com outro nome (nunca sobrescreve o .exe rodando -
         # ver gui.py) e o atalho da Área de Trabalho passa a apontar pra ele
         _atualizar_atalho_desktop(exe_novo, True)
         subprocess.Popen(["cmd", "/c", "start", "", str(exe_novo)], creationflags=subprocess.CREATE_NO_WINDOW)
         os._exit(0)
+
+
+def _abrir_hub() -> None:
+    import webbrowser
+    webbrowser.open("https://hub.redeg7.com")
 
 
 def _esconder_console() -> None:

@@ -325,6 +325,30 @@ def attended_nfgo_download():
     return FileResponse(_EXE_NFGO_PATH, media_type="application/octet-stream", filename="nfgo_attended.exe")
 
 
+_ZIP_NFGO_CACHE: dict = {}
+
+
+@app.get("/api/attended-nfgo/download-zip")
+def attended_nfgo_download_zip():
+    """Mesmo .exe dentro de um .zip - antivírus/firewall de escritório
+    costuma cortar no meio (erro 10054) download de .exe feito por programa
+    (não pelo navegador); .zip passa. Montado uma vez por versão do .exe e
+    servido do disco (FileResponse aceita Range, o programa retoma se cair)."""
+    if not _EXE_NFGO_PATH.exists():
+        raise HTTPException(status_code=404, detail="Executável não encontrado")
+    import tempfile
+    import zipfile
+    chave = _EXE_NFGO_PATH.stat().st_mtime_ns
+    destino = _ZIP_NFGO_CACHE.get(chave)
+    if destino is None or not Path(destino).exists():
+        destino = str(Path(tempfile.gettempdir()) / f"nfgo_attended_{chave}.zip")
+        with zipfile.ZipFile(destino, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(_EXE_NFGO_PATH, arcname="nfgo_attended.exe")
+        _ZIP_NFGO_CACHE.clear()
+        _ZIP_NFGO_CACHE[chave] = destino
+    return FileResponse(destino, media_type="application/zip", filename="nfgo_attended.zip")
+
+
 @app.get("/api/attended/download")
 def attended_download():
     if not _EXE_PATH.exists():
