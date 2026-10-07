@@ -144,6 +144,21 @@ def garantir_schema() -> None:
             ALTER TABLE rpa_execucoes
             ADD COLUMN IF NOT EXISTS pasta_destino TEXT
         """)
+        # Confirmação humana pela tela do Hub (RPA NF GO): quando a
+        # verificação da Cloudflare pede "Verify you are human", o worker grava
+        # aqui a imagem da tela dele (interacao_png) e espera uma PESSOA clicar
+        # nela no Hub; o clique (clique_x/clique_y, em pixels da imagem) é
+        # repassado ao mesmo ponto da tela do navegador. Um clique por pedido -
+        # o robô nunca clica na verificação por conta própria.
+        conn.execute("""
+            ALTER TABLE rpa_empresas
+            ADD COLUMN IF NOT EXISTS interacao_png BYTEA,
+            ADD COLUMN IF NOT EXISTS interacao_pedida_em TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS clique_x INTEGER,
+            ADD COLUMN IF NOT EXISTS clique_y INTEGER,
+            ADD COLUMN IF NOT EXISTS clique_em TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS clique_por TEXT
+        """)
         conn.commit()
 
 
@@ -554,4 +569,62 @@ def atualizar_empresa(
             status, movimento, erro, pdf, pdf_nome, xml_zip, xml_zip_nome, screenshot_erro,
             qtd_notas_portal, qtd_xml, evidencia_png, observacao, empresa_id,
         ))
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Confirmação humana pela tela do Hub (ver garantir_schema)
+# ---------------------------------------------------------------------------
+
+def pedir_confirmacao_humana(empresa_id: int, png: bytes) -> None:
+    """Worker: publica/atualiza a imagem da tela que a pessoa vai ver no Hub
+    (mantém o pedido aberto; não apaga um clique ainda não consumido)."""
+    with auth.conectar() as conn:
+        conn.execute("""
+            UPDATE rpa_empresas
+            SET interacao_png = %s, interacao_pedida_em = COALESCE(interacao_pedida_em, now())
+            WHERE id = %s
+        """, (png, empresa_id))
+        conn.commit()
+
+
+def consumir_clique(empresa_id: int) -> Optional[tuple[int, int]]:
+    """Worker: devolve (x, y) do clique feito no Hub e o apaga, para cada
+    clique ser repassado uma única vez. None se ainda não houve clique."""
+    with auth.conectar() as conn:
+        linha = conn.execute("""
+            WITH antes AS (
+                SELECT id, clique_x, clique_y FROM rpa_empresas
+                WHERE id = %s AND clique_x IS NOT NULL
+                FOR UPDATE
+            )
+            UPDATE rpa_empresas e SET clique_x = NULL, clique_y = NULL
+            FROM antes WHERE e.id = antes.id
+            RETURNING antes.clique_x AS x, antes.clique_y AS y
+        """, (empresa_id,)).fetchone()
+        conn.commit()
+    if not linha or linha["x"] is None:
+        return None
+    return int(linha["x"]), int(linha["y"])
+
+
+def encerrar_confirmacao_humana(empresa_id: int) -> None:
+    """Worker: fecha o pedido (verificação passou ou desistiu)."""
+    with auth.conectar() as conn:
+        conn.execute("""
+            UPDATE rpa_empresas
+            SET interacao_png = NULL, interacao_pedida_em = NULL, clique_x = NULL, clique_y = NULL
+            WHERE id = %s
+        """, (empresa_id,))
+        conn.commit()
+
+
+def registrar_clique(empresa_id: int, x: int, y: int, usuario: str) -> None:
+    """Tela do Hub: guarda o clique que a pessoa fez na imagem."""
+    with auth.conectar() as conn:
+        conn.execute("""
+            UPDATE rpa_empresas
+            SET clique_x = %s, clique_y = %s, clique_em = now(), clique_por = %s
+            WHERE id = %s AND interacao_pedida_em IS NOT NULL
+        """, (int(x), int(y), usuario, empresa_id))
         conn.commit()
