@@ -1755,75 +1755,90 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs")
 
     st.divider()
     st.subheader("Execuções")
-    rpa_core.limpar_arquivos_vencidos()
-    execucoes = rpa_core.listar_execucoes(escritorio_id, modulo_id)
-    if not execucoes:
-        st.info("Nenhuma execução ainda para esta rotina.")
-        return
+    # lista de execuções num fragmento: o "Atualizar status" (e a
+    # atualização automática enquanto há execução ativa) recarrega só esta
+    # parte, sem refazer a tela inteira
+    _ativa_agora = any(
+        e["status"] in (rpa_core.STATUS_PENDENTE, rpa_core.STATUS_RODANDO)
+        for e in rpa_core.listar_execucoes(escritorio_id, modulo_id)
+    )
 
-    if st.button("🔄 Atualizar status"):
-        st.rerun()
+    @st.fragment(run_every=15 if _ativa_agora else None)
+    def _lista_execucoes() -> None:
+        rpa_core.limpar_arquivos_vencidos()
+        execucoes = rpa_core.listar_execucoes(escritorio_id, modulo_id)
+        _ativa = any(e["status"] in (rpa_core.STATUS_PENDENTE, rpa_core.STATUS_RODANDO) for e in execucoes)
+        if not execucoes:
+            st.info("Nenhuma execução ainda para esta rotina.")
+            return
 
-    emoji_status = {"PENDENTE": "⏳", "RODANDO": "🔄", "CONCLUIDO": "✅", "ERRO": "❌"}
-    if _eh_nfgo:
+        # o clique já recarrega só este fragmento (lista de execuções)
+        st.button("🔄 Atualizar status", key=f"atualizar_status_{modulo_id}")
+        if _ativa:
+            st.caption("🔄 Atualizando sozinho a cada 15 segundos enquanto há execução na fila ou rodando.")
+
+        emoji_status = {"PENDENTE": "⏳", "RODANDO": "🔄", "CONCLUIDO": "✅", "ERRO": "❌"}
+        if _eh_nfgo:
+            for execucao in execucoes:
+                _expander_execucao_nfgo(execucao, emoji_status)
+            return
         for execucao in execucoes:
-            _expander_execucao_nfgo(execucao, emoji_status)
-        return
-    for execucao in execucoes:
-        empresas_exec = rpa_core.listar_empresas(execucao["id"])
-        concluidas = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_CONCLUIDO)
-        erros = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_ERRO)
-        _competencia_exec = f" · competência {execucao['competencia']}" if execucao.get("competencia") else ""
-        titulo = (
-            f"{emoji_status.get(execucao['status'], '•')} Execução #{execucao['id']} — "
-            f"{execucao['criado_em']:%d/%m/%Y %H:%M}{_competencia_exec} — {execucao['status']} "
-            f"({concluidas}/{len(empresas_exec)} concluídas, {erros} erro(s))"
-        )
-        with st.expander(titulo):
-            st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}")
-            if concluidas and execucao.get("concluido_em"):
-                _barra_retencao_arquivos(execucao["concluido_em"])
-            _cols_acoes = st.columns(3)
-            _botao_cancelar_execucao(execucao, _cols_acoes[2], "cancelar")
-            if concluidas:
-                _pasta_competencia_zip = (execucao.get("competencia") or "sem-competencia").replace("/", "")
-                _cols_acoes[0].download_button(
-                    "📦 Baixar tudo (.zip, uma pasta por empresa/competência)",
-                    _montar_zip_execucao(execucao, empresas_exec),
-                    file_name=f"DMS-XML {_pasta_competencia_zip}.zip",
-                    key=f"zip_execucao_{execucao['id']}",
-                )
-            if erros:
-                if _cols_acoes[1].button(
-                    f"🔁 Reprocessar {erros} empresa(s) com erro", key=f"reprocessar_{execucao['id']}",
-                ):
-                    qtd = rpa_core.reprocessar_falhas(execucao["id"])
-                    _flash("flash_rpa_hub", f"✅ {qtd} empresa(s) voltaram para a fila — o worker processa em instantes.")
-                    st.rerun()
-            for empresa in empresas_exec:
-                cols = st.columns([1, 2, 1, 1, 2])
-                cols[0].write(empresa["codigo"])
-                cols[1].write(empresa["cnpj_cpf"])
-                cols[2].write(empresa["obrigacao"])
-                cols[3].write(empresa["status"])
-                if empresa["status"] == rpa_core.STATUS_CONCLUIDO and empresa["pdf"]:
-                    cols[4].download_button(
-                        "⬇️ PDF", bytes(empresa["pdf"]), file_name=empresa["pdf_nome"],
-                        key=f"pdf_{empresa['id']}",
+            empresas_exec = rpa_core.listar_empresas(execucao["id"])
+            concluidas = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_CONCLUIDO)
+            erros = sum(1 for e in empresas_exec if e["status"] == rpa_core.STATUS_ERRO)
+            _competencia_exec = f" · competência {execucao['competencia']}" if execucao.get("competencia") else ""
+            titulo = (
+                f"{emoji_status.get(execucao['status'], '•')} Execução #{execucao['id']} — "
+                f"{execucao['criado_em']:%d/%m/%Y %H:%M}{_competencia_exec} — {execucao['status']} "
+                f"({concluidas}/{len(empresas_exec)} concluídas, {erros} erro(s))"
+            )
+            with st.expander(titulo):
+                st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}")
+                if concluidas and execucao.get("concluido_em"):
+                    _barra_retencao_arquivos(execucao["concluido_em"])
+                _cols_acoes = st.columns(3)
+                _botao_cancelar_execucao(execucao, _cols_acoes[2], "cancelar")
+                if concluidas:
+                    _pasta_competencia_zip = (execucao.get("competencia") or "sem-competencia").replace("/", "")
+                    _cols_acoes[0].download_button(
+                        "📦 Baixar tudo (.zip, uma pasta por empresa/competência)",
+                        _montar_zip_execucao(execucao, empresas_exec),
+                        file_name=f"DMS-XML {_pasta_competencia_zip}.zip",
+                        key=f"zip_execucao_{execucao['id']}",
                     )
-                    if empresa.get("xml_zip"):
-                        _qtd_xml = _contar_arquivos_zip(bytes(empresa["xml_zip"]))
+                if erros:
+                    if _cols_acoes[1].button(
+                        f"🔁 Reprocessar {erros} empresa(s) com erro", key=f"reprocessar_{execucao['id']}",
+                    ):
+                        qtd = rpa_core.reprocessar_falhas(execucao["id"])
+                        _flash("flash_rpa_hub", f"✅ {qtd} empresa(s) voltaram para a fila — o worker processa em instantes.")
+                        st.rerun()
+                for empresa in empresas_exec:
+                    cols = st.columns([1, 2, 1, 1, 2])
+                    cols[0].write(empresa["codigo"])
+                    cols[1].write(empresa["cnpj_cpf"])
+                    cols[2].write(empresa["obrigacao"])
+                    cols[3].write(empresa["status"])
+                    if empresa["status"] == rpa_core.STATUS_CONCLUIDO and empresa["pdf"]:
                         cols[4].download_button(
-                            f"⬇️ XML ({_qtd_xml})", bytes(empresa["xml_zip"]), file_name=empresa["xml_zip_nome"],
-                            key=f"xml_{empresa['id']}",
+                            "⬇️ PDF", bytes(empresa["pdf"]), file_name=empresa["pdf_nome"],
+                            key=f"pdf_{empresa['id']}",
                         )
-                elif empresa["status"] == rpa_core.STATUS_ERRO:
-                    cols[4].caption(f"⚠️ {empresa['erro']}")
-                    if empresa.get("screenshot_erro"):
-                        with cols[4].popover("🖼️ Ver tela do erro"):
-                            st.image(bytes(empresa["screenshot_erro"]))
-                else:
-                    cols[4].write("—")
+                        if empresa.get("xml_zip"):
+                            _qtd_xml = _contar_arquivos_zip(bytes(empresa["xml_zip"]))
+                            cols[4].download_button(
+                                f"⬇️ XML ({_qtd_xml})", bytes(empresa["xml_zip"]), file_name=empresa["xml_zip_nome"],
+                                key=f"xml_{empresa['id']}",
+                            )
+                    elif empresa["status"] == rpa_core.STATUS_ERRO:
+                        cols[4].caption(f"⚠️ {empresa['erro']}")
+                        if empresa.get("screenshot_erro"):
+                            with cols[4].popover("🖼️ Ver tela do erro"):
+                                st.image(bytes(empresa["screenshot_erro"]))
+                    else:
+                        cols[4].write("—")
+
+    _lista_execucoes()
 
 
 _APPS_HOME = [
@@ -1987,7 +2002,15 @@ if st.session_state.get("mostrar_trocar_senha"):
     _tela_trocar_senha(obrigatoria=False)
     st.stop()
 
-st.session_state.setdefault("tela", "home")
+# tela atual também na URL (?tela=...): F5 ou uma sessão nova do Streamlit
+# (reconexão, Hub reiniciado no deploy) voltava sempre pra tela inicial
+_TELAS_URL = {"home", "rpa_hub", "rpa_nfgo", "conciliacao", "historico", "gerenciar_clientes",
+              "gerenciar_escritorios", "gerenciar_usuarios"}
+if "tela" not in st.session_state:
+    _tela_url = st.query_params.get("tela", "home")
+    st.session_state["tela"] = _tela_url if _tela_url in _TELAS_URL else "home"
+if st.session_state["tela"] in _TELAS_URL and st.query_params.get("tela") != st.session_state["tela"]:
+    st.query_params["tela"] = st.session_state["tela"]
 
 if st.session_state.get("tela") == "home":
     _tela_home()
