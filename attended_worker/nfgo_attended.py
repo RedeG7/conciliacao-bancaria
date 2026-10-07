@@ -287,6 +287,35 @@ def _escolher_no_calendario(win, edit, data: str, log) -> None:
     log(f"  (data {data} escolhida no calendário)")
 
 
+def _datas_pela_pagina(win, data_inicial: str, data_final: str, log) -> None:
+    """Campos do Período são SOMENTE LEITURA com calendário (jQuery
+    datepicker): não aceitam digitação - no robô do servidor só pegaram
+    definindo o valor dentro da própria página. Aqui faz o mesmo pela barra
+    de endereço DESTA aba (javascript: digitado - o Edge só bloqueia quando
+    é colado): põe as duas datas nos 2 primeiros campos de data visíveis,
+    usando a API do datepicker quando existir e disparando input/change."""
+    codigo = (
+        "javascript:void(function(){var a=['%s','%s'];"
+        "var L=[].filter.call(document.querySelectorAll('input'),function(e){"
+        "return /^[0-9]{2}.[0-9]{2}.[0-9]{4}$/.test(e.value)&&e.offsetParent!==null});"
+        "var s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;"
+        "L.slice(0,2).forEach(function(e,i){var r=e.readOnly;e.readOnly=false;"
+        "try{if(window.jQuery&&jQuery(e).hasClass('hasDatepicker'))jQuery(e).datepicker('setDate',a[i])}catch(x){}"
+        "s.call(e,a[i]);['input','change','keyup','blur'].forEach(function(t){"
+        "e.dispatchEvent(new Event(t,{bubbles:true}))});e.readOnly=r})}())"
+    ) % (data_inicial, data_final)
+    try:
+        win.set_focus()
+        win.type_keys("^l", set_foreground=False)  # barra de endereço
+        time.sleep(0.4)
+        win.type_keys(_literal(codigo), with_spaces=True, pause=0.005, set_foreground=False)
+        win.type_keys("{DELETE}{ENTER}", set_foreground=False)  # {DELETE}: tira o autocompletar
+        time.sleep(1.2)
+        log(f"  (datas {data_inicial} a {data_final} colocadas direto na página)")
+    except Exception as exc:
+        log(f"  ⚠️  não consegui colocar as datas pela página: {exc}")
+
+
 def _preencher_data(win, edit, data: str, log) -> None:
     """Data no formato do portal (01/09/2026). Digitação primeiro (sem Esc,
     que em alguns calendários desfaz o valor; Tab confirma), depois apagando
@@ -682,10 +711,15 @@ def pesquisar(win, data_inicial: str, data_final: str, ie: str, tipo: str, log):
         raise ErroAttended(f"[consulta] opção '{TEXTOS_TIPO[tipo][0]}' (Tipo de notas) não encontrada")
     # "Modelo da NF-e" já vem "Todos" (prints do escritório) - não mexe
 
-    _preencher_data(win, periodo[0], data_inicial, log)
-    _fechar_calendario(win)
-    _preencher_data(win, periodo[1], data_final, log)
-    _fechar_calendario(win)
+    # datas: campos somente leitura com calendário -> primeiro direto na
+    # página; digitação/calendário só se ainda não pegou
+    _datas_pela_pagina(win, data_inicial, data_final, log)
+    win = conectar_janela()
+    periodo = _edits_abaixo_do_rotulo(win, r"^\s*Per[ií]odo") or periodo
+    for campo, data in ((periodo[0], data_inicial), (periodo[1], data_final)):
+        if re.sub(r"\D", "", _valor(campo)) != re.sub(r"\D", "", data):
+            _preencher_data(win, campo, data, log)
+            _fechar_calendario(win)
 
     # confere tudo de novo (a página pode apagar campo ao perder o foco)
     for campo, valor in ((periodo[0], data_inicial), (periodo[1], data_final), (campo_ie, ie)):
