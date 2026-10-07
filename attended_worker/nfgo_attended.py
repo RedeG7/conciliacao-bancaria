@@ -194,6 +194,77 @@ def _edits_abaixo_do_rotulo(win, padrao: str) -> list:
     return campos
 
 
+def _marcar_opcao(win, textos: list[str]) -> bool:
+    """Radio "Entrada"/"Saída": no portal o texto fica AO LADO do botão e o
+    radio não tem nome próprio (por isso "Saída não encontrada" no 1º
+    teste). Tenta pelo nome; senão acha o texto e marca o radio da mesma
+    linha mais perto à esquerda; por último clica no próprio texto."""
+    alvos = [t.lower() for t in textos]
+    for el in _descendentes(win, "RadioButton"):
+        if _texto(el).lower() in alvos:
+            _acionar(el)
+            return True
+    rotulo = next((t for t in _descendentes(win, "Text") if _texto(t).lower() in alvos), None)
+    if rotulo is None:
+        return False
+    rr = rotulo.rectangle()
+    meio = (rr.top + rr.bottom) / 2
+    radios = []
+    for el in _descendentes(win, "RadioButton"):
+        try:
+            r = el.rectangle()
+        except Exception:
+            continue
+        if abs((r.top + r.bottom) / 2 - meio) <= 15 and r.right <= rr.left + 5:
+            radios.append((rr.left - r.right, el))
+    if radios:
+        radio = min(radios, key=lambda x: x[0])[1]
+        _acionar(radio)
+        try:
+            if radio.is_selected():
+                return True
+        except Exception:
+            return True
+        radio.click_input()
+        return True
+    rotulo.click_input()
+    return True
+
+
+def _opcao_marcada(win, textos: list[str]) -> bool:
+    """Confere se o radio do texto ficou marcado (quando dá pra saber)."""
+    alvos = [t.lower() for t in textos]
+    rotulo = next((t for t in _descendentes(win, "Text") if _texto(t).lower() in alvos), None)
+    for el in _descendentes(win, "RadioButton"):
+        try:
+            nome = _texto(el).lower()
+            if nome in alvos:
+                return bool(el.is_selected())
+            if rotulo is not None and not nome:
+                rr, r = rotulo.rectangle(), el.rectangle()
+                if abs((r.top + r.bottom) / 2 - (rr.top + rr.bottom) / 2) <= 15 and 0 <= rr.left - r.right <= 40:
+                    return bool(el.is_selected())
+        except Exception:
+            continue
+    return True  # não deu pra conferir - segue
+
+
+def _fechar_calendario(win) -> None:
+    """Esc + clique no título do formulário (área neutra) - o calendário das
+    datas cobre a IE e o Tipo de notas."""
+    try:
+        win.type_keys("{ESC}", set_foreground=False)
+    except Exception:
+        pass
+    titulo = _achar(win, ["Consulta de Notas Recebidas"], tipos=("Text",))
+    if titulo is not None:
+        try:
+            titulo.click_input()
+        except Exception:
+            pass
+    time.sleep(0.3)
+
+
 def _valor(edit) -> str:
     try:
         return edit.get_value() or ""
@@ -212,17 +283,24 @@ def _preencher(edit, valor: str) -> None:
     def ok() -> bool:
         return re.sub(r"\D", "", _valor(edit)) == digitos
 
-    for texto in (valor, digitos):
-        try:
-            edit.click_input()
-            time.sleep(0.2)
-            edit.type_keys("^a{DELETE}", pause=0.02)
-            edit.type_keys(texto, with_spaces=True, pause=0.03)
-            time.sleep(0.3)
-        except Exception:
-            pass
-        if ok():
-            return
+    # 1º foco pela acessibilidade (funciona mesmo com o calendário cobrindo
+    # o campo - foi o que fez a IE ficar vazia no 1º teste), 2º clique
+    for focar in ("foco", "clique"):
+        for texto in (valor, digitos):
+            try:
+                if focar == "foco":
+                    edit.set_focus()
+                else:
+                    edit.click_input()
+                time.sleep(0.2)
+                edit.type_keys("^a{DELETE}", pause=0.02, set_foreground=False)
+                edit.type_keys(texto, with_spaces=True, pause=0.03, set_foreground=False)
+                time.sleep(0.3)
+                edit.type_keys("{ESC}", set_foreground=False)  # fecha o autocompletar do Edge
+            except Exception:
+                pass
+            if ok():
+                return
     try:
         edit.set_edit_text(valor)
     except Exception:
@@ -345,27 +423,30 @@ def pesquisar(win, data_inicial: str, data_final: str, ie: str, tipo: str, log):
     periodo = _edits_abaixo_do_rotulo(win, r"^\s*Per[ií]odo")
     if len(periodo) < 2:
         raise ErroAttended("[consulta] campos do Período (data inicial/final) não encontrados")
-    _preencher(periodo[0], data_inicial)
-    win.type_keys("{ESC}")  # fecha o calendário, que cobre o campo da IE
-    _preencher(periodo[1], data_final)
-    win.type_keys("{ESC}")
-
     campos_ie = _edits_abaixo_do_rotulo(win, r"^\s*Inscri[çc][ãa]o\s+Estadual")
     if not campos_ie:
         raise ErroAttended("[consulta] campo Inscrição Estadual não encontrado")
-    _preencher(campos_ie[0], ie)
+    campo_ie = campos_ie[0]
 
-    radio = _achar(win, TEXTOS_TIPO[tipo], tipos=("RadioButton",), exato=True)
-    if radio is None:
+    # IE e Tipo ANTES das datas: o calendário das datas abre por cima deles
+    _fechar_calendario(win)
+    _preencher(campo_ie, ie)
+    if not _marcar_opcao(win, TEXTOS_TIPO[tipo]):
         raise ErroAttended(f"[consulta] opção '{TEXTOS_TIPO[tipo][0]}' (Tipo de notas) não encontrada")
-    _acionar(radio)
     # "Modelo da NF-e" já vem "Todos" (prints do escritório) - não mexe
 
-    # confere as datas de novo (a página pode apagar ao perder o foco)
-    for campo, valor in ((periodo[0], data_inicial), (periodo[1], data_final)):
+    _preencher(periodo[0], data_inicial)
+    _fechar_calendario(win)
+    _preencher(periodo[1], data_final)
+    _fechar_calendario(win)
+
+    # confere tudo de novo (a página pode apagar campo ao perder o foco)
+    for campo, valor in ((periodo[0], data_inicial), (periodo[1], data_final), (campo_ie, ie)):
         if re.sub(r"\D", "", _valor(campo)) != re.sub(r"\D", "", valor):
             _preencher(campo, valor)
-            win.type_keys("{ESC}")
+            _fechar_calendario(win)
+    if not _opcao_marcada(win, TEXTOS_TIPO[tipo]):
+        _marcar_opcao(win, TEXTOS_TIPO[tipo])
 
     _aguardar_verificacao(win, log)
 
@@ -394,6 +475,29 @@ def print_da_janela(win) -> bytes:
     return buffer.getvalue()
 
 
+def arvore_da_janela(win, limite: int = 4000) -> str:
+    """Lista dos elementos da janela como a automação enxerga (tipo, nome,
+    id, posição) - pra ajustar o programa a partir do PC de verdade."""
+    linhas = [f"janela: {_texto(win)}"]
+    try:
+        for i, el in enumerate(win.descendants()):
+            if i >= limite:
+                linhas.append(f"... (parou em {limite} elementos)")
+                break
+            try:
+                info = el.element_info
+                r = info.rectangle
+                linhas.append(
+                    f"{info.control_type:<12} | nome='{(info.name or '')[:120]}' | id='{info.automation_id}' "
+                    f"| classe='{info.class_name}' | ({r.left},{r.top},{r.right},{r.bottom})"
+                )
+            except Exception:
+                continue
+    except Exception as exc:
+        linhas.append(f"(erro lendo a árvore: {exc})")
+    return "\n".join(linhas)
+
+
 def print_do_erro() -> "bytes | None":
     """Print da tela no momento do erro (janela do Edge; sem ela, a tela
     inteira) - vai pra grade do Hub ("Tela do erro") e pra pasta _ERROS.
@@ -413,14 +517,18 @@ def print_do_erro() -> "bytes | None":
         return None
 
 
-def _guardar_print_erro(pasta_raiz: Path, empresa: dict, competencia: dict, png: "bytes | None") -> None:
-    if not png:
-        return
+def _guardar_print_erro(pasta_raiz: Path, empresa: dict, competencia: dict, png: "bytes | None", erro: str = "") -> None:
+    """Print + texto do erro + árvore de elementos da janela, em
+    RPA NF GO/_ERROS/<MMAAAA>/ (mesmo nome, .png e .txt)."""
     try:
         pasta = pasta_raiz / arquivos.PASTA_RAIZ / "_ERROS" / arquivos.competencia_pasta(competencia["mm_aaaa"])
         pasta.mkdir(parents=True, exist_ok=True)
-        nome = f"{empresa['codigo']}_{(empresa.get('obrigacao') or '').upper()}_{time.strftime('%Y%m%d_%H%M%S')}.png"
-        (pasta / nome).write_bytes(png)
+        base = f"{empresa['codigo']}_{(empresa.get('obrigacao') or '').upper()}_{time.strftime('%Y%m%d_%H%M%S')}"
+        if png:
+            (pasta / f"{base}.png").write_bytes(png)
+        win = _janela_portal()
+        arvore = arvore_da_janela(win) if win is not None else "(janela do portal não encontrada)"
+        (pasta / f"{base}.txt").write_text(f"ERRO: {erro}\n\n{arvore}", encoding="utf-8")
     except Exception:
         pass
 
@@ -447,6 +555,47 @@ def _novo_arquivo_downloads(pasta: Path, referencia: float):
     except OSError:
         return None
     return candidato if t1 > 0 and t1 == t2 else None
+
+
+def _aceitar_prompt_download(pasta_downloads: Path, log) -> None:
+    """Edge configurado pra perguntar o que fazer com cada download: abre
+    um balão FORA da janela do portal (gravação do escritório: janela sem
+    título, botão "Salvar como" classe "saveAs"). Prefere "Salvar" (vai
+    direto pra Downloads); só com "Salvar como", abre a janela de salvar e
+    grava em Downloads com o nome sugerido."""
+    portal = _janela_portal()
+    if portal is None:
+        return
+    botoes = []
+    try:
+        pid_edge = portal.element_info.process_id
+        for janela in Desktop(backend="uia").windows(process=pid_edge):
+            try:
+                botoes += janela.descendants(control_type="Button")
+            except Exception:
+                continue
+    except Exception:
+        return
+    salvar = next((b for b in botoes if _texto(b).lower() == "salvar"), None)
+    if salvar is not None:
+        _acionar(salvar)
+        log("  (Edge perguntou onde salvar — cliquei em Salvar)")
+        return
+    salvar_como = next((b for b in botoes if _texto(b).lower() == "salvar como"), None)
+    if salvar_como is None:
+        return
+    _acionar(salvar_como)
+    dialogo = _esperar(lambda: next(iter(Desktop(backend="uia").windows(title_re="Salvar como|Save as")), None), 15, 0.5)
+    if dialogo is None:
+        return
+    try:
+        nome = dialogo.child_window(control_type="Edit", found_index=0)
+        sugerido = Path(nome.get_value() or "download.zip").name
+        nome.set_edit_text(str(pasta_downloads / sugerido))
+        nome.type_keys("{ENTER}", set_foreground=False)
+        log(f"  (Edge pediu 'Salvar como' — salvei em Downloads: {sugerido})")
+    except Exception as exc:
+        log(f"  ⚠️  Não consegui responder a janela 'Salvar como' do Edge: {exc} — salve em Downloads.")
 
 
 def baixar_todos(win, log) -> Path:
@@ -485,17 +634,13 @@ def baixar_todos(win, log) -> Path:
                 pass
             return arquivo
         w = conectar_janela()
-        # prompt "Salvar" do Edge (só aparece se a opção "perguntar onde
-        # salvar" estiver ligada) - aceita o download direto
-        salvar = _achar(w, ["Salvar"], tipos=("Button",), exato=True)
-        if salvar is not None:
-            _acionar(salvar)
+        _aceitar_prompt_download(pasta_downloads, log)
         if not clicou_link:
             link = next(
-                (el for tipo in ("Hyperlink", "Button")
+                (el for tipo in ("Hyperlink", "Button", "Text")
                  for el in _descendentes(w, tipo)
                  if "baixar xml" in _texto(el).lower() and "nfe" not in _texto(el).lower()
-                 and not _texto(el).startswith("::")),
+                 and "hist" not in _texto(el).lower() and not _texto(el).startswith("::")),
                 None,
             )
             if link is not None:
@@ -669,7 +814,7 @@ def gravar_passo_a_passo(deve_parar, log=print) -> Path:
     try:
         win = _janela_portal()
         if win is not None:
-            win.print_control_identifiers(filename=str(pasta / "arvore_janela.txt"))
+            (pasta / "arvore_janela.txt").write_text(arvore_da_janela(win), encoding="utf-8")
     except Exception as exc:
         (pasta / "arvore_janela.txt").write_text(f"não consegui ler a árvore: {exc}", encoding="utf-8")
 
@@ -723,7 +868,7 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None, log=pr
             except Exception as exc:
                 log(f"  ❌ {exc}")
                 png = print_do_erro()
-                _guardar_print_erro(pasta_raiz, empresa, competencia, png)
+                _guardar_print_erro(pasta_raiz, empresa, competencia, png, str(exc))
                 parcial = getattr(exc, "parcial", None) or {}
                 hub_api.erro_empresa(
                     token, empresa["id"], str(exc) or type(exc).__name__, screenshot_png=png,
