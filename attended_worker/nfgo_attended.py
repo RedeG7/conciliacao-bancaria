@@ -89,17 +89,24 @@ def abrir_portal() -> None:
     subprocess.Popen(["cmd", "/c", "start", "msedge", "--force-renderer-accessibility", URL_ACESSO_RESTRITO])
 
 
+def _janela_portal():
+    """Janela do Edge no portal, ou None (sem erro)."""
+    try:
+        candidatas = Desktop(backend="uia").windows(title_re=_TITULO_JANELA)
+    except Exception:
+        return None
+    return candidatas[0] if candidatas else None
+
+
 def conectar_janela():
     """Janela do Edge no portal. Sempre chame de novo depois de navegar - o
     pywinauto re-resolve pelo título (mesma lição do ISS Net)."""
-    d = Desktop(backend="uia")
-    candidatas = d.windows(title_re=_TITULO_JANELA)
-    if not candidatas:
+    win = _janela_portal()
+    if win is None:
         raise ErroFatal(
             "Não achei a janela do Edge no portal da SEFAZ. Abra pelo botão 'Abrir portal no Edge', "
             "faça o login e deixe aberta a tela 'Consulta de Notas Recebidas'."
         )
-    win = candidatas[0]
     try:
         win.set_focus()
         win.maximize()
@@ -248,6 +255,70 @@ def garantir_formulario(win, timeout: float = TIMEOUT_PADRAO_S):
             "caminho de novo até ela (Acesso Restrito > Baixar XML NFE) e clique em Iniciar."
         )
     return win2
+
+
+TIMEOUT_CHEGAR_FORMULARIO_S = 15 * 60  # tempo pra pessoa logar (certificado/nova autenticação)
+_PASSOS_ATE_FORMULARIO = [
+    # (textos do botão/link, rótulo pro log) - clicados sozinhos quando
+    # aparecem; login com certificado e nova autenticação ficam com a pessoa
+    (["Baixar XML NFE", "Baixar XML NF-e"], "Baixar XML NFE"),
+    (["Acesso Restrito"], "Acesso Restrito"),
+]
+
+
+def preparar_portal(log=print, deve_parar=None):
+    """Garante o Edge na tela "Consulta de Notas Recebidas" antes do lote.
+
+    - Edge não aberto no portal -> abre sozinho (Acesso Restrito).
+    - Enquanto não chega no formulário, clica sozinho no que reconhece
+      (card "Acesso Restrito", "Baixar XML NFE") e espera a pessoa fazer o
+      que é dela (escolher o certificado, nova autenticação, verificação).
+    - Chegou no formulário -> devolve a janela e o lote começa sem precisar
+      clicar em Iniciar de novo."""
+    win = _janela_portal()
+    if win is None:
+        log("Edge não estava aberto no portal da SEFAZ — abrindo agora...")
+        abrir_portal()
+        win = _esperar(_janela_portal, 60, 1)
+        if win is None:
+            raise ErroFatal("Abri o Edge, mas não achei a janela do portal da SEFAZ. Confira se o Edge abriu e clique em Iniciar de novo.")
+    else:
+        win = conectar_janela()
+    if no_formulario(win):
+        return win
+
+    log("Aguardando chegar na tela 'Consulta de Notas Recebidas'.\n"
+        "  Se pedir, escolha o certificado do escritório e faça a nova autenticação na janela do Edge —\n"
+        "  o programa clica sozinho em 'Acesso Restrito' e 'Baixar XML NFE' e começa quando a tela abrir.")
+    ultimo_clique: dict = {}
+    prazo = time.time() + TIMEOUT_CHEGAR_FORMULARIO_S
+    while time.time() < prazo:
+        if deve_parar and deve_parar():
+            raise ErroAttended("Parado antes de começar.")
+        win = _janela_portal()
+        if win is not None:
+            if no_formulario(win):
+                log("✔ Tela 'Consulta de Notas Recebidas' aberta — começando.")
+                return conectar_janela()
+            pagina = _todos_os_textos(win).lower()
+            # tela de login/nova autenticação/certificado é da pessoa: não
+            # clica em nada (um "Acesso Restrito" no cabeçalho a tiraria dali)
+            if any(t in pagina for t in ("nova autentica", "autenticar", "selecione um certificado", "verify you are human")):
+                time.sleep(2)
+                continue
+            for textos, rotulo in _PASSOS_ATE_FORMULARIO:
+                el = _achar(win, textos, tipos=("Hyperlink", "Button", "ListItem"))
+                # não repete o mesmo clique antes de a página ter tempo de abrir
+                if el is not None and time.time() - ultimo_clique.get(rotulo, 0) > 10:
+                    try:
+                        _acionar(el)
+                        ultimo_clique[rotulo] = time.time()
+                        log(f"  → cliquei em '{rotulo}'")
+                    except Exception:
+                        pass
+                    break
+        time.sleep(2)
+    raise ErroFatal("Passaram 15 minutos sem chegar na tela 'Consulta de Notas Recebidas'. Clique em Iniciar de novo quando ela estiver aberta.")
 
 
 def _aguardar_verificacao(win, log) -> None:
@@ -495,7 +566,7 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None, log=pr
     log(f"Execução #{execucao_id} — competência {competencia['mm_aaaa']} "
         f"({competencia['data_inicial']} a {competencia['data_final']}), {len(empresas)} consulta(s).")
 
-    conectar_janela()  # falha cedo se o Edge não estiver aberto no portal
+    preparar_portal(log, deve_parar)  # abre o Edge se preciso e espera chegar no formulário
     hub_api.iniciar_execucao(token, execucao_id)
 
     alguma_ok = False
