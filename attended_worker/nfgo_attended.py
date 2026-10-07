@@ -457,6 +457,9 @@ def garantir_formulario(win, timeout: float = TIMEOUT_PADRAO_S, log=print):
     if no_formulario(win):
         return win
     botao = _achar(win, ["Nova consulta", "Nova Consulta", "Nova pesquisa"])
+    if botao is None and _linhas_historico(win):
+        # depois do download o portal fica no "Histórico de Download de XMLs"
+        botao = _achar(win, ["Voltar"], tipos=("Hyperlink", "Button", "Text"), exato=True)
     if botao is not None:
         _acionar(botao)
     win2 = _esperar(lambda: (lambda w: w if no_formulario(w) else None)(conectar_janela()), timeout, 1)
@@ -475,6 +478,7 @@ _PASSOS_ATE_FORMULARIO = [
     # (textos do botão/link, rótulo pro log) - clicados sozinhos quando aparecem
     (["Baixar XML NFE", "Baixar XML NF-e"], "Baixar XML NFE"),
     (["Acesso Restrito"], "Acesso Restrito"),
+    (["Home"], "Home"),  # último recurso: volta pro menu do Acesso Restrito
 ]
 
 # CPF/senha do Acesso Restrito cadastrados no Hub (tela do RPA NF GO) - só
@@ -784,12 +788,16 @@ def _guardar_print_erro(pasta_raiz: Path, empresa: dict, competencia: dict, png:
 # Download (fila do portal + pasta Downloads)
 # ---------------------------------------------------------------------------
 
-def _novo_arquivo_downloads(pasta: Path, referencia: float):
-    """Arquivo .zip/.xml novo (mtime >= referencia) com tamanho estável."""
+def _novo_arquivo_downloads(pasta: Path, referencia: float, nome_esperado: str = ""):
+    """Arquivo .zip/.xml novo (mtime >= referencia) com tamanho estável. Com
+    nome_esperado (o "Arquivo" da linha do histórico do portal), só aceita
+    esse arquivo - o Edge pode acrescentar " (1)" se já existir um igual."""
     candidatos = []
+    base = Path(nome_esperado).stem.lower() if nome_esperado else ""
     for padrao in ("*.zip", "*.xml"):
         try:
-            candidatos += [p for p in pasta.glob(padrao) if p.stat().st_mtime >= referencia]
+            candidatos += [p for p in pasta.glob(padrao) if p.stat().st_mtime >= referencia
+                           and (not base or p.stem.lower().startswith(base))]
         except OSError:
             continue
     if not candidatos:
@@ -845,12 +853,81 @@ def _aceitar_prompt_download(pasta_downloads: Path, log) -> None:
         log(f"  ⚠️  Não consegui responder a janela 'Salvar como' do Edge: {exc} — salve em Downloads.")
 
 
-def baixar_todos(win, log) -> Path:
-    """Baixar todos os arquivos > Baixar documentos e eventos > Baixar; o
-    portal enfileira o pacote e mostra "Baixar XML" no topo quando fica
-    pronto (roteiro do escritório). Devolve o arquivo baixado (Downloads)."""
+_RX_ARQUIVO_HISTORICO = re.compile(r"^(\d+)_(\d{8})_(\d{8})_(\d+)\.zip$", re.I)
+_JA_BAIXADOS: set = set()   # arquivos do histórico já baixados nesta sessão (Entrada e Saída têm o mesmo prefixo)
+INTERVALO_ATUALIZAR_HISTORICO_S = 20
+TOLERANCIA_RELOGIO_S = 3 * 60  # diferença aceitável entre o relógio do PC e o da SEFAZ
+
+
+def _linhas_historico(win) -> list[dict]:
+    """Tabela "Histórico de Download de XMLs" (Situação | Arquivo | Data de
+    Solicitação | Observações | Baixar XML), mais nova em cima. Monta as
+    linhas pela posição na tela: o texto do arquivo
+    (IE_ddmmaaaa_ddmmaaaa_N.zip) e, na mesma altura, a situação e o botão."""
+    textos = []
+    for el in _descendentes(win, "Text"):
+        try:
+            textos.append((_texto(el), el.rectangle()))
+        except Exception:
+            continue
+    botoes = []
+    for tipo in ("Button", "Hyperlink"):
+        for el in _descendentes(win, tipo):
+            if "baixar xml" in _texto(el).lower() and "nfe" not in _texto(el).lower():
+                try:
+                    botoes.append((el, el.rectangle()))
+                except Exception:
+                    continue
+    linhas = []
+    for nome, r in textos:
+        m = _RX_ARQUIVO_HISTORICO.match(nome)
+        if not m:
+            continue
+        meio = (r.top + r.bottom) / 2
+        mesma_linha = [t for t, rt in textos if abs((rt.top + rt.bottom) / 2 - meio) <= 12]
+        situacao = next((t for t in mesma_linha if re.match(r"(?i)(aguardando|conclu|erro|process|falh|cancel)", t)), "")
+        quando = None
+        for t in mesma_linha:
+            md = re.match(r"(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?", t)
+            if md:
+                d, mo, a, h, mi, se = md.groups()
+                try:
+                    quando = time.mktime((int(a), int(mo), int(d), int(h), int(mi), int(se or 0), 0, 0, -1))
+                except (OverflowError, ValueError):
+                    quando = None
+                break
+        botao = min(
+            ((b, abs((rb.top + rb.bottom) / 2 - meio)) for b, rb in botoes),
+            key=lambda x: x[1], default=(None, 999),
+        )
+        linhas.append({
+            "arquivo": nome, "ie": m.group(1), "inicio": m.group(2), "fim": m.group(3),
+            "situacao": situacao, "topo": r.top, "solicitado_em": quando,
+            "botao": botao[0] if botao[1] <= 25 else None,
+        })
+    linhas.sort(key=lambda l: l["topo"])
+    return linhas
+
+
+def _abrir_historico(win, log) -> None:
+    botao = _achar(win, ["Histórico de Download de XMLs", "Historico de Download"], tipos=("Button", "Hyperlink"))
+    if botao is not None:
+        _acionar(botao)
+        log("  → abri o 'Histórico de Download de XMLs'")
+        time.sleep(3)
+
+
+def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
+    """Baixar todos os arquivos > Baixar documentos e eventos > Baixar. O
+    portal cria uma linha no "Histórico de Download de XMLs" (Aguardando...
+    -> Concluído). Espera a linha DESTE pedido - a mais nova com a mesma IE e
+    período, que ainda não foi baixada - ficar Concluída (atualizando a
+    página) e clica no "Baixar XML" DELA (não em linhas antigas, que davam o
+    arquivo errado). Confere que o arquivo baixado tem o nome da linha."""
     pasta_downloads = Path.home() / "Downloads"
     referencia = time.time()
+    so_digitos = [re.sub(r"\D", "", x) for x in (ie, data_inicial, data_final)]
+    prefixo = "_".join(so_digitos).lower() + "_"
 
     botao = _achar(win, ["Baixar todos os arquivos", "Baixar todos"])
     if botao is None:
@@ -867,35 +944,63 @@ def baixar_todos(win, log) -> Path:
     if baixar is None:
         raise ErroAttended("[download] botão 'Baixar' (documentos e eventos) não encontrado")
     _acionar(baixar)
-    log("  Pedido de download enviado — o portal processa na fila (pode levar alguns minutos)...")
+    log("  Pedido de download enviado — aguardando a linha deste pedido no histórico do portal...")
+    time.sleep(3)
 
     prazo = time.time() + TIMEOUT_FILA_DOWNLOAD_S
-    clicou_link = False
+    ultimo_refresh = time.time()
+    abriu_historico = False
+    alvo = None
+    situacao_anterior = ""
     while time.time() < prazo:
-        arquivo = _novo_arquivo_downloads(pasta_downloads, referencia)
-        if arquivo is not None:
-            win = conectar_janela()
+        w = conectar_janela()
+        linhas = _linhas_historico(w)
+        if not linhas and not abriu_historico:
+            _abrir_historico(w, log)
+            abriu_historico = True
+            continue
+        # a mais nova (em cima) com esta IE e período, pedida agora (não uma
+        # linha antiga do mesmo período) e que ainda não baixamos
+        nossa = next((l for l in linhas if l["arquivo"].lower().startswith(prefixo)
+                      and l["arquivo"] not in _JA_BAIXADOS
+                      and (l["solicitado_em"] is None or l["solicitado_em"] >= referencia - TOLERANCIA_RELOGIO_S)), None)
+        if nossa is not None:
+            if nossa["situacao"] != situacao_anterior:
+                log(f"  Histórico: {nossa['arquivo']} — {nossa['situacao'] or '?'}")
+                situacao_anterior = nossa["situacao"]
+            if nossa["situacao"].lower().startswith(("erro", "falh", "cancel")):
+                raise ErroAttended(f"[download] o portal marcou o pedido {nossa['arquivo']} como '{nossa['situacao']}'")
+            if nossa["situacao"].lower().startswith("conclu") and nossa["botao"] is not None:
+                alvo = nossa
+                _acionar(nossa["botao"])
+                log(f"  Pacote pronto — baixando {nossa['arquivo']}...")
+                break
+        if time.time() - ultimo_refresh >= INTERVALO_ATUALIZAR_HISTORICO_S:
             try:
-                win.type_keys("{ESC}")  # fecha o painel de Downloads do Edge (lição do ISS Net)
+                w.type_keys("{F5}")  # a lista não atualiza sozinha (gravação: o escritório recarregava)
+            except Exception:
+                pass
+            ultimo_refresh = time.time()
+            time.sleep(4)
+            continue
+        time.sleep(3)
+    if alvo is None:
+        raise ErroAttended(f"[download] a linha deste pedido ({prefixo}*.zip) não ficou 'Concluído' no histórico "
+                           f"em {TIMEOUT_FILA_DOWNLOAD_S // 60} min")
+
+    prazo = time.time() + 5 * 60
+    while time.time() < prazo:
+        arquivo = _novo_arquivo_downloads(pasta_downloads, referencia, alvo["arquivo"])
+        if arquivo is not None:
+            _JA_BAIXADOS.add(alvo["arquivo"])
+            try:
+                conectar_janela().type_keys("{ESC}")  # fecha o painel de Downloads do Edge
             except Exception:
                 pass
             return arquivo
-        w = conectar_janela()
         _aceitar_prompt_download(pasta_downloads, log)
-        if not clicou_link:
-            link = next(
-                (el for tipo in ("Hyperlink", "Button", "Text")
-                 for el in _descendentes(w, tipo)
-                 if "baixar xml" in _texto(el).lower() and "nfe" not in _texto(el).lower()
-                 and "hist" not in _texto(el).lower() and not _texto(el).startswith("::")),
-                None,
-            )
-            if link is not None:
-                _acionar(link)
-                clicou_link = True
-                log("  Pacote pronto no portal — baixando...")
-        time.sleep(3)
-    raise ErroAttended(f"[download] o arquivo não chegou na pasta {pasta_downloads} em {TIMEOUT_FILA_DOWNLOAD_S // 60} min")
+        time.sleep(2)
+    raise ErroAttended(f"[download] cliquei em Baixar XML de {alvo['arquivo']}, mas o arquivo não chegou em {pasta_downloads}")
 
 
 # ---------------------------------------------------------------------------
@@ -924,7 +1029,8 @@ def processar_consulta(empresa: dict, competencia: dict, pasta_raiz: Path, log) 
     (pasta / arquivos.nome_evidencia(tipo, mm_aaaa)).write_bytes(print_png)
     qtd_portal = arquivos.extrair_quantidade(textos)
     try:
-        return _baixar_e_salvar(win, pasta, tipo, mm_aaaa, textos, print_png, qtd_portal, log)
+        return _baixar_e_salvar(win, pasta, tipo, mm_aaaa, textos, print_png, qtd_portal, log,
+                                ie, competencia["data_inicial"], competencia["data_final"])
     except Exception as exc:
         try:
             exc.parcial = {"evidencia_png": print_png, "qtd_notas_portal": qtd_portal}
@@ -933,12 +1039,13 @@ def processar_consulta(empresa: dict, competencia: dict, pasta_raiz: Path, log) 
         raise
 
 
-def _baixar_e_salvar(win, pasta: Path, tipo: str, mm_aaaa: str, textos: str, print_png: bytes, qtd_portal, log) -> dict:
+def _baixar_e_salvar(win, pasta: Path, tipo: str, mm_aaaa: str, textos: str, print_png: bytes, qtd_portal, log,
+                     ie: str, data_inicial: str, data_final: str) -> dict:
     if arquivos.sem_resultado(textos) and not qtd_portal:
         return {"status": "CONCLUIDO", "movimento": "Sem movimento", "qtd_notas_portal": 0, "qtd_xml": 0,
                 "evidencia_png": print_png, "zip_path": None, "observacao": "", "erro": ""}
 
-    baixado = baixar_todos(win, log)
+    baixado = baixar_todos(win, log, ie, data_inicial, data_final)
     try:
         zip_bytes = arquivos.padronizar_download(baixado.read_bytes(), baixado.name)
         contagem = arquivos.contar_xmls(zip_bytes)
