@@ -162,7 +162,38 @@ def garantir_schema() -> None:
             ALTER TABLE rpa_execucoes
             ADD COLUMN IF NOT EXISTS cancelar_solicitado BOOLEAN NOT NULL DEFAULT false
         """)
+        # último contato do programa do PC (attended) por escritório/módulo -
+        # a tela mostra se ele está aberto aguardando a fila
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rpa_pc_contato (
+                escritorio_id TEXT NOT NULL,
+                modulo TEXT NOT NULL,
+                usuario TEXT NOT NULL DEFAULT '',
+                visto_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (escritorio_id, modulo)
+            )
+        """)
         conn.commit()
+
+
+def registrar_contato_pc(escritorio_id: str, modulo: str, usuario: str) -> None:
+    with auth.conectar() as conn:
+        conn.execute(
+            "INSERT INTO rpa_pc_contato (escritorio_id, modulo, usuario, visto_em) VALUES (%s, %s, %s, now()) "
+            "ON CONFLICT (escritorio_id, modulo) DO UPDATE SET usuario = EXCLUDED.usuario, visto_em = now()",
+            (escritorio_id, modulo, usuario or ""),
+        )
+        conn.commit()
+
+
+def ultimo_contato_pc(escritorio_id: str, modulo: str) -> Optional[dict]:
+    """{'usuario', 'visto_em', 'segundos'} ou None se o programa nunca falou."""
+    with auth.conectar() as conn:
+        return conn.execute(
+            "SELECT usuario, visto_em, EXTRACT(EPOCH FROM now() - visto_em)::int AS segundos "
+            "FROM rpa_pc_contato WHERE escritorio_id = %s AND modulo = %s",
+            (escritorio_id, modulo),
+        ).fetchone()
 
 
 # ---------------------------------------------------------------------------

@@ -1402,7 +1402,11 @@ def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
                 f"🔁 Reprocessar {erros} consulta(s) com erro", key=f"reprocessar_nfgo_{execucao['id']}",
             ):
                 qtd = rpa_core.reprocessar_falhas(execucao["id"])
-                _flash("flash_rpa_hub", f"✅ {qtd} consulta(s) voltaram para a fila — o worker processa em instantes.")
+                _flash(
+                    "flash_rpa_hub",
+                    f"✅ {qtd} consulta(s) voltaram para a fila — com o programa RPA NF GO aberto no PC "
+                    "(\"Ficar aguardando o Hub\" marcado), começa sozinho em até 30 segundos.",
+                )
                 st.rerun()
 
         st.dataframe(_linhas_grade_nfgo(execucao, empresas_exec), use_container_width=True, hide_index=True)
@@ -1512,7 +1516,7 @@ def _bloco_credenciais_certificado_senha(
     return cred_portal
 
 
-def _bloco_programa_nfgo() -> None:
+def _bloco_programa_nfgo(escritorio_id: str) -> None:
     """Download do programa do PC do RPA NF GO (attended_worker/gui_nfgo.py):
     a consulta de notas da SEFAZ-GO tem verificação da Cloudflare que não
     passa no navegador do servidor, então quem processa a fila é o Edge do
@@ -1535,6 +1539,11 @@ def _bloco_programa_nfgo() -> None:
         _leia = _pasta_attended / "LEIA-ME_NFGO.txt"
         if _leia.exists():
             zf.write(_leia, arcname="LEIA-ME.txt")
+    _contato = rpa_core.ultimo_contato_pc(escritorio_id, "sefazgo_nfe")
+    if _contato and _contato["segundos"] is not None and _contato["segundos"] <= 90:
+        st.success(f"🟢 Programa aberto no PC e aguardando a fila (último contato há {_contato['segundos']} s).")
+    elif _contato:
+        st.caption(f"⚪ Programa do PC sem contato desde {_contato['visto_em']:%d/%m/%Y %H:%M} — abra o RPA NF GO no PC para processar a fila.")
     _versao_arq = _pasta_attended / "VERSION_NFGO"
     _versao = _versao_arq.read_text(encoding="utf-8").strip() if _versao_arq.exists() else ""
     st.download_button(
@@ -1617,7 +1626,7 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs")
     if modulo_id == "sefazgo_nfe":
         # roda no programa do PC (Edge do escritório, certificado do
         # escritório) - não usa credencial guardada no Hub
-        _bloco_programa_nfgo()
+        _bloco_programa_nfgo(escritorio_id)
         cred = True
     elif tipo_auth == "certificado_senha":
         cred = _bloco_credenciais_certificado_senha(modulo_id, modulo_info, escritorio_id, usuario)

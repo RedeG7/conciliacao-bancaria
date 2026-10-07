@@ -28,5 +28,11 @@ e salva em:
 A grade do Hub recebe a quantidade da SEFAZ, a quantidade de XMLs no ZIP,
 o print e o ZIP.
 
+Ficar aguardando o Hub (marcado por padrão): com o programa aberto, ele
+confere a fila do Hub a cada 30 segundos. Criar uma execução ou clicar em
+"Reprocessar" no Hub faz o programa começar sozinho (abre o Edge se
+precisar). Precisa ter clicado em Iniciar com a senha do Hub uma vez. O Hub
+mostra "Programa aberto no PC" quando ele está aguardando.
+
 "Parar" (no programa) ou "Cancelar processamento" (no Hub) param antes da
 próxima consulta; o que faltou aparece como erro com "Reprocessar" no Hub.
