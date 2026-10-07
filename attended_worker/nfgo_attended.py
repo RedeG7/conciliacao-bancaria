@@ -1349,10 +1349,34 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None, log=pr
     preparar_portal(log, deve_parar)  # abre o Edge se preciso e vai até o formulário
     hub_api.iniciar_execucao(token, execucao_id)
 
+    # sinal de vida pro Hub a cada 30 s (as esperas do download passam de 10
+    # min): sem ele a tela acharia que o programa foi fechado
+    import threading
+    fim_sinal = threading.Event()
+
+    def _sinal_de_vida() -> None:
+        while not fim_sinal.wait(30):
+            try:
+                hub_api.situacao_execucao(token, execucao_id)
+            except Exception:
+                pass
+
+    threading.Thread(target=_sinal_de_vida, daemon=True).start()
+    try:
+        _processar_lote_hub(token, execucao_id, empresas, competencia, pasta_raiz, deve_parar, log)
+    finally:
+        fim_sinal.set()
+
+
+def _processar_lote_hub(token, execucao_id, empresas, competencia, pasta_raiz, deve_parar, log) -> None:
+
     alguma_ok = False
     try:
         for empresa in empresas:
             situacao = hub_api.situacao_execucao(token, execucao_id)
+            if situacao.get("status") not in (None, "RODANDO"):
+                log("⛔ A execução foi cancelada/encerrada no Hub — parando.")
+                return
             if situacao.get("cancelar_solicitado"):
                 hub_api.interromper_execucao(token, execucao_id, "Cancelado pelo usuário")
                 log("⛔ Cancelado pelo Hub — o que faltava ficou para reprocessar.")
@@ -1388,6 +1412,14 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None, log=pr
             log(f"  ✅ {r['movimento']} — SEFAZ: {r['qtd_notas_portal']} · XML no ZIP: {r['qtd_xml']} {r['observacao']}")
     except ErroFatal as exc:
         hub_api.interromper_execucao(token, execucao_id, f"Interrompido: {exc}")
+        raise
+    except Exception as exc:
+        # qualquer outra falha (Hub fora do ar no meio, erro inesperado): não
+        # deixa a execução presa em RODANDO - libera o Reprocessar
+        try:
+            hub_api.interromper_execucao(token, execucao_id, f"Interrompido por erro no programa do PC: {exc}"[:400])
+        except Exception:
+            pass
         raise
 
     hub_api.concluir_execucao(token, execucao_id, competencia["mm_aaaa"], "CONCLUIDO" if alguma_ok else "ERRO")
