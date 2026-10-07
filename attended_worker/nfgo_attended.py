@@ -76,6 +76,26 @@ class ErroFatal(ErroAttended):
     para e o restante volta pro Hub como erro (aparece o Reprocessar)."""
 
 
+class ErroParado(ErroAttended):
+    """Botão Parar do programa ou Cancelar no Hub - interrompe na hora,
+    inclusive no meio das esperas longas (fila de download do portal)."""
+
+
+_PARADA = {"fn": None, "cancelado_hub": False}
+
+
+def _definir_parada(fn) -> None:
+    _PARADA.update(fn=fn, cancelado_hub=False)
+
+
+def _checar_parada() -> None:
+    if _PARADA["cancelado_hub"]:
+        raise ErroParado("Cancelado pelo usuário no Hub")
+    fn = _PARADA["fn"]
+    if fn is not None and fn():
+        raise ErroParado("Parado no programa do PC")
+
+
 # ---------------------------------------------------------------------------
 # Janela e elementos (UI Automation)
 # ---------------------------------------------------------------------------
@@ -166,6 +186,7 @@ def _acionar(el) -> None:
 def _esperar(condicao, timeout: float, intervalo: float = 0.5):
     prazo = time.time() + timeout
     while time.time() < prazo:
+        _checar_parada()
         resultado = condicao()
         if resultado:
             return resultado
@@ -641,7 +662,8 @@ def preparar_portal(log=print, deve_parar=None, timeout: float = TIMEOUT_CHEGAR_
     prazo = time.time() + timeout
     while time.time() < prazo:
         if deve_parar and deve_parar():
-            raise ErroAttended("Parado antes de começar.")
+            raise ErroParado("Parado antes de começar.")
+        _checar_parada()
         _confirmar_certificado(log)
         win = _janela_portal()
         if win is not None:
@@ -822,18 +844,62 @@ def _guardar_print_erro(pasta_raiz: Path, empresa: dict, competencia: dict, png:
 # Download (fila do portal + pasta Downloads)
 # ---------------------------------------------------------------------------
 
-def _novo_arquivo_downloads(pasta: Path, referencia: float, nome_esperado: str = ""):
-    """Arquivo .zip/.xml novo (mtime >= referencia) com tamanho estável. Com
-    nome_esperado (o "Arquivo" da linha do histórico do portal), só aceita
-    esse arquivo - o Edge pode acrescentar " (1)" se já existir um igual."""
+def _pastas_download() -> list[Path]:
+    """Onde o Edge pode salvar: pasta Downloads do Windows (pode estar em
+    outro disco/OneDrive), a pasta configurada no próprio Edge (Configurações
+    > Downloads > Local) e a Downloads do perfil."""
+    pastas = [Path.home() / "Downloads"]
+    try:
+        import ctypes
+        from ctypes import wintypes
+        import uuid
+        guid = uuid.UUID("{374DE290-123F-4565-9164-39C4925E467B}")  # FOLDERID_Downloads
+
+        class _GUID(ctypes.Structure):
+            _fields_ = [("d1", wintypes.DWORD), ("d2", wintypes.WORD), ("d3", wintypes.WORD), ("d4", ctypes.c_ubyte * 8)]
+        g = _GUID(guid.fields[0], guid.fields[1], guid.fields[2], (ctypes.c_ubyte * 8)(*guid.bytes[8:]))
+        caminho = ctypes.c_wchar_p()
+        if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(g), 0, None, ctypes.byref(caminho)) == 0:
+            pastas.append(Path(caminho.value))
+            ctypes.windll.ole32.CoTaskMemFree(caminho)
+    except Exception:
+        pass
+    try:
+        import json
+        dados = Path.home() / "AppData" / "Local" / "Microsoft" / "Edge" / "User Data"
+        for pref in list(dados.glob("*/Preferences")):
+            try:
+                d = json.loads(pref.read_text(encoding="utf-8", errors="ignore"))
+                pasta = (d.get("download") or {}).get("default_directory")
+                if pasta:
+                    pastas.append(Path(pasta))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    unicas = []
+    for p in pastas:
+        if p.exists() and p not in unicas:
+            unicas.append(p)
+    return unicas or [Path.home() / "Downloads"]
+
+
+def _novo_arquivo_downloads(pastas, referencia: float, nome_esperado: str = ""):
+    """Arquivo .zip/.xml novo (mtime >= referencia) com tamanho estável, em
+    qualquer das pastas. Com nome_esperado (o "Arquivo" da linha do
+    histórico do portal), só aceita esse arquivo - o Edge pode acrescentar
+    " (1)" se já existir um igual."""
+    if isinstance(pastas, Path):
+        pastas = [pastas]
     candidatos = []
     base = Path(nome_esperado).stem.lower() if nome_esperado else ""
-    for padrao in ("*.zip", "*.xml"):
-        try:
-            candidatos += [p for p in pasta.glob(padrao) if p.stat().st_mtime >= referencia
-                           and (not base or p.stem.lower().startswith(base))]
-        except OSError:
-            continue
+    for pasta in pastas:
+        for padrao in ("*.zip", "*.xml"):
+            try:
+                candidatos += [p for p in pasta.glob(padrao) if p.stat().st_mtime >= referencia
+                               and (not base or p.stem.lower().startswith(base))]
+            except OSError:
+                continue
     if not candidatos:
         return None
     candidato = max(candidatos, key=lambda p: p.stat().st_mtime)
@@ -887,10 +953,10 @@ def _aceitar_prompt_download(pasta_downloads: Path, log) -> None:
         log(f"  ⚠️  Não consegui responder a janela 'Salvar como' do Edge: {exc} — salve em Downloads.")
 
 
-_RX_ARQUIVO_HISTORICO = re.compile(r"^(\d+)_(\d{8})_(\d{8})_(\d+)\.zip$", re.I)
+_RX_ARQUIVO_HISTORICO = re.compile(r"(\d+)_(\d{8})_(\d{8})_(\d+)\.zip", re.I)
 _JA_BAIXADOS: set = set()   # arquivos do histórico já baixados nesta sessão (Entrada e Saída têm o mesmo prefixo)
 INTERVALO_ATUALIZAR_HISTORICO_S = 20
-TOLERANCIA_RELOGIO_S = 3 * 60  # diferença aceitável entre o relógio do PC e o da SEFAZ
+TOLERANCIA_RELOGIO_S = 15 * 60  # diferença aceitável entre o relógio do PC e o da SEFAZ
 
 
 def _linhas_historico(win) -> list[dict]:
@@ -900,7 +966,7 @@ def _linhas_historico(win) -> list[dict]:
     (IE_ddmmaaaa_ddmmaaaa_N.zip) e, na mesma altura, a situação e o botão."""
     textos = []
     # "Em processamento..." vem numa barra verde (pode ser ProgressBar/Custom)
-    for tipo in ("Text", "ProgressBar", "Custom"):
+    for tipo in ("Text", "ProgressBar", "Custom", "DataItem", "Hyperlink"):
         for el in _descendentes(win, tipo):
             try:
                 textos.append((_texto(el), el.rectangle()))
@@ -915,15 +981,18 @@ def _linhas_historico(win) -> list[dict]:
                 except Exception:
                     continue
     linhas = []
-    for nome, r in textos:
-        m = _RX_ARQUIVO_HISTORICO.match(nome)
-        if not m:
+    vistos = set()
+    for texto, r in textos:
+        m = _RX_ARQUIVO_HISTORICO.search(texto)
+        if not m or (m.group(0).lower(), r.top // 6) in vistos:
             continue
+        nome = m.group(0)
+        vistos.add((nome.lower(), r.top // 6))
         meio = (r.top + r.bottom) / 2
         mesma_linha = [t for t, rt in textos if abs((rt.top + rt.bottom) / 2 - meio) <= 12]
         # Aguardando... -> Em processamento... -> Concluído (ou erro)
-        situacao = next((t for t in mesma_linha
-                         if re.search(r"(?i)\b(aguardando|em processamento|processando|conclu|erro|falh|cancel)", t)), "")
+        situacao = next((t for t in mesma_linha if not _RX_ARQUIVO_HISTORICO.search(t)
+                         and re.search(r"(?i)\b(aguardando|em processamento|processando|conclu|erro|falh|cancel)", t)), "")
         quando = None
         for t in mesma_linha:
             md = re.match(r"(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?", t)
@@ -977,7 +1046,7 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
     período, que ainda não foi baixada - ficar Concluída (atualizando a
     página) e clica no "Baixar XML" DELA (não em linhas antigas, que davam o
     arquivo errado). Confere que o arquivo baixado tem o nome da linha."""
-    pasta_downloads = Path.home() / "Downloads"
+    pastas_download = _pastas_download()
     referencia = time.time()
     so_digitos = [re.sub(r"\D", "", x) for x in (ie, data_inicial, data_final)]
     prefixo = "_".join(so_digitos).lower() + "_"
@@ -1005,10 +1074,19 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
     ultima_volta = 0.0
     alvo = None
     situacao_anterior = ""
+    estado_anterior = ""
     while time.time() < prazo:
+        _checar_parada()
         w = conectar_janela()
         linhas = _linhas_historico(w)
-        if not linhas and time.time() - ultima_volta > 45:
+        na_tela_historico = "histórico de downloads" in _todos_os_textos(w).lower()
+        if not linhas and na_tela_historico:
+            # está no histórico mas não leu as linhas (ainda carregando?) -
+            # NÃO sai daqui; atualiza e tenta de novo
+            if estado_anterior != "sem_linhas":
+                log("  Histórico aberto, mas ainda sem linhas legíveis — atualizando...")
+                estado_anterior = "sem_linhas"
+        elif not linhas and time.time() - ultima_volta > 45:
             # fora do histórico: do formulário é só o botão; de outra tela,
             # refaz o caminho até ele (o pedido continua na fila do portal)
             ultima_volta = time.time()
@@ -1017,9 +1095,21 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
             continue
         # a mais nova (em cima) com esta IE e período, pedida agora (não uma
         # linha antiga do mesmo período) e que ainda não baixamos
-        nossa = next((l for l in linhas if l["arquivo"].lower().startswith(prefixo)
-                      and l["arquivo"] not in _JA_BAIXADOS
+        desta = [l for l in linhas if l["arquivo"].lower().startswith(prefixo)]
+        nossa = next((l for l in desta if l["arquivo"] not in _JA_BAIXADOS
                       and (l["solicitado_em"] is None or l["solicitado_em"] >= referencia - TOLERANCIA_RELOGIO_S)), None)
+        if linhas and nossa is None:
+            estado = f"{len(linhas)}|{len(desta)}|{desta[0]['arquivo'] if desta else ''}"
+            if estado != estado_anterior:
+                if desta:
+                    topo = desta[0]
+                    quando = time.strftime("%d/%m %H:%M", time.localtime(topo["solicitado_em"])) if topo["solicitado_em"] else "?"
+                    log(f"  Histórico: {len(linhas)} linha(s); deste pedido ainda nenhuma nova — a mais recente "
+                        f"desta IE/período é {topo['arquivo']} ({topo['situacao'] or '?'}, pedida {quando}"
+                        f"{', já baixada' if topo['arquivo'] in _JA_BAIXADOS else ''}). Aguardando...")
+                else:
+                    log(f"  Histórico: {len(linhas)} linha(s), nenhuma com {prefixo}*.zip ainda. Aguardando...")
+                estado_anterior = estado
         if nossa is not None:
             if nossa["situacao"] != situacao_anterior:
                 log(f"  Histórico: {nossa['arquivo']} — {nossa['situacao'] or '?'}")
@@ -1046,7 +1136,8 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
 
     prazo = time.time() + 5 * 60
     while time.time() < prazo:
-        arquivo = _novo_arquivo_downloads(pasta_downloads, referencia, alvo["arquivo"])
+        _checar_parada()
+        arquivo = _novo_arquivo_downloads(pastas_download, referencia, alvo["arquivo"])
         if arquivo is not None:
             _JA_BAIXADOS.add(alvo["arquivo"])
             try:
@@ -1054,9 +1145,10 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
             except Exception:
                 pass
             return arquivo
-        _aceitar_prompt_download(pasta_downloads, log)
+        _aceitar_prompt_download(pastas_download[0], log)
         time.sleep(2)
-    raise ErroAttended(f"[download] cliquei em Baixar XML de {alvo['arquivo']}, mas o arquivo não chegou em {pasta_downloads}")
+    raise ErroAttended(f"[download] cliquei em Baixar XML de {alvo['arquivo']}, mas o arquivo não chegou em "
+                       f"{', '.join(str(p) for p in pastas_download)} — confira a pasta de downloads do Edge")
 
 
 # ---------------------------------------------------------------------------
@@ -1283,9 +1375,14 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, mm_aaaa: str = 
         f"({competencia['data_inicial']} a {competencia['data_final']}), "
         f"{len(empresas) // 2} empresa(s), {len(empresas)} consulta(s).")
     definir_credencial(cpf, senha)
-    preparar_portal(log, deve_parar)
-
+    _definir_parada(deve_parar)
     linhas = []
+    try:
+        preparar_portal(log, deve_parar)
+    except ErroParado:
+        log("⏹ Parado antes de começar.")
+        empresas = []
+
     for empresa in empresas:
         if deve_parar and deve_parar():
             log("⏹ Parado — o resumo traz o que já foi feito.")
@@ -1299,6 +1396,9 @@ def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, mm_aaaa: str = 
         }
         try:
             r = processar_consulta(empresa, competencia, pasta_raiz, log)
+        except ErroParado:
+            log("⏹ Parado — o resumo traz o que já foi feito.")
+            break
         except Exception as exc:
             log(f"  ❌ {exc}")
             png = print_do_erro()
@@ -1346,7 +1446,12 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None, log=pr
             log("ℹ️  Sem CPF/senha do Acesso Restrito no Hub — se o portal pedir nova autenticação, preencha no Edge.")
     except hub_api.ErroHubApi as exc:
         log(f"⚠️  Não consegui ler o CPF/senha do Hub ({exc}) — se o portal pedir, preencha no Edge.")
-    preparar_portal(log, deve_parar)  # abre o Edge se preciso e vai até o formulário
+    _definir_parada(deve_parar)
+    try:
+        preparar_portal(log, deve_parar)  # abre o Edge se preciso e vai até o formulário
+    except ErroParado:
+        log("⏹ Parado antes de começar — a execução continua na fila do Hub.")
+        return
     hub_api.iniciar_execucao(token, execucao_id)
 
     # sinal de vida pro Hub a cada 30 s (as esperas do download passam de 10
@@ -1355,9 +1460,13 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None, log=pr
     fim_sinal = threading.Event()
 
     def _sinal_de_vida() -> None:
-        while not fim_sinal.wait(30):
+        # também é por aqui que o "Cancelar processamento" do Hub chega no
+        # meio de uma espera longa (o lote confere em _checar_parada)
+        while not fim_sinal.wait(20):
             try:
-                hub_api.situacao_execucao(token, execucao_id)
+                sit = hub_api.situacao_execucao(token, execucao_id)
+                if sit.get("cancelar_solicitado") or sit.get("status") not in (None, "RODANDO"):
+                    _PARADA["cancelado_hub"] = True
             except Exception:
                 pass
 
@@ -1391,6 +1500,8 @@ def _processar_lote_hub(token, execucao_id, empresas, competencia, pasta_raiz, d
             hub_api.marcar_rodando(token, empresa["id"])
             try:
                 r = processar_consulta(empresa, competencia, pasta_raiz, log)
+            except ErroParado:
+                raise
             except Exception as exc:
                 log(f"  ❌ {exc}")
                 png = print_do_erro()
@@ -1410,6 +1521,11 @@ def _processar_lote_hub(token, execucao_id, empresas, competencia, pasta_raiz, d
             )
             alguma_ok = alguma_ok or r["status"] == "CONCLUIDO"
             log(f"  ✅ {r['movimento']} — SEFAZ: {r['qtd_notas_portal']} · XML no ZIP: {r['qtd_xml']} {r['observacao']}")
+    except ErroParado as exc:
+        motivo = "Cancelado pelo usuário" if "Hub" in str(exc) else "Parado no programa do PC"
+        hub_api.interromper_execucao(token, execucao_id, motivo)
+        log(f"⏹ {exc} — o que faltava ficou para reprocessar no Hub.")
+        return
     except ErroFatal as exc:
         hub_api.interromper_execucao(token, execucao_id, f"Interrompido: {exc}")
         raise
