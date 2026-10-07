@@ -39,7 +39,10 @@ from pathlib import Path
 
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
-LOGIN_URL = "https://www.sefaz.go.gov.br/netaccess/000System/acessoRestrito/login/"
+# entrada direta no Portal de Aplicações e Serviços (indicada pelo
+# escritório): cai no formulário de login sem passar pelo redirecionamento
+# de www.sefaz.go.gov.br/netaccess - que, no servidor, demorava a terminar
+LOGIN_URL = "https://portal.sefaz.go.gov.br/portalsefaz-apps"
 # formulário "Consulta de Notas Recebidas" - destino do "Baixar XML NFE"
 # (OpenUrl2 do menu do Acesso Restrito, visto no log da execução real)
 URL_CONSULTA = "https://nfeweb.sefaz.go.gov.br/nfeweb/sites/nfe/consulta-notas-recebidas"
