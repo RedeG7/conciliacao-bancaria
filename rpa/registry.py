@@ -187,6 +187,9 @@ def fazer_login(modulo: str, page, credencial: dict) -> None:
         return
     if modulo == "sefazgo_nfe":
         from rpa.sefazgo_nfe import portal
-        portal.login(page, credencial["cpf"], credencial["senha_portal"])
+        portal.login(
+            page, credencial["cpf"], credencial["senha_portal"],
+            com_certificado=bool(credencial.get("pfx_bytes")),
+        )
         return
     raise ValueError(f"Módulo de RPA desconhecido: {modulo}")
