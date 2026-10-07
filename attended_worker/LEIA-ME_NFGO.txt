@@ -10,11 +10,12 @@ Como usar
 1. No Hub, em "RPA NF GO", envie a planilha e crie a execução (ela fica
    aguardando o programa do PC).
 2. Abra o programa "RPA NF GO" (atalho na Área de Trabalho).
-3. Clique em "Abrir portal no Edge" e, nessa janela do Edge:
-   entre com o certificado do escritório > Acesso Restrito > Baixar XML NFE
-   (faça a nova autenticação se pedir) e pare na tela
-   "Consulta de Notas Recebidas".
-4. No programa: usuário/senha do Hub, pasta de destino, "Iniciar".
+3. No programa: usuário/senha do Hub, pasta de destino, "Iniciar".
+   Se o Edge não estiver aberto no portal, o programa abre sozinho.
+4. Na janela do Edge, quando pedir: escolha o certificado do escritório e
+   faça a nova autenticação. O programa clica sozinho em "Acesso Restrito"
+   e "Baixar XML NFE" e começa assim que abrir a tela
+   "Consulta de Notas Recebidas" (espera até 15 minutos).
 5. Deixe o Edge em primeiro plano sem mexer até terminar. Se aparecer
    "Verify you are human", clique você mesmo - o programa espera.
 

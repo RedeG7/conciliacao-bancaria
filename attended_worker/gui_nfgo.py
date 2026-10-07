@@ -185,10 +185,10 @@ class App(tk.Tk):
         ttk.Button(f1, text="Abrir portal no Edge", command=self._abrir_portal).grid(row=0, column=0, sticky="w", padx=8, pady=6)
         ttk.Label(
             f1,
-            text="Na janela do Edge que abrir: entre com o certificado do escritório >\n"
-                 "Acesso Restrito > Baixar XML NFE (e a nova autenticação, se pedir).\n"
-                 "Deixe aberta a tela 'Consulta de Notas Recebidas' e o Edge em primeiro\n"
-                 "plano até terminar. Se aparecer 'Verify you are human', clique você.",
+            text="Opcional: se o Edge não estiver aberto, o Iniciar abre sozinho. Escolha o\n"
+                 "certificado do escritório e faça a nova autenticação quando pedir — o programa\n"
+                 "clica em Acesso Restrito > Baixar XML NFE e começa ao chegar na 'Consulta de\n"
+                 "Notas Recebidas'. Deixe o Edge na frente. 'Verify you are human': clique você.",
             foreground="#555", justify="left",
         ).grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
 
