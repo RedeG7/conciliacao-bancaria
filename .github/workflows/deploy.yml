@@ -25,7 +25,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pywinauto requests pillow truststore pyinstaller
+          python -m pip install pywinauto requests pillow truststore openpyxl pyinstaller
           ./attended_worker/build_nfgo.ps1 -Python python
 
       - uses: actions/upload-artifact@v4

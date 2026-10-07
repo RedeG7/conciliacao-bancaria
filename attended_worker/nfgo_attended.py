@@ -1219,6 +1219,91 @@ def gravar_passo_a_passo(deve_parar, log=print) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Lote a partir de uma planilha local (sem Hub) - igual ao modo "Planilha
+# local" do programa do ISS Net
+# ---------------------------------------------------------------------------
+
+def _gravar_resumo(pasta_raiz: Path, mm_aaaa: str, linhas: list[dict]) -> Path:
+    """RPA NF GO/RESUMO_MMAAAA.xlsx - o que a grade do Hub mostraria."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Resumo"
+    colunas = ["Código", "Empresa", "CNPJ", "IE", "Competência", "Tipo", "Status", "Movimento",
+               "Qtd SEFAZ", "XML no ZIP", "Observação / erro", "Arquivo", "Data/Hora"]
+    ws.append(colunas)
+    for l in linhas:
+        ws.append([l.get(c, "") for c in colunas])
+    for col, largura in zip("ABCDEFGHIJKLM", (10, 40, 20, 14, 12, 10, 12, 16, 10, 10, 60, 60, 18)):
+        ws.column_dimensions[col].width = largura
+    destino = pasta_raiz / arquivos.PASTA_RAIZ / f"RESUMO_{arquivos.competencia_pasta(mm_aaaa)}.xlsx"
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        wb.save(destino)
+    except PermissionError:  # resumo aberto no Excel - salva com outro nome
+        destino = destino.with_name(f"{destino.stem}_{time.strftime('%H%M%S')}.xlsx")
+        wb.save(destino)
+    return destino
+
+
+def processar_planilha(caminho_planilha: Path, pasta_raiz: Path, mm_aaaa: str = "", deve_parar=None,
+                       log=print, cpf: str = "", senha: str = "") -> Path:
+    """Lê a planilha (mesmas colunas do Hub: Código da Empresa, Razão
+    Social, CNPJ, Inscrição Estadual), faz Entrada e Saída de cada empresa
+    e grava os arquivos + RESUMO_MMAAAA.xlsx. Sem Hub: o CPF/senha da nova
+    autenticação vêm da tela do programa (opcionais)."""
+    from rpa.sefazgo_nfe import planilha as planilha_mod
+
+    try:
+        empresas = planilha_mod.ler_empresas(Path(caminho_planilha).read_bytes())
+    except Exception as exc:
+        raise ErroAttended(f"[planilha] {exc}") from exc
+    if not empresas:
+        raise ErroAttended("[planilha] nenhuma empresa com Inscrição Estadual na planilha")
+    competencia = _competencia(mm_aaaa)
+    log(f"Planilha {Path(caminho_planilha).name} — competência {competencia['mm_aaaa']} "
+        f"({competencia['data_inicial']} a {competencia['data_final']}), "
+        f"{len(empresas) // 2} empresa(s), {len(empresas)} consulta(s).")
+    definir_credencial(cpf, senha)
+    preparar_portal(log, deve_parar)
+
+    linhas = []
+    for empresa in empresas:
+        if deve_parar and deve_parar():
+            log("⏹ Parado — o resumo traz o que já foi feito.")
+            break
+        tipo = empresa["obrigacao"]
+        log(f"\n▶ {empresa['codigo']} - {empresa.get('razao_social') or ''} · {'Saída' if tipo == 'SAIDA' else 'Entrada'}")
+        base = {
+            "Código": empresa["codigo"], "Empresa": empresa.get("razao_social") or "",
+            "CNPJ": empresa.get("cnpj_cpf") or "", "IE": empresa.get("inscricao_estadual") or "",
+            "Competência": competencia["mm_aaaa"], "Tipo": "Saída" if tipo == "SAIDA" else "Entrada",
+        }
+        try:
+            r = processar_consulta(empresa, competencia, pasta_raiz, log)
+        except Exception as exc:
+            log(f"  ❌ {exc}")
+            png = print_do_erro()
+            _guardar_print_erro(pasta_raiz, empresa, competencia, png, str(exc))
+            parcial = getattr(exc, "parcial", None) or {}
+            linhas.append({**base, "Status": "ERRO", "Qtd SEFAZ": parcial.get("qtd_notas_portal"),
+                           "Observação / erro": str(exc), "Data/Hora": time.strftime("%d/%m/%Y %H:%M")})
+            if isinstance(exc, ErroFatal):
+                break
+            continue
+        linhas.append({**base, "Status": r["status"], "Movimento": r["movimento"],
+                       "Qtd SEFAZ": r["qtd_notas_portal"], "XML no ZIP": r["qtd_xml"],
+                       "Observação / erro": r["erro"] or r["observacao"],
+                       "Arquivo": str(r["zip_path"] or ""), "Data/Hora": time.strftime("%d/%m/%Y %H:%M")})
+        log(f"  ✅ {r['movimento']} — SEFAZ: {r['qtd_notas_portal']} · XML no ZIP: {r['qtd_xml']} {r['observacao']}")
+
+    resumo = _gravar_resumo(pasta_raiz, competencia["mm_aaaa"], linhas)
+    ok = sum(1 for l in linhas if l["Status"] == "CONCLUIDO")
+    log(f"\nResumo: {ok} de {len(linhas)} consulta(s) concluída(s). Planilha de resumo:\n  {resumo}")
+    return resumo
+
+
+# ---------------------------------------------------------------------------
 # Lote a partir do Hub
 # ---------------------------------------------------------------------------
 
