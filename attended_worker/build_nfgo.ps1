@@ -25,6 +25,8 @@ Remove-Item -Force (Join-Path $PSScriptRoot "dist\nfgo_attended.exe") -ErrorActi
     --specpath "$PSScriptRoot" `
     --paths "$raiz" `
     --hidden-import rpa.sefazgo_nfe.arquivos `
+    --hidden-import rpa.sefazgo_nfe.planilha `
+    --collect-submodules openpyxl `
     --add-data "$versaoPath;." `
     --hidden-import truststore `
     --hidden-import PIL.ImageGrab `

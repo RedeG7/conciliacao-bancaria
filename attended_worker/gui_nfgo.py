@@ -165,8 +165,8 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"{NOME_APP} — v{VERSAO_ATUAL}")
-        self.geometry("680x600")
-        self.minsize(600, 520)
+        self.geometry("700x720")
+        self.minsize(620, 600)
         self._config = _carregar_config()
         self._rodando = False
         self._evento_parar = threading.Event()
@@ -197,20 +197,46 @@ class App(tk.Tk):
             foreground="#555", justify="left",
         ).grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
 
-        f2 = ttk.LabelFrame(self, text="2. Login do Hub (a execução é criada lá, em 🧾 RPA NF GO)")
+        f2 = ttk.LabelFrame(self, text="2. De onde vêm as empresas")
         f2.pack(fill="x", **pad)
+        self.modo_var = tk.StringVar(value=self._config.get("modo", "hub"))
+        ttk.Radiobutton(f2, text="Sincronizar com o Hub", variable=self.modo_var, value="hub",
+                        command=self._atualizar_modo).grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        ttk.Radiobutton(f2, text="Planilha local (.xlsx) — sem login no Hub", variable=self.modo_var, value="planilha",
+                        command=self._atualizar_modo).grid(row=0, column=1, sticky="w", padx=8, pady=4)
+
+        # modo Hub
         self.hub_usuario_var = tk.StringVar(value=self._config.get("hub_usuario", ""))
-        ttk.Label(f2, text="Usuário do Hub:").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        ttk.Entry(f2, textvariable=self.hub_usuario_var, width=55).grid(row=0, column=1, sticky="we", padx=8, pady=4)
         self.hub_senha_var = tk.StringVar(value="")  # senha nunca fica salva
-        ttk.Label(f2, text="Senha:").grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        ttk.Entry(f2, textvariable=self.hub_senha_var, width=55, show="•").grid(row=1, column=1, sticky="we", padx=8, pady=4)
-        ttk.Label(
-            f2,
-            text="Mesmo login/senha do site hub.redeg7.com. Só precisa digitar a senha\n"
-                 "de novo se a sessão expirar (30 dias) ou trocar de usuário.",
-            foreground="#555", justify="left",
-        ).grid(row=2, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        self._widgets_hub = [
+            (ttk.Label(f2, text="Usuário do Hub:"), {"row": 1, "column": 0, "sticky": "w"}),
+            (ttk.Entry(f2, textvariable=self.hub_usuario_var, width=50), {"row": 1, "column": 1, "columnspan": 2, "sticky": "we"}),
+            (ttk.Label(f2, text="Senha:"), {"row": 2, "column": 0, "sticky": "w"}),
+            (ttk.Entry(f2, textvariable=self.hub_senha_var, width=50, show="•"), {"row": 2, "column": 1, "columnspan": 2, "sticky": "we"}),
+            (ttk.Label(f2, text="Mesmo login/senha do hub.redeg7.com (a execução é criada lá, em 🧾 RPA NF GO).\n"
+                                "Só precisa digitar a senha de novo se a sessão expirar (30 dias).",
+                       foreground="#555", justify="left"), {"row": 3, "column": 0, "columnspan": 3, "sticky": "w"}),
+        ]
+
+        # modo planilha local
+        self.planilha_var = tk.StringVar(value=self._config.get("planilha", ""))
+        self.competencia_var = tk.StringVar(value=core._competencia("")["mm_aaaa"])  # mês anterior
+        self.sefaz_cpf_var = tk.StringVar(value=self._config.get("sefaz_cpf", ""))
+        self.sefaz_senha_var = tk.StringVar(value="")  # senha nunca fica salva
+        self._widgets_planilha = [
+            (ttk.Label(f2, text="Planilha:"), {"row": 1, "column": 0, "sticky": "w"}),
+            (ttk.Entry(f2, textvariable=self.planilha_var, width=45), {"row": 1, "column": 1, "sticky": "we"}),
+            (ttk.Button(f2, text="Procurar...", command=self._escolher_planilha), {"row": 1, "column": 2}),
+            (ttk.Label(f2, text="Competência (MM/AAAA):"), {"row": 2, "column": 0, "sticky": "w"}),
+            (ttk.Entry(f2, textvariable=self.competencia_var, width=10), {"row": 2, "column": 1, "sticky": "w"}),
+            (ttk.Label(f2, text="CPF Acesso Restrito:"), {"row": 3, "column": 0, "sticky": "w"}),
+            (ttk.Entry(f2, textvariable=self.sefaz_cpf_var, width=20), {"row": 3, "column": 1, "sticky": "w"}),
+            (ttk.Label(f2, text="Senha Acesso Restrito:"), {"row": 4, "column": 0, "sticky": "w"}),
+            (ttk.Entry(f2, textvariable=self.sefaz_senha_var, width=20, show="•"), {"row": 4, "column": 1, "sticky": "w"}),
+            (ttk.Label(f2, text="Colunas: Código da Empresa, Razão Social, CNPJ, Inscrição Estadual. CPF/senha\n"
+                                "(opcionais) são usados se o portal pedir nova autenticação. Gera RESUMO_MMAAAA.xlsx.",
+                       foreground="#555", justify="left"), {"row": 5, "column": 0, "columnspan": 3, "sticky": "w"}),
+        ]
         f2.columnconfigure(1, weight=1)
 
         f3 = ttk.LabelFrame(self, text="3. Pasta onde salvar (cria RPA NF GO\\<empresa>\\<MMAAAA>\\ENTRADA|SAIDA)")
@@ -234,15 +260,35 @@ class App(tk.Tk):
         self.aguardar_var = tk.BooleanVar(value=self._config.get("aguardar_hub", True))
         ttk.Checkbutton(
             f_auto, variable=self.aguardar_var, command=self._salvar_aguardar,
-            text="Ficar aguardando o Hub: ao criar uma execução ou clicar em Reprocessar no Hub, começa sozinho",
+            text="Ficar aguardando o Hub (criar execução ou Reprocessar no Hub começa sozinho)",
         ).pack(anchor="w")
         self.lbl_aguardando = ttk.Label(f_auto, text="", foreground="#555")
         self.lbl_aguardando.pack(anchor="w")
+
+        self._atualizar_modo()
 
         f4 = ttk.LabelFrame(self, text="Andamento")
         f4.pack(fill="both", expand=True, **pad)
         self.txt_log = tk.Text(f4, height=14, state="disabled", wrap="word")
         self.txt_log.pack(fill="both", expand=True, padx=6, pady=6)
+
+    def _atualizar_modo(self) -> None:
+        hub = self.modo_var.get() == "hub"
+        for widget, pos in self._widgets_hub + self._widgets_planilha:
+            widget.grid_forget()
+        for widget, pos in (self._widgets_hub if hub else self._widgets_planilha):
+            widget.grid(padx=8, pady=3, **pos)
+        if hasattr(self, "lbl_aguardando"):
+            self.lbl_aguardando.configure(text="" if hub else "(aguardar o Hub só vale no modo 'Sincronizar com o Hub')")
+
+    def _escolher_planilha(self) -> None:
+        from tkinter import filedialog
+        atual = self.planilha_var.get().strip()
+        inicial = str(Path(atual).parent) if atual and Path(atual).parent.exists() else str(Path.home())
+        caminho = filedialog.askopenfilename(title="Escolha a planilha", filetypes=[("Excel", "*.xlsx")],
+                                             initialdir=inicial, parent=self)
+        if caminho:
+            self.planilha_var.set(caminho)
 
     def _abrir_portal(self) -> None:
         try:
@@ -269,6 +315,9 @@ class App(tk.Tk):
             "hub_usuario": self.hub_usuario_var.get().strip(),
             "hub_token": self._hub_token,
             "aguardar_hub": bool(self.aguardar_var.get()),
+            "modo": self.modo_var.get(),
+            "planilha": self.planilha_var.get().strip(),
+            "sefaz_cpf": self.sefaz_cpf_var.get().strip(),
         }
 
     def _gravar(self) -> None:
@@ -338,7 +387,7 @@ class App(tk.Tk):
         self.after(self.INTERVALO_VIGIA_MS, self._vigiar)
         usuario = self.hub_usuario_var.get().strip()
         if (
-            self._rodando or self._vigiando or not self.aguardar_var.get()
+            self._rodando or self._vigiando or not self.aguardar_var.get() or self.modo_var.get() != "hub"
             or getattr(self, "_evento_gravar", None) is not None
             or not self._hub_token or self._config.get("hub_usuario") != usuario
             or not self.pasta_var.get().strip()
@@ -379,6 +428,9 @@ class App(tk.Tk):
     def _iniciar(self) -> None:
         if self._rodando:
             return
+        if self.modo_var.get() == "planilha":
+            self._iniciar_planilha()
+            return
         pasta = self.pasta_var.get().strip()
         usuario = self.hub_usuario_var.get().strip()
         senha = self.hub_senha_var.get()
@@ -396,8 +448,53 @@ class App(tk.Tk):
         self._automatico = False
         self._comecar(usuario, senha, pasta)
 
-    def _comecar(self, usuario: str, senha: str, pasta: str) -> None:
+    def _iniciar_planilha(self) -> None:
+        import re as _re
+        pasta = self.pasta_var.get().strip()
+        planilha = self.planilha_var.get().strip()
+        competencia = self.competencia_var.get().strip()
+        if not pasta:
+            messagebox.showwarning("Faltou informação", "Escolha a pasta de destino.")
+            return
+        if not planilha or not Path(planilha).exists():
+            messagebox.showwarning("Faltou informação", "Escolha uma planilha válida (.xlsx).")
+            return
+        m = _re.fullmatch(r"(\d{1,2})/(\d{4})", competencia)
+        if not m or not 1 <= int(m.group(1)) <= 12:
+            messagebox.showwarning("Competência inválida", "Informe a competência no formato MM/AAAA (ex.: 09/2026).")
+            return
+        competencia = f"{int(m.group(1)):02d}/{m.group(2)}"
+        self._automatico = False
         _salvar_config(self._config_atual())
+        self._preparar_execucao()
+        threading.Thread(
+            target=self._rodar_planilha,
+            args=(planilha, pasta, competencia, self.sefaz_cpf_var.get().strip(), self.sefaz_senha_var.get()),
+            daemon=True,
+        ).start()
+
+    def _rodar_planilha(self, planilha: str, pasta: str, competencia: str, cpf: str, senha: str) -> None:
+        saida = _LogParaWidget(self)
+        erro_msg = None
+        try:
+            with contextlib.redirect_stdout(saida):
+                resumo = core.processar_planilha(Path(planilha), Path(pasta), competencia,
+                                                 deve_parar=self._evento_parar.is_set, log=print, cpf=cpf, senha=senha)
+            self.after(0, self._log, "\n✅ Terminado.")
+            try:
+                os.startfile(str(resumo.parent))  # abre a pasta com o resumo
+            except Exception:
+                pass
+        except core.ErroAttended as exc:
+            erro_msg = str(exc)
+            self.after(0, self._log, f"\n❌ {exc}")
+        except Exception as exc:
+            erro_msg = str(exc)
+            self.after(0, self._log, f"\n❌ ERRO INESPERADO: {exc}")
+        finally:
+            self.after(0, self._finalizar, erro_msg)
+
+    def _preparar_execucao(self) -> None:
         self._rodando = True
         self._evento_parar.clear()
         self.btn_iniciar.configure(state="disabled", text="Processando...")
@@ -405,6 +502,10 @@ class App(tk.Tk):
         self.txt_log.configure(state="normal")
         self.txt_log.delete("1.0", "end")
         self.txt_log.configure(state="disabled")
+
+    def _comecar(self, usuario: str, senha: str, pasta: str) -> None:
+        _salvar_config(self._config_atual())
+        self._preparar_execucao()
         threading.Thread(target=self._rodar, args=(usuario, senha, pasta), daemon=True).start()
 
     def _parar(self) -> None:
@@ -470,6 +571,10 @@ class App(tk.Tk):
         self.focus_force()
         if erro_msg:
             messagebox.showerror("Concluído com erro", f"O processamento parou:\n\n{erro_msg}")
+        elif self.modo_var.get() == "planilha":
+            messagebox.showinfo("Parado" if parado else "Concluído",
+                                ("Processamento interrompido a pedido." if parado else "Processamento concluído!")
+                                + " Veja o RESUMO_MMAAAA.xlsx na pasta RPA NF GO.")
         elif parado:
             messagebox.showinfo("Parado", "Processamento interrompido a pedido. O que faltou fica para reprocessar no Hub.")
         else:
