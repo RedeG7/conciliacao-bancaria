@@ -7,3 +7,5 @@ openpyxl>=3.1,<4
 cryptography>=42,<44
 fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
+# clique na imagem da tela do robô (confirmação humana da Cloudflare no RPA NF GO)
+streamlit-image-coordinates>=0.4,<1
