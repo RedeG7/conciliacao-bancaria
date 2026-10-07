@@ -36,3 +36,17 @@ mostra "Programa aberto no PC" quando ele está aguardando.
 
 "Parar" (no programa) ou "Cancelar processamento" (no Hub) param antes da
 próxima consulta; o que faltou aparece como erro com "Reprocessar" no Hub.
+
+Quando dá erro
+--------------
+O print da tela no momento do erro vai para a grade do Hub ("Tela do erro")
+e fica também em <pasta>\RPA NF GO\_ERROS\<MMAAAA>\. Se o erro veio depois
+do Pesquisar, a quantidade da SEFAZ e o print da consulta também aparecem.
+
+Gravar passo a passo (para ajustes)
+-----------------------------------
+O botão "Gravar passo a passo" guarda, a cada clique do mouse, um print da
+tela com uma marca onde você clicou e o nome do botão para o Windows
+(o teclado NÃO é gravado). Faça o caminho no Edge do jeito de sempre e clique
+em "Parar gravação": a pasta "RPA NF GO - gravacao ..." abre na Área de
+Trabalho (com passos.txt, os prints e um .zip). Envie para o suporte.

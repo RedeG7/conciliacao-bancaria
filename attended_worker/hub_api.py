@@ -135,10 +135,21 @@ def concluir_empresa(
     _tratar_resposta(r)
 
 
-def erro_empresa(token: str, empresa_id: int, erro: str) -> None:
+def erro_empresa(
+    token: str, empresa_id: int, erro: str, screenshot_png: Optional[bytes] = None,
+    evidencia_png: Optional[bytes] = None, qtd_notas_portal: Optional[int] = None,
+) -> None:
+    """screenshot/evidência/quantidade: opcionais (programa do RPA NF GO)."""
+    corpo = {"erro": erro}
+    if screenshot_png:
+        corpo["screenshot_base64"] = base64.b64encode(screenshot_png).decode()
+    if evidencia_png:
+        corpo["evidencia_base64"] = base64.b64encode(evidencia_png).decode()
+    if qtd_notas_portal is not None:
+        corpo["qtd_notas_portal"] = qtd_notas_portal
     r = _sessao.post(
         f"{BASE_URL}/empresas/{empresa_id}/erro", headers=_cabecalho(token),
-        json={"erro": erro}, timeout=TIMEOUT_PADRAO_S,
+        json=corpo, timeout=TIMEOUT_UPLOAD_S if screenshot_png or evidencia_png else TIMEOUT_PADRAO_S,
     )
     _tratar_resposta(r)
 

@@ -27,6 +27,8 @@ Remove-Item -Force (Join-Path $PSScriptRoot "dist\nfgo_attended.exe") -ErrorActi
     --hidden-import rpa.sefazgo_nfe.arquivos `
     --add-data "$versaoPath;." `
     --hidden-import truststore `
+    --hidden-import PIL.ImageGrab `
+    --hidden-import PIL.ImageDraw `
     --collect-all pywinauto `
     "$PSScriptRoot\gui_nfgo.py"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
