@@ -865,11 +865,13 @@ def _linhas_historico(win) -> list[dict]:
     linhas pela posição na tela: o texto do arquivo
     (IE_ddmmaaaa_ddmmaaaa_N.zip) e, na mesma altura, a situação e o botão."""
     textos = []
-    for el in _descendentes(win, "Text"):
-        try:
-            textos.append((_texto(el), el.rectangle()))
-        except Exception:
-            continue
+    # "Em processamento..." vem numa barra verde (pode ser ProgressBar/Custom)
+    for tipo in ("Text", "ProgressBar", "Custom"):
+        for el in _descendentes(win, tipo):
+            try:
+                textos.append((_texto(el), el.rectangle()))
+            except Exception:
+                continue
     botoes = []
     for tipo in ("Button", "Hyperlink"):
         for el in _descendentes(win, tipo):
@@ -885,7 +887,9 @@ def _linhas_historico(win) -> list[dict]:
             continue
         meio = (r.top + r.bottom) / 2
         mesma_linha = [t for t, rt in textos if abs((rt.top + rt.bottom) / 2 - meio) <= 12]
-        situacao = next((t for t in mesma_linha if re.match(r"(?i)(aguardando|conclu|erro|process|falh|cancel)", t)), "")
+        # Aguardando... -> Em processamento... -> Concluído (ou erro)
+        situacao = next((t for t in mesma_linha
+                         if re.search(r"(?i)\b(aguardando|em processamento|processando|conclu|erro|falh|cancel)", t)), "")
         quando = None
         for t in mesma_linha:
             md = re.match(r"(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?", t)
@@ -968,9 +972,9 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
             if nossa["situacao"] != situacao_anterior:
                 log(f"  Histórico: {nossa['arquivo']} — {nossa['situacao'] or '?'}")
                 situacao_anterior = nossa["situacao"]
-            if nossa["situacao"].lower().startswith(("erro", "falh", "cancel")):
+            if re.search(r"(?i)\b(erro|falh|cancel)", nossa["situacao"]):
                 raise ErroAttended(f"[download] o portal marcou o pedido {nossa['arquivo']} como '{nossa['situacao']}'")
-            if nossa["situacao"].lower().startswith("conclu") and nossa["botao"] is not None:
+            if re.search(r"(?i)\bconclu", nossa["situacao"]) and nossa["botao"] is not None:
                 alvo = nossa
                 _acionar(nossa["botao"])
                 log(f"  Pacote pronto — baixando {nossa['arquivo']}...")
