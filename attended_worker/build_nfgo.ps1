@@ -18,7 +18,7 @@ $iconePath = Join-Path $PSScriptRoot "icon.ico"
 Remove-Item -Force (Join-Path $PSScriptRoot "dist\nfgo_attended.exe") -ErrorAction SilentlyContinue
 
 & $Python -m PyInstaller `
-    --onefile --name nfgo_attended `
+    --onefile --windowed --name nfgo_attended `
     --icon "$iconePath" `
     --distpath "$PSScriptRoot\dist" `
     --workpath "$PSScriptRoot\build_nfgo" `

@@ -58,6 +58,10 @@ def _versao_maior(a: str, b: str) -> bool:
 
 VERSAO_ATUAL = _ler_versao_local()
 
+# comandos auxiliares (PowerShell do seletor de pasta/atalho) sem abrir
+# janela de prompt - o .exe é "janela" (sem console), ver build_nfgo.ps1
+_SEM_JANELA = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def _selecionar_pasta_nativa(inicial: str) -> str:
     """Abre o seletor de pasta MODERNO do Windows (estilo Explorer),
@@ -83,7 +87,7 @@ def _selecionar_pasta_nativa(inicial: str) -> str:
     try:
         resultado = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, text=True, timeout=180, creationflags=_SEM_JANELA,
         )
     except Exception:
         return ""
@@ -119,7 +123,7 @@ def _atualizar_atalho_desktop(exe_path: Path, forcar: bool) -> None:
         )
         subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True, timeout=15,
+            capture_output=True, timeout=15, creationflags=_SEM_JANELA,
         )
     except Exception:
         pass  # atalho é conveniência - nunca trava o uso normal por causa disso
@@ -687,7 +691,14 @@ def _esconder_console() -> None:
 
 
 def main() -> None:
-    _esconder_console()
+    # .exe montado com --windowed: não abre prompt nenhum. Sem console,
+    # stdout/stderr vêm None - aponta pra nulo pra print/log de biblioteca
+    # nunca quebrar fora do Andamento
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    _esconder_console()  # cobre quem rodar uma versão antiga, montada com console
     App().mainloop()
 
 

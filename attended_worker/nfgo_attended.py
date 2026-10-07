@@ -106,7 +106,8 @@ _TITULO_JANELA = r".*(Secretaria de Estado|Economia|Nota Fiscal Eletr|SEFAZ|Port
 def abrir_portal() -> None:
     """Abre o Edge com acessibilidade ligada (sem isso o conteúdo da página
     não aparece pra UI Automation) direto no Acesso Restrito."""
-    subprocess.Popen(["cmd", "/c", "start", "msedge", "--force-renderer-accessibility", URL_ACESSO_RESTRITO])
+    subprocess.Popen(["cmd", "/c", "start", "msedge", "--force-renderer-accessibility", URL_ACESSO_RESTRITO],
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
 def _janela_portal():
