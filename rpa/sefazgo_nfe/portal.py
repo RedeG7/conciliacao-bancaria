@@ -396,23 +396,15 @@ def _formulario_consulta_visivel(page: Page, timeout: int = TIMEOUT_CURTO_MS) ->
 
 
 # Verificação da Cloudflare do formulário "Consulta de Notas Recebidas":
-#  1. espera TEMPO_AUTOMATICO_S para ela passar sozinha (no Chrome do
-#     escritório passa: "Sucesso!");
-#  2. se pedir "Verify you are human", publica a imagem da tela no Hub e
-#     espera uma PESSOA clicar nela (até TEMPO_VERIFICACAO_S); cada clique
-#     feito no Hub é repassado ao mesmo ponto da tela, uma vez. O robô
-#     nunca clica na verificação por conta própria.
-TEMPO_AUTOMATICO_S = 15
-TEMPO_VERIFICACAO_S = int(os.environ.get("RPA_TEMPO_VERIFICACAO_HUMANA", "300") or "300")
+# o robô só espera ela passar sozinha (no Chrome do escritório passa:
+# "Sucesso!"). Não clica nem contorna a verificação. Testado no servidor:
+# nem com o clique de uma pessoa repassado pela tela do Hub ela libera -
+# a execução que precisa dela roda pelo programa no PC do escritório.
+TEMPO_VERIFICACAO_S = int(os.environ.get("RPA_TEMPO_VERIFICACAO_HUMANA", "30") or "30")
 _SELETOR_VERIFICACAO = ".cf-turnstile, iframe[src*='challenges.cloudflare.com'], [name='cf-turnstile-response']"
 
-# linha da fila (rpa_empresas.id) em processamento - definida por
-# processar.py; é por ela que o Hub mostra a imagem e devolve o clique
+# linha da fila em processamento - usada para o botão "Cancelar processamento"
 _EMPRESA_ATUAL: dict = {"id": None, "execucao_id": None}
-
-
-def _duracao(ms: int) -> str:
-    return f"{ms // 60_000} min" if ms >= 60_000 else f"{ms // 1_000}s"
 
 
 def definir_empresa_atual(empresa_id, execucao_id=None) -> None:
@@ -422,8 +414,8 @@ def definir_empresa_atual(empresa_id, execucao_id=None) -> None:
 
 def _checar_cancelamento() -> None:
     """Botão "Cancelar processamento" da tela: nas esperas longas
-    (confirmação da Cloudflare, download) o robô para em segundos em vez de
-    esperar o tempo todo."""
+    (verificação, download) o robô para em segundos em vez de esperar o
+    tempo todo."""
     execucao_id = _EMPRESA_ATUAL.get("execucao_id")
     if not execucao_id:
         return
@@ -447,17 +439,6 @@ def _verificacao_passou(page: Page) -> bool:
     return False
 
 
-def _mostrar_verificacao(page: Page) -> None:
-    for escopo in _escopos(page):
-        try:
-            alvo = escopo.locator(".cf-turnstile, iframe[src*='challenges.cloudflare.com']")
-            if alvo.count():
-                alvo.first.scroll_into_view_if_needed(timeout=2_000)
-                return
-        except Exception:
-            continue
-
-
 def _aguardar_verificacao_cloudflare(page: Page, timeout_ms: int | None = None) -> None:
     tem_widget = False
     for escopo in _escopos(page):
@@ -469,45 +450,18 @@ def _aguardar_verificacao_cloudflare(page: Page, timeout_ms: int | None = None) 
             continue
     if not tem_widget and not any("challenges.cloudflare.com" in (f.url or "") for f in page.frames):
         return
-
-    for _ in range(TEMPO_AUTOMATICO_S):
+    limite_ms = timeout_ms if timeout_ms is not None else TEMPO_VERIFICACAO_S * 1_000
+    esperado = 0
+    while esperado <= limite_ms:
         if _verificacao_passou(page):
             return
+        _checar_cancelamento()
         page.wait_for_timeout(1_000)
-
-    empresa_id = _EMPRESA_ATUAL["id"]
-    limite_ms = timeout_ms if timeout_ms is not None else TEMPO_VERIFICACAO_S * 1_000
-    if empresa_id is None:
-        raise ErroPortal(
-            "[consulta] a verificação da Cloudflare do formulário ('Verify you are human') não passou sozinha "
-            "e não há tela do Hub para uma pessoa confirmar"
-        )
-
-    from rpa import core  # só o worker chega aqui (precisa do banco)
-    esperado = 0
-    try:
-        while esperado <= limite_ms:
-            if _verificacao_passou(page):
-                return
-            _checar_cancelamento()
-            _mostrar_verificacao(page)
-            try:
-                core.pedir_confirmacao_humana(empresa_id, page.screenshot())
-            except Exception:
-                pass
-            clique = core.consumir_clique(empresa_id)
-            if clique:
-                page.mouse.click(*clique)
-                page.wait_for_timeout(3_000)
-                continue
-            page.wait_for_timeout(2_000)
-            esperado += 2_000
-    finally:
-        core.encerrar_confirmacao_humana(empresa_id)
+        esperado += 1_000
     raise ErroPortal(
-        "[consulta] a verificação da Cloudflare ('Verify you are human') pediu confirmação humana e ninguém "
-        f"clicou na imagem do Hub em {_duracao(limite_ms)} — use 'Reprocessar' e clique no quadro "
-        "quando a imagem aparecer na execução"
+        "[consulta] a verificação da Cloudflare do formulário ('Verify you are human') não passou sozinha "
+        f"em {limite_ms // 1000}s no navegador do servidor — esta consulta precisa rodar pelo programa no "
+        "PC do escritório"
     )
 
 
