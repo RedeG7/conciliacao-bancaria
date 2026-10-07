@@ -394,6 +394,37 @@ def print_da_janela(win) -> bytes:
     return buffer.getvalue()
 
 
+def print_do_erro() -> "bytes | None":
+    """Print da tela no momento do erro (janela do Edge; sem ela, a tela
+    inteira) - vai pra grade do Hub ("Tela do erro") e pra pasta _ERROS.
+    Nunca levanta: um erro ao tirar o print não pode esconder o erro real."""
+    try:
+        win = _janela_portal()
+        if win is not None:
+            return print_da_janela(win)
+    except Exception:
+        pass
+    try:
+        from PIL import ImageGrab
+        buffer = io.BytesIO()
+        ImageGrab.grab(all_screens=True).save(buffer, format="PNG")
+        return buffer.getvalue()
+    except Exception:
+        return None
+
+
+def _guardar_print_erro(pasta_raiz: Path, empresa: dict, competencia: dict, png: "bytes | None") -> None:
+    if not png:
+        return
+    try:
+        pasta = pasta_raiz / arquivos.PASTA_RAIZ / "_ERROS" / arquivos.competencia_pasta(competencia["mm_aaaa"])
+        pasta.mkdir(parents=True, exist_ok=True)
+        nome = f"{empresa['codigo']}_{(empresa.get('obrigacao') or '').upper()}_{time.strftime('%Y%m%d_%H%M%S')}.png"
+        (pasta / nome).write_bytes(png)
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Download (fila do portal + pasta Downloads)
 # ---------------------------------------------------------------------------
@@ -500,7 +531,17 @@ def processar_consulta(empresa: dict, competencia: dict, pasta_raiz: Path, log) 
     print_png = print_da_janela(win)
     (pasta / arquivos.nome_evidencia(tipo, mm_aaaa)).write_bytes(print_png)
     qtd_portal = arquivos.extrair_quantidade(textos)
+    try:
+        return _baixar_e_salvar(win, pasta, tipo, mm_aaaa, textos, print_png, qtd_portal, log)
+    except Exception as exc:
+        try:
+            exc.parcial = {"evidencia_png": print_png, "qtd_notas_portal": qtd_portal}
+        except Exception:
+            pass
+        raise
 
+
+def _baixar_e_salvar(win, pasta: Path, tipo: str, mm_aaaa: str, textos: str, print_png: bytes, qtd_portal, log) -> dict:
     if arquivos.sem_resultado(textos) and not qtd_portal:
         return {"status": "CONCLUIDO", "movimento": "Sem movimento", "qtd_notas_portal": 0, "qtd_xml": 0,
                 "evidencia_png": print_png, "zip_path": None, "observacao": "", "erro": ""}
@@ -549,6 +590,98 @@ def _competencia(mm_aaaa: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Gravação do passo a passo (diagnóstico)
+# ---------------------------------------------------------------------------
+
+def _pasta_gravacao() -> Path:
+    desktop = Path.home() / "Desktop"
+    base = desktop if desktop.exists() else Path.home()
+    return base / f"RPA NF GO - gravacao {time.strftime('%Y-%m-%d %H-%M-%S')}"
+
+
+def gravar_passo_a_passo(deve_parar, log=print) -> Path:
+    """A pessoa faz o caminho no Edge do jeito dela e, a cada CLIQUE do
+    mouse, o programa guarda: print da tela com uma marca vermelha onde
+    clicou + o que o Windows diz que é aquele elemento (tipo, nome, id).
+    É isso que mostra como os botões aparecem pra automação no PC de
+    verdade - pra ajustar o programa sem adivinhar.
+
+    Não grava teclado (senha nunca entra na gravação). Ao parar, salva
+    também a árvore de elementos da janela do portal (arvore_janela.txt)
+    e compacta tudo num .zip ao lado da pasta."""
+    import ctypes
+    import zipfile
+    from PIL import ImageDraw, ImageGrab
+
+    pasta = _pasta_gravacao()
+    pasta.mkdir(parents=True, exist_ok=True)
+    user32 = ctypes.windll.user32
+
+    class _Ponto(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    def _titulo_frente() -> str:
+        hwnd = user32.GetForegroundWindow()
+        buf = ctypes.create_unicode_buffer(512)
+        user32.GetWindowTextW(hwnd, buf, 512)
+        return buf.value
+
+    log(f"🎥 Gravando. Faça o passo a passo no Edge normalmente; cada clique vira um print.\n   Pasta: {pasta}")
+    passos = (pasta / "passos.txt").open("w", encoding="utf-8")
+    passos.write("RPA NF GO - gravação do passo a passo\n\n")
+    n = 0
+    apertado_antes = False
+    try:
+        while not deve_parar():
+            apertado = bool(user32.GetAsyncKeyState(0x01) & 0x8000)  # botão esquerdo
+            if apertado and not apertado_antes:
+                pt = _Ponto()
+                user32.GetCursorPos(ctypes.byref(pt))
+                try:
+                    info = Desktop(backend="uia").from_point(pt.x, pt.y).element_info
+                    elemento = (f"tipo={info.control_type} | nome='{(info.name or '')[:150]}' | "
+                                f"id='{info.automation_id}' | classe='{info.class_name}'")
+                except Exception as exc:
+                    elemento = f"(não identificado: {exc})"
+                n += 1
+                titulo = _titulo_frente()
+                try:
+                    tela = ImageGrab.grab(all_screens=True)
+                    # all_screens: a origem da imagem é o canto do monitor mais à esquerda/acima
+                    x0 = min(0, user32.GetSystemMetrics(76))  # SM_XVIRTUALSCREEN
+                    y0 = min(0, user32.GetSystemMetrics(77))  # SM_YVIRTUALSCREEN
+                    x, y = pt.x - x0, pt.y - y0
+                    desenho = ImageDraw.Draw(tela)
+                    for r in (18, 19, 20, 21):
+                        desenho.ellipse((x - r, y - r, x + r, y + r), outline=(255, 0, 0))
+                    tela.save(pasta / f"passo_{n:03d}.png")
+                except Exception as exc:
+                    elemento += f" | (sem print: {exc})"
+                linha = f"passo {n:03d} {time.strftime('%H:%M:%S')} | janela='{titulo}' | clique em ({pt.x},{pt.y}) | {elemento}"
+                passos.write(linha + "\n")
+                passos.flush()
+                log(f"  📸 passo {n}: {elemento[:110]}")
+            apertado_antes = apertado
+            time.sleep(0.03)
+    finally:
+        passos.close()
+
+    try:
+        win = _janela_portal()
+        if win is not None:
+            win.print_control_identifiers(filename=str(pasta / "arvore_janela.txt"))
+    except Exception as exc:
+        (pasta / "arvore_janela.txt").write_text(f"não consegui ler a árvore: {exc}", encoding="utf-8")
+
+    arquivo_zip = pasta.with_suffix(".zip")
+    with zipfile.ZipFile(arquivo_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+        for arq in sorted(pasta.iterdir()):
+            zf.write(arq, arcname=arq.name)
+    log(f"⏹ Gravação parada — {n} clique(s). Arquivos em:\n   {pasta}\n   {arquivo_zip}")
+    return pasta
+
+
+# ---------------------------------------------------------------------------
 # Lote a partir do Hub
 # ---------------------------------------------------------------------------
 
@@ -587,11 +720,17 @@ def processar_execucao_hub(token: str, pasta_raiz: Path, deve_parar=None, log=pr
             hub_api.marcar_rodando(token, empresa["id"])
             try:
                 r = processar_consulta(empresa, competencia, pasta_raiz, log)
-            except ErroFatal:
-                raise
             except Exception as exc:
                 log(f"  ❌ {exc}")
-                hub_api.erro_empresa(token, empresa["id"], str(exc))
+                png = print_do_erro()
+                _guardar_print_erro(pasta_raiz, empresa, competencia, png)
+                parcial = getattr(exc, "parcial", None) or {}
+                hub_api.erro_empresa(
+                    token, empresa["id"], str(exc) or type(exc).__name__, screenshot_png=png,
+                    evidencia_png=parcial.get("evidencia_png"), qtd_notas_portal=parcial.get("qtd_notas_portal"),
+                )
+                if isinstance(exc, ErroFatal):
+                    raise
                 continue
             hub_api.concluir_consulta_nfgo(
                 token, empresa["id"], status=r["status"], movimento=r["movimento"], erro=r["erro"],

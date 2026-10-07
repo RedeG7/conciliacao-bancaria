@@ -204,13 +204,23 @@ def empresa_concluir(empresa_id: int, body: EmpresaConcluirBody, authorization: 
 
 class EmpresaErroBody(BaseModel):
     erro: str
+    # programa do RPA NF GO (opcionais): print da tela na hora do erro e o
+    # que já tinha sido lido antes dele, pra grade não ficar vazia
+    screenshot_base64: Optional[str] = None
+    evidencia_base64: Optional[str] = None
+    qtd_notas_portal: Optional[int] = None
 
 
 @app.post("/api/empresas/{empresa_id}/erro")
 def empresa_erro(empresa_id: int, body: EmpresaErroBody, authorization: Optional[str] = Header(None)):
     usuario = _usuario_autenticado(authorization)
     _empresa_pertence_ao_escritorio(empresa_id, usuario["escritorio_id"])
-    rpa_core.atualizar_empresa(empresa_id, status=rpa_core.STATUS_ERRO, erro=body.erro)
+    rpa_core.atualizar_empresa(
+        empresa_id, status=rpa_core.STATUS_ERRO, erro=body.erro,
+        screenshot_erro=base64.b64decode(body.screenshot_base64) if body.screenshot_base64 else None,
+        evidencia_png=base64.b64decode(body.evidencia_base64) if body.evidencia_base64 else None,
+        qtd_notas_portal=body.qtd_notas_portal,
+    )
     return {"ok": True}
 
 

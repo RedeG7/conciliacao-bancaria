@@ -226,6 +226,8 @@ class App(tk.Tk):
         self.btn_iniciar.pack(side="left", padx=4)
         self.btn_parar = ttk.Button(f_acoes, text="⏹  Parar", command=self._parar, state="disabled")
         self.btn_parar.pack(side="left", padx=4)
+        self.btn_gravar = ttk.Button(f_acoes, text="🎥  Gravar passo a passo", command=self._gravar)
+        self.btn_gravar.pack(side="left", padx=4)
 
         f_auto = ttk.Frame(self)
         f_auto.pack(fill="x", padx=10)
@@ -269,6 +271,54 @@ class App(tk.Tk):
             "aguardar_hub": bool(self.aguardar_var.get()),
         }
 
+    def _gravar(self) -> None:
+        """Liga/desliga a gravação do passo a passo (ver
+        nfgo_attended.gravar_passo_a_passo). Não roda junto com o
+        processamento - os cliques do programa entrariam na gravação."""
+        if getattr(self, "_evento_gravar", None) is not None:
+            self._evento_gravar.set()
+            self.btn_gravar.configure(state="disabled", text="Salvando gravação...")
+            return
+        if self._rodando:
+            messagebox.showinfo("Gravação", "Pare o processamento antes de gravar o passo a passo.")
+            return
+        if not messagebox.askokcancel(
+            "Gravar passo a passo",
+            "A cada clique do mouse o programa vai guardar um print da tela (com uma marca onde você\n"
+            "clicou) e o nome do botão clicado. O teclado NÃO é gravado.\n\n"
+            "Faça o caminho no Edge do jeito de sempre (login, Acesso Restrito, Baixar XML NFE,\n"
+            "preencher, Pesquisar, Baixar...) e depois clique em 'Parar gravação'.\n\n"
+            "Os arquivos ficam numa pasta na Área de Trabalho - mande os prints e o passos.txt\n"
+            "para ajustarmos o programa.",
+        ):
+            return
+        self._evento_gravar = threading.Event()
+        self.btn_iniciar.configure(state="disabled")
+        self.btn_gravar.configure(text="⏺  Parar gravação")
+        saida = _LogParaWidget(self)
+
+        def _rodar_gravacao() -> None:
+            pasta = None
+            try:
+                with contextlib.redirect_stdout(saida):
+                    pasta = core.gravar_passo_a_passo(self._evento_gravar.is_set, log=print)
+            except Exception as exc:
+                self.after(0, self._log, f"❌ Gravação: {exc}")
+            finally:
+                self.after(0, self._fim_gravacao, pasta)
+
+        threading.Thread(target=_rodar_gravacao, daemon=True).start()
+
+    def _fim_gravacao(self, pasta) -> None:
+        self._evento_gravar = None
+        self.btn_iniciar.configure(state="normal")
+        self.btn_gravar.configure(state="normal", text="🎥  Gravar passo a passo")
+        if pasta:
+            try:
+                os.startfile(str(pasta))  # abre a pasta no Explorer
+            except Exception:
+                pass
+
     def _salvar_aguardar(self) -> None:
         self._config.update(self._config_atual())
         _salvar_config(self._config)
@@ -289,6 +339,7 @@ class App(tk.Tk):
         usuario = self.hub_usuario_var.get().strip()
         if (
             self._rodando or self._vigiando or not self.aguardar_var.get()
+            or getattr(self, "_evento_gravar", None) is not None
             or not self._hub_token or self._config.get("hub_usuario") != usuario
             or not self.pasta_var.get().strip()
         ):
