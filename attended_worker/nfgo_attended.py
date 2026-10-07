@@ -1010,7 +1010,7 @@ def _linhas_historico(win) -> list[dict]:
         linhas.append({
             "arquivo": nome, "ie": m.group(1), "inicio": m.group(2), "fim": m.group(3),
             "situacao": situacao, "topo": r.top, "solicitado_em": quando,
-            "botao": botao[0] if botao[1] <= 25 else None,
+            "botao": botao[0] if botao[1] <= 30 else None,
         })
     linhas.sort(key=lambda l: l["topo"])
     return linhas
@@ -1095,9 +1095,22 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
             continue
         # a mais nova (em cima) com esta IE e período, pedida agora (não uma
         # linha antiga do mesmo período) e que ainda não baixamos
-        desta = [l for l in linhas if l["arquivo"].lower().startswith(prefixo)]
-        nossa = next((l for l in desta if l["arquivo"] not in _JA_BAIXADOS
-                      and (l["solicitado_em"] is None or l["solicitado_em"] >= referencia - TOLERANCIA_RELOGIO_S)), None)
+        # o ÚLTIMO pedido (maior Data de Solicitação) feito nesta rodada e
+        # ainda não baixado - de preferência com a IE/período desta consulta
+        def _recente(l):
+            return l["arquivo"] not in _JA_BAIXADOS and (
+                l["solicitado_em"] is None or l["solicitado_em"] >= referencia - TOLERANCIA_RELOGIO_S)
+        por_data = sorted(linhas, key=lambda l: (l["solicitado_em"] or 0, -l["topo"]), reverse=True)
+        desta = [l for l in por_data if l["arquivo"].lower().startswith(prefixo)]
+        nossa = next((l for l in desta if _recente(l)), None)
+        if nossa is None:
+            outra = next((l for l in por_data if _recente(l)), None)
+            if outra is not None and outra["solicitado_em"] is not None:
+                if estado_anterior != "outra:" + outra["arquivo"]:
+                    log(f"  ⚠️  O pedido mais recente no histórico é {outra['arquivo']} (esperava {prefixo}*.zip) "
+                        "— baixando o último solicitado.")
+                    estado_anterior = "outra:" + outra["arquivo"]
+                nossa = outra
         if linhas and nossa is None:
             estado = f"{len(linhas)}|{len(desta)}|{desta[0]['arquivo'] if desta else ''}"
             if estado != estado_anterior:
@@ -1116,11 +1129,17 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
                 situacao_anterior = nossa["situacao"]
             if re.search(r"(?i)\b(erro|falh|cancel)", nossa["situacao"]):
                 raise ErroAttended(f"[download] o portal marcou o pedido {nossa['arquivo']} como '{nossa['situacao']}'")
-            if re.search(r"(?i)\bconclu", nossa["situacao"]) and nossa["botao"] is not None:
-                alvo = nossa
-                _acionar(nossa["botao"])
-                log(f"  Pacote pronto — baixando {nossa['arquivo']}...")
-                break
+            if re.search(r"(?i)\bconclu", nossa["situacao"]):
+                if nossa["botao"] is None:
+                    if estado_anterior != "sem_botao:" + nossa["arquivo"]:
+                        log(f"  ⚠️  {nossa['arquivo']} está Concluído, mas não achei o 'Baixar XML' da linha — tentando de novo...")
+                        estado_anterior = "sem_botao:" + nossa["arquivo"]
+                else:
+                    alvo = nossa
+                    _acionar(nossa["botao"])
+                    log(f"  Pacote pronto — baixando {nossa['arquivo']} (pedido de "
+                        f"{time.strftime('%d/%m %H:%M:%S', time.localtime(nossa['solicitado_em'])) if nossa['solicitado_em'] else '?'})...")
+                    break
         if time.time() - ultimo_refresh >= INTERVALO_ATUALIZAR_HISTORICO_S:
             try:
                 w.type_keys("{F5}")  # a lista não atualiza sozinha (gravação: o escritório recarregava)
