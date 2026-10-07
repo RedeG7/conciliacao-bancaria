@@ -309,6 +309,60 @@ def _escolher_no_calendario(win, edit, data: str, log) -> None:
     log(f"  (data {data} escolhida no calendário)")
 
 
+def _colar(texto: str, win) -> bool:
+    """Põe o texto na área de transferência, cola (Ctrl+V) e devolve o que
+    a pessoa tinha copiado antes. False se não deu (aí digita)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+        k32.GlobalAlloc.restype = wintypes.HGLOBAL
+        k32.GlobalLock.restype = ctypes.c_void_p
+        u32.GetClipboardData.restype = wintypes.HANDLE
+        CF_UNICODETEXT = 13
+
+        def _ler() -> "str | None":
+            if not u32.OpenClipboard(None):
+                return None
+            try:
+                h = u32.GetClipboardData(CF_UNICODETEXT)
+                if not h:
+                    return None
+                ptr = k32.GlobalLock(h)
+                try:
+                    return ctypes.wstring_at(ptr)
+                finally:
+                    k32.GlobalUnlock(h)
+            finally:
+                u32.CloseClipboard()
+
+        def _gravar(t: str) -> bool:
+            dados = ctypes.create_unicode_buffer(t)
+            tamanho = ctypes.sizeof(dados)
+            h = k32.GlobalAlloc(0x0002, tamanho)  # GMEM_MOVEABLE
+            ptr = k32.GlobalLock(h)
+            ctypes.memmove(ptr, dados, tamanho)
+            k32.GlobalUnlock(h)
+            if not u32.OpenClipboard(None):
+                return False
+            try:
+                u32.EmptyClipboard()
+                return bool(u32.SetClipboardData(CF_UNICODETEXT, h))
+            finally:
+                u32.CloseClipboard()
+
+        anterior = _ler()
+        if not _gravar(texto):
+            return False
+        win.type_keys("^v", set_foreground=False)
+        time.sleep(0.3)
+        if anterior is not None:
+            _gravar(anterior)
+        return True
+    except Exception:
+        return False
+
+
 def _datas_pela_pagina(win, data_inicial: str, data_final: str, log) -> None:
     """Campos do Período são SOMENTE LEITURA com calendário (jQuery
     datepicker): não aceitam digitação - no robô do servidor só pegaram
@@ -330,7 +384,13 @@ def _datas_pela_pagina(win, data_inicial: str, data_final: str, log) -> None:
         win.set_focus()
         win.type_keys("^l", set_foreground=False)  # barra de endereço
         time.sleep(0.4)
-        win.type_keys(_literal(codigo), with_spaces=True, pause=0.005, set_foreground=False)
+        # "javascript:" digitado (o Edge tira esse prefixo só do que é COLADO)
+        # e o resto colado - instantâneo, em vez de ~600 teclas
+        win.type_keys("javascript:", pause=0.01, set_foreground=False)
+        if _colar(codigo[len("javascript:"):], win):
+            pass
+        else:
+            win.type_keys(_literal(codigo[len("javascript:"):]), with_spaces=True, pause=0.002, set_foreground=False)
         win.type_keys("{DELETE}{ENTER}", set_foreground=False)  # {DELETE}: tira o autocompletar
         time.sleep(1.2)
         log(f"  (datas {data_inicial} a {data_final} colocadas direto na página)")
@@ -641,6 +701,26 @@ def _autenticar(win, log) -> None:
     time.sleep(3)
 
 
+_ULTIMO_VOLTAR = {"quando": 0.0}
+
+
+def _voltar_se_sem_permissao(win, textos: str, log) -> bool:
+    """Mensagem de Atenção / "Você não tem permissão para acessar esta
+    página" com opção Voltar: clica em Voltar (volta pra tela anterior)."""
+    t = textos.lower()
+    if not ("não tem permissão" in t or "nao tem permissao" in t or "atenção" in t or "atencao" in t):
+        return False
+    if time.time() - _ULTIMO_VOLTAR["quando"] < 20:  # nunca fica indo e voltando
+        return False
+    voltar = _achar(win, ["Voltar"], tipos=("Button", "Hyperlink", "Text"), exato=True)
+    if voltar is None:
+        return False
+    _ULTIMO_VOLTAR["quando"] = time.time()
+    _acionar(voltar)
+    log("  → a página mostrou Atenção/sem permissão — cliquei em Voltar")
+    return True
+
+
 def preparar_portal(log=print, deve_parar=None, timeout: float = TIMEOUT_CHEGAR_FORMULARIO_S):
     """Garante o Edge na tela "Consulta de Notas Recebidas".
 
@@ -680,6 +760,9 @@ def preparar_portal(log=print, deve_parar=None, timeout: float = TIMEOUT_CHEGAR_
                 if not avisou_verificacao:
                     log("  ⚠️  A Cloudflare pediu confirmação: clique em 'Verify you are human' no Edge.")
                     avisou_verificacao = True
+                time.sleep(2)
+                continue
+            if _voltar_se_sem_permissao(win, textos, log):
                 time.sleep(2)
                 continue
             for textos_botao, rotulo in _PASSOS_ATE_FORMULARIO:
@@ -736,7 +819,9 @@ def pesquisar(win, data_inicial: str, data_final: str, ie: str, tipo: str, log):
 
     # datas: campos somente leitura com calendário -> primeiro direto na
     # página; digitação/calendário só se ainda não pegou
-    _datas_pela_pagina(win, data_inicial, data_final, log)
+    if any(re.sub(r"\D", "", _valor(c)) != re.sub(r"\D", "", d)
+           for c, d in ((periodo[0], data_inicial), (periodo[1], data_final))):
+        _datas_pela_pagina(win, data_inicial, data_final, log)
     win = conectar_janela()
     periodo = _edits_abaixo_do_rotulo(win, r"^\s*Per[ií]odo") or periodo
     for campo, data in ((periodo[0], data_inicial), (periodo[1], data_final)):
@@ -925,7 +1010,12 @@ def _aceitar_prompt_download(pasta_downloads: Path, log) -> None:
     botoes = []
     try:
         pid_edge = portal.element_info.process_id
+        principal = portal.handle
         for janela in Desktop(backend="uia").windows(process=pid_edge):
+            # a janela principal tem a página inteira (milhares de elementos -
+            # era isso que demorava); o balão de download é uma janela à parte
+            if janela.handle == principal:
+                continue
             try:
                 botoes += janela.descendants(control_type="Button")
             except Exception:
@@ -1080,6 +1170,9 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
         _checar_parada()
         w = conectar_janela()
         linhas = _linhas_historico(w)
+        if not linhas and _voltar_se_sem_permissao(w, _todos_os_textos(w), log):
+            time.sleep(2)
+            continue
         na_tela_historico = "histórico de downloads" in _todos_os_textos(w).lower()
         if not linhas and na_tela_historico:
             # está no histórico mas não leu as linhas (ainda carregando?) -
@@ -1166,7 +1259,7 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
                 pass
             return arquivo
         _aceitar_prompt_download(pastas_download[0], log)
-        time.sleep(2)
+        time.sleep(0.7)
     raise ErroAttended(f"[download] cliquei em Baixar XML de {alvo['arquivo']}, mas o arquivo não chegou em "
                        f"{', '.join(str(p) for p in pastas_download)} — confira a pasta de downloads do Edge")
 
