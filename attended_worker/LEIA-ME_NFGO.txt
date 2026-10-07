@@ -50,3 +50,15 @@ tela com uma marca onde você clicou e o nome do botão para o Windows
 (o teclado NÃO é gravado). Faça o caminho no Edge do jeito de sempre e clique
 em "Parar gravação": a pasta "RPA NF GO - gravacao ..." abre na Área de
 Trabalho (com passos.txt, os prints e um .zip). Envie para o suporte.
+
+Nova autenticação e certificado (v1.6)
+--------------------------------------
+Cadastre no Hub (RPA NF GO > Credenciais) o CPF e a senha do Acesso Restrito.
+Quando o portal mostrar "Este módulo requer nova autenticação", o programa
+preenche e clica em Autenticar sozinho (uma tentativa só, para não bloquear
+o acesso se a senha estiver errada). A janela de seleção de certificado do
+Edge é confirmada com o certificado que o Edge já deixa marcado.
+
+Datas: sempre do 1º ao último dia da competência (28, 29, 30 ou 31,
+conforme o mês). Se o campo não aceitar digitação, o programa escolhe a data
+pelo calendário do próprio campo.

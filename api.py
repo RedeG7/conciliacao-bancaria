@@ -258,6 +258,19 @@ def execucao_situacao(execucao_id: int, authorization: Optional[str] = Header(No
     return {"status": execucao["status"], "cancelar_solicitado": bool(execucao.get("cancelar_solicitado"))}
 
 
+@app.get("/api/credencial-nfgo")
+def credencial_nfgo(authorization: Optional[str] = Header(None)):
+    """CPF + senha do Acesso Restrito da SEFAZ-GO cadastrados na tela do RPA
+    NF GO - o programa do PC usa na tela "Este módulo requer nova
+    autenticação". Só do escritório do próprio usuário logado; o programa
+    guarda só em memória enquanto roda (nunca em disco)."""
+    usuario = _usuario_autenticado(authorization)
+    cred = rpa_core.obter_credencial(usuario["escritorio_id"], "sefazgo_portal")
+    if not cred:
+        return {"cpf": "", "senha": ""}
+    return {"cpf": cred["cnpj"], "senha": cred["senha"]}
+
+
 class ExecucaoInterromperBody(BaseModel):
     motivo: str = ""
 
