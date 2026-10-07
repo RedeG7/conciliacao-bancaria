@@ -43,6 +43,11 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 # escritório): cai no formulário de login sem passar pelo redirecionamento
 # de www.sefaz.go.gov.br/netaccess - que, no servidor, demorava a terminar
 LOGIN_URL = "https://portal.sefaz.go.gov.br/portalsefaz-apps"
+# entrada com o certificado digital do escritório (procurador): é aqui que o
+# portal pede o certificado (prints do escritório: "Selecione um
+# certificado para se autenticar no portal.sefaz.go.gov.br:443") e entra
+# no painel sem CPF/senha
+URL_ACESSO_RESTRITO = "https://www.sefaz.go.gov.br/netaccess/000System/acessoRestrito/"
 # formulário "Consulta de Notas Recebidas" - destino do "Baixar XML NFE"
 # (OpenUrl2 do menu do Acesso Restrito, visto no log da execução real)
 URL_CONSULTA = "https://nfeweb.sefaz.go.gov.br/nfeweb/sites/nfe/consulta-notas-recebidas"
@@ -687,10 +692,16 @@ def _relogar_se_pedir(page: Page) -> bool:
     return True
 
 
-def login(page: Page, cpf: str, senha: str) -> None:
+def login(page: Page, cpf: str, senha: str, com_certificado: bool = False) -> None:
+    """com_certificado: há certificado A1 do escritório (procurador)
+    cadastrado - entra por URL_ACESSO_RESTRITO, onde o portal pede o
+    certificado (o contexto do browser já o apresenta, sem a janela de
+    seleção) e cai direto no painel, sem CPF/senha. CPF/senha continuam
+    sendo usados quando o portal pedir (nova autenticação do Baixar XML
+    NFE). Sem certificado, entra pelo formulário de login (LOGIN_URL)."""
     _CREDENCIAIS.update(cpf=cpf, senha=senha)
     preparar_sessao(page)
-    page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
+    page.goto(URL_ACESSO_RESTRITO if com_certificado else LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
 
     # LOGIN_URL redireciona para portal.sefaz.go.gov.br/portalsefaz-apps/
     # auth/login-form (confirmado no portal real). Na execução real o robô
