@@ -263,17 +263,15 @@ Ativar (uma vez só):
    Public** (igual aos outros pacotes).
 2. No DNS do `redeg7.com`, crie um registro **A** `mkt` apontando pro
    mesmo IP do Hub.
-3. No `.env` do VPS (`/opt/conciliacao-bancaria/.env`), acrescente:
-
-   ```bash
-   COMPOSE_PROFILES=marketing
-   # opcional - formulário do site -> POST https://DOMINIO_MARKETING/api/webhooks/form
-   FORM_WEBHOOK_TOKEN=gere-com-openssl-rand-hex-32
-   ```
-
-   Sem `COMPOSE_PROFILES=marketing` o serviço não sobe (é de propósito: o
-   deploy do Hub não quebra enquanto o pacote ainda é privado).
-4. Suba: `cd /opt/conciliacao-bancaria && docker compose pull && docker compose up -d && docker compose restart caddy`
+3. Nada a fazer no `.env`: o próprio deploy acrescenta
+   `COMPOSE_PROFILES=marketing` no `.env` do VPS assim que a imagem do CRM
+   puder ser baixada (pacote público do passo 1). Enquanto o pacote for
+   privado, o deploy só avisa no log e segue com o Hub normal. Opcional - o
+   formulário do site (`POST https://mkt.redeg7.com/api/webhooks/form`)
+   precisa de `FORM_WEBHOOK_TOKEN=...` (gere com `openssl rand -hex 32`) no
+   `.env`, colocado à mão.
+4. Rode o workflow de novo (Actions → Build e Deploy → Re-run, ou o próximo
+   merge na `main`) - ou suba na mão: `cd /opt/conciliacao-bancaria && docker compose pull && docker compose up -d && docker compose restart caddy`
 5. Acesse `https://mkt.redeg7.com` e crie o administrador do CRM no
    primeiro acesso (depois, Configurações › Usuários para a equipe).
 
