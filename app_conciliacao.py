@@ -1370,9 +1370,15 @@ def _planilha_nfgo(execucao: dict, empresas_exec: list[dict]) -> bytes:
             maior = max([len(str(coluna))] + [len(str(l[i - 1])) for l in linhas if l[i - 1] is not None])
             ws.column_dimensions[get_column_letter(i)].width = min(max(10, maior + 2), 70)
 
+    # aba Resumo (a primeira/ativa) com os MESMOS cabeçalhos da planilha de
+    # envio (Código da Empresa, Razão Social, CNPJ, Inscrição Estadual): o
+    # arquivo exportado serve de planilha do mês seguinte - é só subir de
+    # novo no Hub (as colunas de resultado a mais são ignoradas na leitura)
     grade = _linhas_grade_nfgo(execucao, empresas_exec)
-    colunas = list(grade[0].keys()) if grade else ["Código"]
-    _aba(wb.active, colunas, [[(None if l[c] == "" else l[c]) for c in colunas] for l in grade])  # vazio = célula em branco
+    nomes_envio = {"Código": "Código da Empresa", "Empresa": "Razão Social", "IE": "Inscrição Estadual"}
+    colunas = list(grade[0].keys()) if grade else ["Código", "Empresa", "CNPJ", "IE"]
+    _aba(wb.active, [nomes_envio.get(c, c) for c in colunas],
+         [[(None if l[c] == "" else l[c]) for c in colunas] for l in grade])  # vazio = célula em branco
     wb.active.title = "Resumo"
 
     rotulo_status = {"PENDENTE": "Na fila", "RODANDO": "Processando", "CONCLUIDO": "Concluído", "ERRO": "Erro"}
@@ -1444,7 +1450,17 @@ def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
         st.caption(f"Planilha: {execucao['planilha_nome']} · Enviada por {execucao['criado_por']}{_pasta}")
         if concluidas and execucao.get("concluido_em"):
             _barra_retencao_arquivos(execucao["concluido_em"])
-        _cols_acoes = st.columns(3)
+        _col_excel, *_cols_acoes = st.columns(4)
+        _col_excel.download_button(
+            "📊 Exportar Excel",
+            _planilha_nfgo(execucao, empresas_exec),
+            file_name=f"RPA NF GO {nfgo_arquivos.competencia_pasta(execucao.get('competencia') or '')} "
+                      f"- execucao {execucao['id']}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"excel_nfgo_{execucao['id']}",
+            help="Aba Resumo com as mesmas colunas da planilha de envio (serve de planilha do mês seguinte) "
+                 "e aba Consultas com Entrada/Saída separadas.",
+        )
         _botao_cancelar_execucao(execucao, _cols_acoes[2], "cancelar_nfgo")
         if any(e.get("xml_zip") or e.get("evidencia_png") for e in empresas_exec):
             _cols_acoes[0].download_button(
@@ -1453,14 +1469,6 @@ def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
                 file_name=f"RPA NF GO {nfgo_arquivos.competencia_pasta(execucao.get('competencia') or '')}.zip",
                 key=f"zip_nfgo_{execucao['id']}",
             )
-        st.download_button(
-            "📊 Exportar Excel",
-            _planilha_nfgo(execucao, empresas_exec),
-            file_name=f"RPA NF GO {nfgo_arquivos.competencia_pasta(execucao.get('competencia') or '')} "
-                      f"- execucao {execucao['id']}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key=f"excel_nfgo_{execucao['id']}",
-        )
         if erros:
             if _cols_acoes[1].button(
                 f"🔁 Reprocessar {erros} consulta(s) com erro", key=f"reprocessar_nfgo_{execucao['id']}",
@@ -1473,6 +1481,12 @@ def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
                 )
                 st.rerun()
 
+        # sem o "Download as CSV" da barra da grade - o arquivo é o Excel acima
+        st.markdown(
+            "<style>button[aria-label='Download as CSV'], "
+            "[data-testid='stElementToolbarButton'] button[aria-label*='CSV']{display:none !important}</style>",
+            unsafe_allow_html=True,
+        )
         st.dataframe(_grade_nfgo_tela(execucao, empresas_exec), use_container_width=True, hide_index=True)
 
         st.markdown("**Arquivos por empresa**")
