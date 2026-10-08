@@ -16,3 +16,5 @@ attended_worker/*.spec
 issnet_attended_config.json
 attended_worker/build_nfgo/
 nfgo_attended_config.json
+marketing/node_modules/
+marketing/data/

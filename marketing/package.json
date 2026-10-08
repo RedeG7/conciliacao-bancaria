@@ -1,0 +1,21 @@
+{
+  "name": "real4u-marketing-comercial",
+  "version": "1.0.0",
+  "description": "Sistema integrado de marketing e comercial da Real 4U",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test/fluxo.test.js"
+  },
+  "dependencies": {
+    "express": "^4.22.3"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "private": true,
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "sql.js": "^1.11.0"
+  }
+}

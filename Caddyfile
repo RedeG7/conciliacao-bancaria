@@ -10,3 +10,10 @@
 		reverse_proxy app:8501
 	}
 }
+
+# Real 4U - Marketing & Comercial (servico "marketing" do docker-compose).
+# Default marketing.localhost: enquanto DOMINIO_MARKETING nao estiver no
+# .env, o bloco fica inerte em vez de quebrar o Caddy (e o Hub junto).
+{$DOMINIO_MARKETING:marketing.localhost} {
+	reverse_proxy marketing:3000
+}

@@ -75,6 +75,15 @@ jobs:
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
 
+      # CRM Real 4U - Marketing & Comercial (pasta marketing/, Node)
+      - uses: docker/build-push-action@v5
+        with:
+          context: marketing
+          push: true
+          tags: ghcr.io/redeg7/real4u-marketing:latest
+          cache-from: type=gha,scope=marketing
+          cache-to: type=gha,mode=max,scope=marketing
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest

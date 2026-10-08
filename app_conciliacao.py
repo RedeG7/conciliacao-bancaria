@@ -1948,6 +1948,17 @@ _APPS_HOME = [
         "descricao": "Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO, com quantidade de notas e print da consulta.",
         "tela": "rpa_nfgo",
     },
+    {
+        "id": "marketing",
+        "icone": "📣",
+        "titulo": "Marketing & Comercial",
+        "descricao": "CRM da Real 4U: campanhas, conteúdos, contatos, funil, propostas, vendas e indicadores. Abre em outra aba, com login próprio.",
+        "tela": None,
+        # app separado (pasta marketing/, servico "marketing" do
+        # docker-compose), no subdominio DOMINIO_MARKETING - o card so
+        # leva pra la. Sem a variavel, fica "Em breve".
+        "url": f"https://{os.environ['DOMINIO_MARKETING']}" if os.environ.get("DOMINIO_MARKETING") else None,
+    },
 ]
 
 
@@ -2045,13 +2056,15 @@ def _card_app(coluna, app: dict) -> None:
                 f"</div>",
                 unsafe_allow_html=True,
             )
-            if app["tela"]:
+            if app.get("url"):
+                st.link_button("Abrir ↗", app["url"], use_container_width=True, type="primary")
+            elif app["tela"]:
                 if st.button("Abrir", key=f"home_abrir_{app['tela']}",
                              use_container_width=True, type="primary"):
                     st.session_state["tela"] = app["tela"]
                     st.rerun()
             else:
-                st.button("Em breve", key="home_abrir_rpa_folha",
+                st.button("Em breve", key=f"home_em_breve_{app['id']}",
                           use_container_width=True, disabled=True)
 
 
