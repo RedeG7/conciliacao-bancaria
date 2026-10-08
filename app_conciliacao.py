@@ -1312,8 +1312,15 @@ def _linhas_grade_nfgo(execucao: dict, empresas_exec: list[dict]) -> list[dict]:
             "Data/Hora": max(atualizados).strftime("%d/%m/%Y %H:%M") if atualizados else "",
             "Observação": " | ".join(observacoes),
         })
-    # célula vazia em vez de "None" (consulta ainda não feita)
-    return [{k: ("" if v is None else v) for k, v in linha.items()} for linha in grade]
+    return grade
+
+
+def _grade_nfgo_tela(execucao: dict, empresas_exec: list[dict]) -> list[dict]:
+    """Grade pra tela: tudo como texto e célula vazia em vez de "None"
+    (consulta ainda não feita). Texto em todas as colunas evita misturar
+    número e texto na mesma coluna. O Excel usa a grade crua (números)."""
+    return [{k: ("" if v is None else str(v)) for k, v in linha.items()}
+            for linha in _linhas_grade_nfgo(execucao, empresas_exec)]
 
 
 def _montar_zip_nfgo(execucao: dict, empresas_exec: list[dict]) -> bytes:
@@ -1332,22 +1339,60 @@ def _montar_zip_nfgo(execucao: dict, empresas_exec: list[dict]) -> bytes:
             if e.get("evidencia_png"):
                 zf.writestr(f"{pasta}/{nfgo_arquivos.nome_evidencia(tipo, competencia)}", bytes(e["evidencia_png"]))
 
-        from openpyxl import Workbook
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "RPA NF GO"
-        grade = _linhas_grade_nfgo(execucao, empresas_exec)
-        colunas = list(grade[0].keys()) if grade else ["Código"]
-        ws.append(colunas)
-        for linha in grade:
-            ws.append([linha[c] for c in colunas])
-        planilha = io.BytesIO()
-        wb.save(planilha)
         zf.writestr(
             f"{nfgo_arquivos.PASTA_RAIZ}/Relatorio_RPA_NF_GO_{nfgo_arquivos.competencia_pasta(competencia)}.xlsx",
-            planilha.getvalue(),
+            _planilha_nfgo(execucao, empresas_exec),
         )
     return buffer.getvalue()
+
+
+def _planilha_nfgo(execucao: dict, empresas_exec: list[dict]) -> bytes:
+    """Excel da execução: aba "Resumo" (a mesma grade da tela, uma linha
+    por empresa) e aba "Consultas" (uma linha por Entrada/Saída, com erro e
+    data/hora). Cabeçalho destacado, filtro, painel congelado e larguras."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+
+    def _aba(ws, colunas: list, linhas: list[list]) -> None:
+        ws.append(colunas)
+        for linha in linhas:
+            ws.append(linha)
+        for celula in ws[1]:
+            celula.font = Font(bold=True, color="FFFFFF")
+            celula.fill = PatternFill("solid", fgColor="1F6F43")
+            celula.alignment = Alignment(vertical="center", wrap_text=True)
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+        for i, coluna in enumerate(colunas, start=1):
+            maior = max([len(str(coluna))] + [len(str(l[i - 1])) for l in linhas if l[i - 1] is not None])
+            ws.column_dimensions[get_column_letter(i)].width = min(max(10, maior + 2), 70)
+
+    grade = _linhas_grade_nfgo(execucao, empresas_exec)
+    colunas = list(grade[0].keys()) if grade else ["Código"]
+    _aba(wb.active, colunas, [[(None if l[c] == "" else l[c]) for c in colunas] for l in grade])  # vazio = célula em branco
+    wb.active.title = "Resumo"
+
+    rotulo_status = {"PENDENTE": "Na fila", "RODANDO": "Processando", "CONCLUIDO": "Concluído", "ERRO": "Erro"}
+    consultas = []
+    for e in sorted(empresas_exec, key=lambda x: (str(x["codigo"]), x.get("obrigacao") or "")):
+        consultas.append([
+            e["codigo"], e.get("razao_social") or "", e.get("cnpj_cpf") or "", e.get("inscricao_estadual") or "",
+            execucao.get("competencia") or "", "Saída" if (e.get("obrigacao") or "").upper() == "SAIDA" else "Entrada",
+            rotulo_status.get(e["status"], e["status"]), e.get("movimento") or None,
+            e.get("qtd_notas_portal"), e.get("qtd_xml"), e.get("xml_zip_nome") or None,
+            e.get("observacao") or None, e.get("erro") or None,
+            e["atualizado_em"].strftime("%d/%m/%Y %H:%M") if e.get("atualizado_em") else None,
+        ])
+    _aba(wb.create_sheet("Consultas"),
+         ["Código", "Empresa", "CNPJ", "IE", "Competência", "Tipo", "Status", "Movimento",
+          "Qtd SEFAZ", "XML no ZIP", "Arquivo", "Observação", "Erro", "Atualizado em"], consultas)
+
+    saida = io.BytesIO()
+    wb.save(saida)
+    return saida.getvalue()
 
 
 def _botao_cancelar_execucao(execucao: dict, coluna, prefixo: str) -> None:
@@ -1408,6 +1453,14 @@ def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
                 file_name=f"RPA NF GO {nfgo_arquivos.competencia_pasta(execucao.get('competencia') or '')}.zip",
                 key=f"zip_nfgo_{execucao['id']}",
             )
+        st.download_button(
+            "📊 Exportar Excel",
+            _planilha_nfgo(execucao, empresas_exec),
+            file_name=f"RPA NF GO {nfgo_arquivos.competencia_pasta(execucao.get('competencia') or '')} "
+                      f"- execucao {execucao['id']}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"excel_nfgo_{execucao['id']}",
+        )
         if erros:
             if _cols_acoes[1].button(
                 f"🔁 Reprocessar {erros} consulta(s) com erro", key=f"reprocessar_nfgo_{execucao['id']}",
@@ -1420,7 +1473,7 @@ def _expander_execucao_nfgo(execucao: dict, emoji_status: dict) -> None:
                 )
                 st.rerun()
 
-        st.dataframe(_linhas_grade_nfgo(execucao, empresas_exec), use_container_width=True, hide_index=True)
+        st.dataframe(_grade_nfgo_tela(execucao, empresas_exec), use_container_width=True, hide_index=True)
 
         st.markdown("**Arquivos por empresa**")
         for empresa, entrada, saida in _agrupar_nfgo(empresas_exec):
