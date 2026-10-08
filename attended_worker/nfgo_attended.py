@@ -392,7 +392,17 @@ def _datas_pela_pagina(win, data_inicial: str, data_final: str, log) -> None:
         else:
             win.type_keys(_literal(codigo[len("javascript:"):]), with_spaces=True, pause=0.002, set_foreground=False)
         win.type_keys("{DELETE}{ENTER}", set_foreground=False)  # {DELETE}: tira o autocompletar
-        time.sleep(1.2)
+        time.sleep(0.8)
+        # o Edge deixa o texto digitado na barra (ele não navega) até algo
+        # resetar: Esc devolve o endereço da página e o foco volta pra ela
+        win.type_keys("{ESC}{ESC}", set_foreground=False)
+        time.sleep(0.2)
+        titulo = _achar(win, ["Consulta de Notas Recebidas"], tipos=("Text",))
+        if titulo is not None:
+            try:
+                titulo.click_input()
+            except Exception:
+                pass
         log(f"  (datas {data_inicial} a {data_final} colocadas direto na página)")
     except Exception as exc:
         log(f"  ⚠️  não consegui colocar as datas pela página: {exc}")
@@ -710,6 +720,8 @@ def _voltar_se_sem_permissao(win, textos: str, log) -> bool:
     t = textos.lower()
     if not ("não tem permissão" in t or "nao tem permissao" in t or "atenção" in t or "atencao" in t):
         return False
+    if arquivos.sem_resultado(textos) or "consulta de notas" in t:
+        return False  # "Sem Resultados!" também vem com Atenção - é resultado, não erro
     if time.time() - _ULTIMO_VOLTAR["quando"] < 20:  # nunca fica indo e voltando
         return False
     voltar = _achar(win, ["Voltar"], tipos=("Button", "Hyperlink", "Text"), exato=True)
