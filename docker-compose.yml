@@ -30,7 +30,7 @@ services:
       - RPA_ENC_KEY=${RPA_ENC_KEY}
       # endereco do CRM de Marketing - o card dele na home do Hub abre
       # esse link (o CRM tem login proprio, nao embute no Hub)
-      - DOMINIO_MARKETING=${DOMINIO_MARKETING:-mkt.redeg7.com.br}
+      - DOMINIO_MARKETING=${DOMINIO_MARKETING:-mkt.redeg7.com}
     depends_on:
       db:
         condition: service_healthy
@@ -122,9 +122,9 @@ services:
       - "443:443"
     environment:
       - DOMINIO=${DOMINIO}
-      # subdominio do CRM de Marketing (padrao mkt.redeg7.com.br; pode
+      # subdominio do CRM de Marketing (padrao mkt.redeg7.com; pode
       # ser trocado no .env) - precisa do registro DNS A apontando pro VPS
-      - DOMINIO_MARKETING=${DOMINIO_MARKETING:-mkt.redeg7.com.br}
+      - DOMINIO_MARKETING=${DOMINIO_MARKETING:-mkt.redeg7.com}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

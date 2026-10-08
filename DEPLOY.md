@@ -251,7 +251,7 @@ cada push na `main`). Tem **login e banco próprios** (SQLite em
 usa o Postgres nem os usuários do Hub. Na home do Hub aparece o card
 "📣 Marketing & Comercial", que abre o CRM numa aba nova.
 
-Fica num **subdomínio próprio**: `mkt.redeg7.com.br` (padrão do
+Fica num **subdomínio próprio**: `mkt.redeg7.com` (padrão do
 `docker-compose.yml`; dá pra trocar com `DOMINIO_MARKETING` no `.env`): o
 CRM usa `/api` e `/r` na raiz, que colidiriam com as rotas do Hub num
 caminho do mesmo domínio.
@@ -261,7 +261,7 @@ Ativar (uma vez só):
 1. Faça o merge na `main` e espere o workflow terminar. No GitHub:
    **Packages → real4u-marketing → Package settings → Change visibility →
    Public** (igual aos outros pacotes).
-2. No DNS do `redeg7.com.br`, crie um registro **A** `mkt` apontando pro
+2. No DNS do `redeg7.com`, crie um registro **A** `mkt` apontando pro
    mesmo IP do Hub.
 3. No `.env` do VPS (`/opt/conciliacao-bancaria/.env`), acrescente:
 
@@ -274,7 +274,7 @@ Ativar (uma vez só):
    Sem `COMPOSE_PROFILES=marketing` o serviço não sobe (é de propósito: o
    deploy do Hub não quebra enquanto o pacote ainda é privado).
 4. Suba: `cd /opt/conciliacao-bancaria && docker compose pull && docker compose up -d && docker compose restart caddy`
-5. Acesse `https://mkt.redeg7.com.br` e crie o administrador do CRM no
+5. Acesse `https://mkt.redeg7.com` e crie o administrador do CRM no
    primeiro acesso (depois, Configurações › Usuários para a equipe).
 
 Se um escritório tiver "apps permitidos" restritos, libere o app

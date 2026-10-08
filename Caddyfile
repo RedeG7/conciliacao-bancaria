@@ -12,6 +12,6 @@
 }
 
 # Real 4U - Marketing & Comercial (servico "marketing" do docker-compose).
-{$DOMINIO_MARKETING:mkt.redeg7.com.br} {
+{$DOMINIO_MARKETING:mkt.redeg7.com} {
 	reverse_proxy marketing:3000
 }
