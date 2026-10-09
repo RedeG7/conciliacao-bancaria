@@ -6,6 +6,7 @@ const { auth, dataDb, resetDemo, tx } = require('./db');
 const L = require('./logic');
 const A = require('./analytics');
 const integrations = require('./integrations');
+const sso = require('./sso');
 
 const app = express();
 app.disable('x-powered-by');
@@ -81,13 +82,37 @@ app.post('/api/login', h((req, res) => {
   const u = email && auth.prepare('SELECT * FROM users WHERE email = ?').get(email);
   if (!u || !u.active || !checkPass(req.body.password || '', u.pass_hash)) { attempts.get(key).push(Date.now()); throw err(401, 'E-mail ou senha incorretos.'); }
   attempts.delete(key);
+  startSession(req, res, u, 'login');
+  res.json({ ok: true });
+}));
+function startSession(req, res, u, action) {
   const token = crypto.randomBytes(32).toString('hex');
   auth.prepare('INSERT INTO sessions (token_hash, user_id, mode, expires_at, created_at) VALUES (?,?,?,?,?)')
     .run(sha(token), u.id, 'real', new Date(Date.now() + SESSION_DAYS * 86400000).toISOString(), L.nowIso());
   auth.prepare('DELETE FROM sessions WHERE expires_at < ?').run(L.nowIso());
   setCookie(res, token, SESSION_DAYS * 86400);
-  req.user = u; req.db = dataDb('real'); audit(req, 'login', 'usuário', u.id);
-  res.json({ ok: true });
+  req.user = u; req.db = dataDb('real'); audit(req, action, 'usuário', u.id);
+}
+// Login único vindo do Hub (ver src/sso.js): usuário do Hub entra direto, sem senha.
+// No primeiro acesso cria o usuário aqui (admin do Hub vira Administrador, os demais
+// Comercial - o perfil pode ser trocado depois em Configurações › Usuários).
+function ssoErro(res, status, msg) {
+  const hub = process.env.HUB_URL || '/';
+  res.status(status).type('html').send(`<!doctype html><meta charset="utf-8"><title>Real 4U</title><body style="font-family:sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem"><p>${msg}</p><p><a href="${hub}">Voltar ao Hub</a></p></body>`);
+}
+app.get('/sso', h((req, res) => {
+  const p = sso.verificar(req.query.t, process.env.SSO_SECRET);
+  if (!p) return ssoErro(res, 401, 'O link de acesso expirou ou é inválido. Abra o Marketing de novo pelo Hub.');
+  let u = auth.prepare('SELECT * FROM users WHERE hub_user = ?').get(p.sub);
+  if (!u) {
+    const nome = String(p.name || p.sub).slice(0, 120);
+    const id = auth.prepare('INSERT INTO users (name, email, pass_hash, role, created_at, hub_user) VALUES (?,?,?,?,?,?)')
+      .run(nome, 'hub:' + p.sub, hashPass(crypto.randomBytes(32).toString('hex')), p.admin ? 'admin' : 'comercial', L.nowIso(), p.sub).lastInsertRowid;
+    u = auth.prepare('SELECT * FROM users WHERE id = ?').get(Number(id));
+  }
+  if (!u.active) return ssoErro(res, 403, 'Seu usuário está inativo no Marketing. Fale com o administrador.');
+  startSession(req, res, u, 'login pelo Hub');
+  res.redirect(302, '/');
 }));
 app.get('/api/logo', h((req, res) => {
   const r = auth.prepare("SELECT value FROM settings WHERE key = 'logo'").get();

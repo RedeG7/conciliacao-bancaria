@@ -19,11 +19,17 @@ do necessário, e todo endpoint (exceto /login) exige o token da sessão.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import Cookie, FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 import auth
@@ -367,3 +373,56 @@ def attended_download():
     if not _EXE_PATH.exists():
         raise HTTPException(status_code=404, detail="Executável não encontrado")
     return FileResponse(_EXE_PATH, media_type="application/octet-stream", filename="issnet_attended.exe")
+
+
+# ---------------------------------------------------------------------------
+# Login único no CRM de Marketing (mkt.redeg7.com, pasta marketing/)
+# ---------------------------------------------------------------------------
+# O card "Marketing & Comercial" da home do Hub aponta pra cá. Com a sessão
+# do Hub (cookie "sessao_token", o mesmo do F5 no app Streamlit), gera um
+# bilhete assinado (HMAC-SHA256 com MARKETING_SSO_SECRET, que o CRM também
+# recebe - ver docker-compose.yml) que vale 60s e redireciona pro CRM, que
+# confere o bilhete, cria a sessão dele e entra direto (marketing/src/sso.js).
+
+_SSO_VALIDADE_S = 60
+
+
+def _app_permitido(dados: dict, app_id: str) -> bool:
+    """Mesma regra de _apps_permitidos_efetivos (app_conciliacao.py): lista
+    vazia = sem restrição; teto do escritório ∩ refino do usuário."""
+    if dados.get("papel") == auth.PAPEL_SUPER_GLOBAL:
+        return True
+    escritorio = auth.carregar_escritorios().get(dados.get("escritorio_id", ""), {})
+    apps_escritorio = escritorio.get("apps_permitidos") or []
+    if apps_escritorio and app_id not in apps_escritorio:
+        return False
+    apps_usuario = dados.get("apps_permitidos") or []
+    return not apps_usuario or app_id in apps_usuario
+
+
+def _bilhete_sso(dados: dict, segredo: str) -> str:
+    payload = {
+        "sub": dados["usuario"],
+        "name": dados.get("nome") or dados["usuario"],
+        "admin": dados.get("papel") in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO),
+        "exp": int(time.time()) + _SSO_VALIDADE_S,
+        "jti": secrets.token_urlsafe(16),
+    }
+    corpo = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    assinatura = hmac.new(segredo.encode(), corpo.encode(), hashlib.sha256).digest()
+    return corpo + "." + base64.urlsafe_b64encode(assinatura).decode().rstrip("=")
+
+
+@app.get("/api/sso/marketing")
+def sso_marketing(sessao_token: Optional[str] = Cookie(None)):
+    dominio = os.environ.get("DOMINIO_MARKETING", "")
+    segredo = os.environ.get("MARKETING_SSO_SECRET", "")
+    if not dominio or not segredo:
+        return HTMLResponse("Acesso ao Marketing ainda não configurado no servidor.", status_code=503)
+    dados = auth.validar_sessao(sessao_token or "")
+    if not dados:
+        # sem sessão no Hub: manda pro login do Hub
+        return RedirectResponse("/", status_code=302)
+    if not _app_permitido(dados, "marketing"):
+        return HTMLResponse("Seu usuário não tem acesso ao Marketing & Comercial.", status_code=403)
+    return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)
