@@ -115,6 +115,14 @@ services:
       # escritorio (id no Hub) que recebe os leads do formulario quando o
       # site nao manda ?escritorio=... na URL do webhook
       - FORM_DEFAULT_OFFICE=${FORM_DEFAULT_OFFICE:-}
+      # Google Ads: credenciais da PLATAFORMA (RedeG7, uma vez so - ver
+      # DEPLOY.md); cada escritorio conecta a propria conta pela tela
+      - GOOGLE_ADS_DEVELOPER_TOKEN=${GOOGLE_ADS_DEVELOPER_TOKEN:-}
+      - GOOGLE_ADS_CLIENT_ID=${GOOGLE_ADS_CLIENT_ID:-}
+      - GOOGLE_ADS_CLIENT_SECRET=${GOOGLE_ADS_CLIENT_SECRET:-}
+      - GOOGLE_ADS_LOGIN_CUSTOMER_ID=${GOOGLE_ADS_LOGIN_CUSTOMER_ID:-}
+      # endereco publico do CRM (volta do login no Google)
+      - MARKETING_PUBLIC_URL=https://${DOMINIO_MARKETING:-mkt.redeg7.com}
       # login unico vindo do Hub (marketing/src/sso.js) - mesmo segredo da api
       - SSO_SECRET=${MARKETING_SSO_SECRET:-}
       - HUB_URL=https://${DOMINIO}

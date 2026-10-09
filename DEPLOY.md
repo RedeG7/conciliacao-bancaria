@@ -302,6 +302,32 @@ Manager com `ads_read`). O token fica cifrado no `auth.db` (chave derivada de
 `MARKETING_SSO_SECRET`). Sincroniza sozinho a cada 6 horas (últimos 7 dias;
 `META_SYNC_HOURS` muda o intervalo) e pelo botão "Sincronizar agora" (30 dias).
 
+**Google Ads:** precisa, **uma vez para a plataforma toda**, das credenciais
+da RedeG7 no `.env` do VPS; depois cada escritório conecta a própria conta em
+Integrações › Google Ads (ID do cliente + botão "Conectar com Google").
+
+1. No Google Ads da conta administradora (MCC) da RedeG7: **Administrador ›
+   Central de API** › solicitar o **developer token** (nível "Básico" para usar
+   em contas reais - o Google analisa o pedido).
+2. No **Google Cloud Console**: criar um projeto, **ativar a "Google Ads API"**,
+   configurar a **tela de consentimento OAuth** (tipo Externo, publicada) e
+   criar uma **credencial OAuth "Aplicativo da Web"** com o URI de
+   redirecionamento `https://mkt.redeg7.com/oauth/google/callback`.
+3. No `.env` do VPS:
+
+   ```bash
+   GOOGLE_ADS_DEVELOPER_TOKEN=...
+   GOOGLE_ADS_CLIENT_ID=....apps.googleusercontent.com
+   GOOGLE_ADS_CLIENT_SECRET=...
+   # opcional: MCC usada por padrão no acesso às contas dos clientes
+   GOOGLE_ADS_LOGIN_CUSTOMER_ID=1234567890
+   ```
+
+   e rodar o deploy de novo (ou `docker compose up -d marketing`).
+
+Sincroniza a cada 6 horas (últimos 7 dias) e pelo botão "Sincronizar agora"
+(30 dias): gasto, impressões e cliques por dia, campanha e grupo de anúncios.
+
 **Administrador:** é definido no Hub (admin do escritório ou super
 administrador) e vale para a plataforma inteira - no CRM o perfil
 Administrador acompanha o Hub a cada entrada pelo card.
