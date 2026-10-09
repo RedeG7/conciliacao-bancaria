@@ -258,15 +258,16 @@ caminho do mesmo domínio.
 
 Ativar (uma vez só):
 
-1. Faça o merge na `main` e espere o workflow terminar. No GitHub:
-   **Packages → real4u-marketing → Package settings → Change visibility →
-   Public** (igual aos outros pacotes).
+1. O pacote `real4u-marketing` no GHCR **pode ficar privado**: o deploy
+   faz login no GHCR do VPS com o token do próprio workflow (só durante o
+   deploy) para baixar as imagens.
 2. No DNS do `redeg7.com`, crie um registro **A** `mkt` apontando pro
    mesmo IP do Hub.
 3. Nada a fazer no `.env`: o próprio deploy acrescenta
    `COMPOSE_PROFILES=marketing` no `.env` do VPS assim que a imagem do CRM
-   puder ser baixada (pacote público do passo 1). Enquanto o pacote for
-   privado, o deploy só avisa no log e segue com o Hub normal. Opcional - o
+   puder ser baixada. Se não puder (ex.: o repositório perdeu o acesso ao
+   pacote em Package settings → Manage Actions access), o deploy só avisa no
+   log e segue com o Hub normal. Opcional - o
    formulário do site (`POST https://mkt.redeg7.com/api/webhooks/form`)
    precisa de `FORM_WEBHOOK_TOKEN=...` (gere com `openssl rand -hex 32`) no
    `.env`, colocado à mão.

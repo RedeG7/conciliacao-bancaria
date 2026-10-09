@@ -87,6 +87,12 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
+    # o token do job (GITHUB_TOKEN) e repassado ao VPS so pra baixar as
+    # imagens do GHCR durante o deploy - assim os pacotes podem ficar
+    # privados (o real4u-marketing nao precisa ser publico).
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -103,16 +109,24 @@ jobs:
 
       - name: Atualizar e reiniciar os containers no VPS
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          envs: GHCR_USER,GHCR_TOKEN
           script: |
             cd /opt/conciliacao-bancaria
+            # login no GHCR com o token deste job (expira quando o job
+            # termina; o logout no fim tira ele do VPS) - permite baixar
+            # imagens de pacotes privados.
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             # liga o CRM de Marketing (profile "marketing" do compose) no
-            # .env - so quando a imagem dele ja pode ser baixada (pacote
-            # publico no GHCR): antes disso, ligar o profile faria o
-            # "compose pull/up" falhar e derrubaria o deploy do Hub junto.
+            # .env - so quando a imagem dele ja pode ser baixada: antes
+            # disso, ligar o profile faria o "compose pull/up" falhar e
+            # derrubaria o deploy do Hub junto.
             if docker pull -q ghcr.io/redeg7/real4u-marketing:latest >/dev/null 2>&1; then
               if ! grep -q '^COMPOSE_PROFILES=' .env; then
                 printf '\nCOMPOSE_PROFILES=marketing\n' >> .env
@@ -120,7 +134,7 @@ jobs:
                 sed -i 's/^COMPOSE_PROFILES=\(.*\)$/COMPOSE_PROFILES=\1,marketing/' .env
               fi
             else
-              echo "Imagem real4u-marketing ainda nao acessivel (pacote privado?) - CRM de Marketing nao ligado"
+              echo "Imagem real4u-marketing nao acessivel - CRM de Marketing nao ligado"
             fi
             docker compose pull
             docker compose up -d
@@ -134,3 +148,4 @@ jobs:
             # do host ja ter o novo.
             docker compose restart caddy
             docker image prune -f
+            docker logout ghcr.io
