@@ -291,9 +291,10 @@ usuários e logo do próprio escritório - igual às outras telas do Hub. O
 escritório vem do usuário do Hub a cada entrada (se ele mudar de escritório
 no Hub, passa a ver o escritório novo). O **super administrador** do Hub vê todos
 os escritórios: no menu do CRM aparece "Escritório" para escolher qual
-abrir (igual aos outros módulos do Hub). O formulário do site manda o lead
-para o escritório de `?escritorio=<id>` na URL do webhook (ou
-`FORM_DEFAULT_OFFICE` no `.env`).
+abrir (igual aos outros módulos do Hub). **Formulário do site:** cada escritório gera o próprio código em
+Integrações › Formulários (botão "Gerar código"); o lead enviado com esse
+código entra só naquele escritório. (Legado: `FORM_WEBHOOK_TOKEN` no `.env`,
+com `?escritorio=<id>` ou `FORM_DEFAULT_OFFICE`.)
 
 Se um escritório tiver "apps permitidos" restritos, libere o app
 "Marketing & Comercial" em Gerenciar Escritórios/Usuários para o card

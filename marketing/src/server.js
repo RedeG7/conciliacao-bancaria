@@ -168,10 +168,28 @@ app.get('/r/:code', h((req, res) => {
   res.redirect(302, integrations.trackedUrl(c));
 }));
 // Recebimento de formulários (site, landing page). Exige token configurado no servidor.
-// ?escritorio=<id do escritório no Hub> escolhe em qual escritório o lead entra
-// (padrão: FORM_DEFAULT_OFFICE).
-app.post('/api/webhooks/form', h((req, res) => integrations.receiveForm(req, res,
-  dataDb('real', String(req.query.escritorio || process.env.FORM_DEFAULT_OFFICE || '') || null))));
+// Formulário do site: o código (X-Webhook-Token ou ?token=) diz de qual escritório
+// é o lead - cada escritório gera o seu em Integrações (guardado só o hash, em
+// settings 'formtoken:<escritório>'). Legado: FORM_WEBHOOK_TOKEN do servidor, com
+// ?escritorio=<id> ou FORM_DEFAULT_OFFICE.
+const formTokenKey = office => 'formtoken:' + (office || '');
+app.post('/api/webhooks/form', h((req, res) => {
+  const got = String(req.get('X-Webhook-Token') || req.query.token || '');
+  if (!got) return res.status(401).json({ error: 'Envie o código do formulário (X-Webhook-Token).' });
+  const hit = auth.prepare("SELECT key FROM settings WHERE key LIKE 'formtoken:%' AND value = ?").get(sha(got));
+  let office;
+  if (hit) office = hit.key.slice('formtoken:'.length) || null;
+  else {
+    const legacy = process.env.FORM_WEBHOOK_TOKEN;
+    const ok = legacy && crypto.timingSafeEqual(Buffer.from(sha(got)), Buffer.from(sha(legacy)));
+    if (!ok) return res.status(401).json({ error: 'Código inválido.' });
+    office = String(req.query.escritorio || process.env.FORM_DEFAULT_OFFICE || '') || null;
+  }
+  // responsável padrão (FORM_DEFAULT_OWNER_ID) só se for usuário do mesmo escritório
+  const ownerId = Number(process.env.FORM_DEFAULT_OWNER_ID || 0);
+  const owner = ownerId && auth.prepare('SELECT id FROM users WHERE id = ? AND office IS ?').get(ownerId, office) ? ownerId : null;
+  return integrations.receiveForm(req, res, dataDb('real', office), owner);
+}));
 
 // ---------- autenticação ----------
 app.use('/api', (req, res, next) => {
@@ -896,7 +914,19 @@ app.get('/api/export/:entity', h((req, res) => {
 
 // ---------- auditoria e integrações ----------
 app.get('/api/audit', need('admin'), h((req, res) => res.json(req.db.prepare('SELECT * FROM audit ORDER BY at DESC, id DESC LIMIT 500').all())));
-app.get('/api/integrations', h((req, res) => res.json(integrations.status(req))));
+app.get('/api/integrations', h((req, res) => res.json(integrations.status(req, {
+  formToken: !!auth.prepare('SELECT 1 FROM settings WHERE key = ?').get(formTokenKey(req.office)) }))));
+// código do formulário do escritório: gerar/trocar (o anterior deixa de valer) e desativar.
+// O código só aparece na resposta da geração; o sistema guarda apenas o hash.
+app.post('/api/integrations/form-token', need('admin'), h((req, res) => {
+  const token = crypto.randomBytes(24).toString('hex');
+  auth.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(formTokenKey(req.office), sha(token));
+  audit(req, 'gerou código do formulário', 'integrações'); res.json({ token });
+}));
+app.delete('/api/integrations/form-token', need('admin'), h((req, res) => {
+  auth.prepare('DELETE FROM settings WHERE key = ?').run(formTokenKey(req.office));
+  audit(req, 'desativou o formulário', 'integrações'); res.json({ ok: true });
+}));
 
 // ---------- erros e arquivos estáticos ----------
 app.use('/api', (req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
