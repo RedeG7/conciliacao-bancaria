@@ -45,11 +45,14 @@ function status(req, opts = {}) {
       cost: 'A API não é cobrada; os anúncios seguem cobrados normalmente pela Meta.',
     },
     {
-      key: 'google', name: 'Google Ads', implemented: false,
-      status: has('GOOGLE_ADS_DEVELOPER_TOKEN', 'GOOGLE_ADS_CLIENT_ID') ? 'credenciais' : 'nao_conectado',
-      statusLabel: has('GOOGLE_ADS_DEVELOPER_TOKEN', 'GOOGLE_ADS_CLIENT_ID') ? 'Credenciais informadas — sincronização ainda não implementada' : 'Não conectado',
-      what: 'Estrutura preparada como no Meta Ads. Enquanto não houver integração, exporte o relatório do Google Ads em CSV e importe em Campanhas › Importar métricas.',
-      needs: ['Conta de administrador (MCC) do Google Ads.', 'Developer token aprovado pelo Google (o nível básico exige solicitação).', 'Projeto no Google Cloud com OAuth (Client ID e Secret) e autorização da conta.'],
+      key: 'google', name: 'Google Ads', implemented: true,
+      status: opts.google && opts.google.connected ? (opts.google.last_error ? 'credenciais' : 'ativo') : 'nao_conectado',
+      statusLabel: opts.google && opts.google.connected
+        ? (opts.google.last_error ? 'Conectado, mas a última sincronização falhou' : 'Ativo — sincroniza a cada 6 horas')
+        : (opts.google && !opts.google.platformReady ? 'Não conectado — aguardando habilitação no servidor' : 'Não conectado'),
+      google: opts.google || { connected: false, platformReady: false },
+      what: 'Lê do Google Ads (API oficial) gasto, impressões e cliques por dia, campanha e grupo de anúncios, e grava nas métricas do escritório sem duplicar. Campanhas e grupos de anúncios que ainda não existem aqui são criados automaticamente (grupo vira conteúdo pago da campanha). Sincroniza sozinho a cada 6 horas (últimos 7 dias) e pelo botão "Sincronizar agora" (últimos 30 dias).',
+      needs: ['Uma vez, para a plataforma toda (RedeG7): developer token do Google Ads aprovado e cliente OAuth no Google Cloud, informados no servidor.', 'Por escritório: o ID do cliente Google Ads (10 dígitos) e um login com uma conta Google que tenha acesso a essa conta de anúncios (botão "Conectar com Google").'],
       cost: 'A API não é cobrada; os anúncios seguem cobrados pelo Google.',
     },
     {

@@ -8,6 +8,7 @@ const A = require('./analytics');
 const integrations = require('./integrations');
 const sso = require('./sso');
 const meta = require('./meta');
+const google = require('./google');
 
 const app = express();
 app.disable('x-powered-by');
@@ -196,6 +197,18 @@ app.post('/api/webhooks/form', h((req, res) => {
   const ownerId = Number(process.env.FORM_DEFAULT_OWNER_ID || 0);
   const owner = ownerId && auth.prepare('SELECT id FROM users WHERE id = ? AND office IS ?').get(ownerId, office) ? ownerId : null;
   return integrations.receiveForm(req, res, dataDb('real', office), owner);
+}));
+
+// Volta do login no Google ("Conectar com Google" em Integrações › Google Ads)
+const googleRedirectUri = req => `${(process.env.MARKETING_PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '')}/oauth/google/callback`;
+app.get('/oauth/google/callback', h(async (req, res) => {
+  const page = (msg, ok) => res.status(ok ? 200 : 400).type('html').send(`<!doctype html><meta charset="utf-8"><title>Google Ads</title><body style="font-family:sans-serif;max-width:34rem;margin:4rem auto;padding:0 1rem"><p>${msg}</p><p><a href="/#/integracoes">Voltar para Integrações</a></p></body>`);
+  if (req.query.error) return page('A autorização no Google foi cancelada ou negada.', false);
+  let office;
+  try { office = await google.finishOAuth(String(req.query.state || ''), String(req.query.code || '')); }
+  catch (e) { return page(String(e.message).replace(/</g, '&lt;'), false); }
+  try { await google.syncOffice(office, 30); } catch (e) { /* o erro fica registrado e aparece no card */ }
+  res.redirect(302, '/#/integracoes');
 }));
 
 // ---------- autenticação ----------
@@ -926,7 +939,19 @@ app.get('/api/export/:entity', h((req, res) => {
 app.get('/api/audit', need('admin'), h((req, res) => res.json(req.db.prepare('SELECT * FROM audit ORDER BY at DESC, id DESC LIMIT 500').all())));
 app.get('/api/integrations', h((req, res) => res.json(integrations.status(req, {
   formToken: !!auth.prepare('SELECT 1 FROM settings WHERE key = ?').get(formTokenKey(req.office)),
-  meta: meta.publicConfig(req.office) }))));
+  meta: meta.publicConfig(req.office), google: google.publicConfig(req.office) }))));
+// Google Ads do escritório: conectar (login no Google), sincronizar e desconectar
+app.post('/api/integrations/google/start', need('admin'), h((req, res) => {
+  try { res.json({ url: google.startOAuth(req.office, (req.body || {}).customer_id, (req.body || {}).login_customer_id, googleRedirectUri(req)) }); }
+  catch (e) { throw err(400, e.message); }
+}));
+app.post('/api/integrations/google/sync', need('admin', 'marketing'), h(async (req, res) => {
+  try { const r = await google.syncOffice(req.office, Number((req.body || {}).days) || 30); audit(req, 'sincronizou Google Ads', 'integrações', null, r); res.json(r); }
+  catch (e) { throw err(400, e.message); }
+}));
+app.delete('/api/integrations/google', need('admin'), h((req, res) => {
+  google.removeConfig(req.office); audit(req, 'desconectou Google Ads', 'integrações'); res.json({ ok: true });
+}));
 // Meta Ads do escritório: conectar (token + conta), sincronizar agora e desconectar
 app.post('/api/integrations/meta', need('admin'), h(async (req, res) => {
   try {

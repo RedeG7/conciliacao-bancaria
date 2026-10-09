@@ -116,7 +116,7 @@ route('/integracoes', async (main, p, alive) => {
     ${list.map(i => `<div class="card mb"><div class="card-head"><h2>${esc(i.name)}</h2>${chip(i.status)}${i.implemented ? '<span class="chip navy">Implementado no sistema</span>' : '<span class="chip">Estrutura preparada — depende de configuração externa</span>'}</div><div class="card-body">
       <p style="margin-top:0">${esc(i.what)}</p><p class="small"><b>Situação:</b> ${esc(i.statusLabel)}</p>
       <h3 class="mt-s">O que é necessário</h3><ul class="small">${i.needs.map(n => `<li>${esc(n)}</li>`).join('')}</ul><p class="small muted"><b>Custos externos:</b> ${esc(i.cost)}</p>
-      ${i.key === 'form' ? formBox(i) : ''}${i.key === 'meta' ? metaBox(i) : ''}
+      ${i.key === 'form' ? formBox(i) : ''}${i.key === 'meta' ? metaBox(i) : ''}${i.key === 'google' ? googleBox(i) : ''}
     </div></div>`).join('')}`;
   const show = token => {
     const url = `${location.origin}/api/webhooks/form`;
@@ -151,6 +151,44 @@ route('/integracoes', async (main, p, alive) => {
     const off = $('#meta-off', main); if (off) off.onclick = async () => {
       if (!(await confirmDlg('Desconectar o Meta Ads? As métricas já importadas continuam; só param as novas sincronizações.', { danger: true, ok: 'Desconectar' }))) return;
       await DEL('/api/integrations/meta'); toast('Meta Ads desconectado.'); render(); };
+  }
+  const goo = list.find(i => i.key === 'google');
+  if (goo) {
+    const wireG = () => { const b = $('#g-connect', main); if (b) b.onclick = async () => {
+      b.disabled = true;
+      try { const r = await POST('/api/integrations/google/start', { customer_id: $('#g-cid', main).value, login_customer_id: $('#g-login', main).value }); location.href = r.url; }
+      catch (x) { toast(x.message, { err: true }); b.disabled = false; } }; };
+    wireG();
+    const gs = $('#g-sync', main); if (gs) gs.onclick = async () => {
+      gs.disabled = true; gs.textContent = 'Sincronizando…';
+      try { const r = await POST('/api/integrations/google/sync', { days: 30 }); toast(`Sincronizado: ${r.linhas} linhas (${r.novos} novas, ${r.atualizados} atualizadas).`); render(); }
+      catch (x) { toast(x.message, { err: true }); render(); } };
+    const gw = $('#g-swap', main); if (gw) gw.onclick = () => { $('#g-swap-area', main).innerHTML = googleForm(); wireG(); };
+    const go = $('#g-off', main); if (go) go.onclick = async () => {
+      if (!(await confirmDlg('Desconectar o Google Ads? As métricas já importadas continuam; só param as novas sincronizações.', { danger: true, ok: 'Desconectar' }))) return;
+      await DEL('/api/integrations/google'); toast('Google Ads desconectado.'); render(); };
+  }
+  function googleForm() {
+    return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin:10px 0;max-width:760px">
+      <label class="f">ID do cliente Google Ads<input id="g-cid" placeholder="ex.: 123-456-7890" autocomplete="off"></label>
+      <label class="f">ID da conta administradora (MCC) — opcional<input id="g-login" placeholder="só se a conta for gerida por uma MCC" autocomplete="off"></label></div>
+      <button class="btn primary sm" id="g-connect">Conectar com Google</button>`;
+  }
+  function googleBox(i) {
+    const g = i.google || {};
+    const when = d => d ? new Date(d).toLocaleString('pt-BR') : '—';
+    const how = `<details class="small" style="margin-top:10px"><summary>Como conectar</summary><ol>
+      <li>Ache o <b>ID do cliente</b> no canto superior direito do Google Ads (formato 123-456-7890).</li>
+      <li>Se a conta é gerenciada por uma conta administradora (MCC) e o acesso é por ela, informe também o ID da MCC.</li>
+      <li>Clique em <b>Conectar com Google</b> e entre com uma conta Google que tenha acesso a essa conta de anúncios; aceite a permissão do Google Ads.</li>
+      <li>Você volta para esta tela e o sistema já busca os últimos 30 dias. O acesso fica guardado cifrado e só vale para este escritório.</li></ol></details>`;
+    if (!g.platformReady) return '<p class="small muted">A integração Google Ads ainda precisa ser habilitada no servidor (credenciais da plataforma, uma vez só). Fale com a RedeG7.</p>';
+    if (!g.connected) return admin ? `${googleForm()}${how}` : '<p class="small muted">Só administradores conectam o Google Ads.</p>';
+    return `<div class="callout small"><b>Cliente:</b> ${esc(g.customer_id)} &nbsp;·&nbsp; <b>Última sincronização:</b> ${esc(when(g.last_sync))}${g.last_count !== null && g.last_count !== undefined ? ` (${esc(String(g.last_count))} linhas)` : ''}
+      ${g.last_error ? `<br><b style="color:#b42318">Erro na última tentativa:</b> ${esc(g.last_error)}` : ''}</div>
+      <div class="row" style="gap:8px;margin:10px 0">${canSync ? '<button class="btn primary sm" id="g-sync">Sincronizar agora (30 dias)</button>' : ''}
+      ${admin ? '<button class="btn sm" id="g-swap">Trocar conta</button><button class="btn sm" id="g-off">Desconectar</button>' : ''}</div>
+      <div id="g-swap-area"></div>${admin ? how : ''}`;
   }
   function metaBox(i) {
     const m = i.meta || {};
