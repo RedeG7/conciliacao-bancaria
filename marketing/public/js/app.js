@@ -1,10 +1,13 @@
 'use strict';
 /* Estrutura do aplicativo: login, menu lateral, barra superior, pesquisa, alertas e modo demonstração. */
 
+// Nome do escritório em uso (vem do Hub no login único); sem sessão, "Real 4U".
+function officeLabel() { return (S.me && S.me.office && S.me.office.name) || 'Real 4U'; }
+
 function brandHtml(dark = true) {
-  // Espaço reservado para a logo oficial. Enquanto não for enviada, aparece apenas o nome "Real 4U".
-  if (S.boot && S.boot.hasLogo || S.hasLogo) return `<img src="/api/logo?v=${S.logoV || 0}" alt="Real 4U">`;
-  return `<div class="wordmark" style="color:${dark ? '#fff' : 'var(--navy)'}">Real 4U</div>`;
+  // Logo do escritório, se enviada em Configurações › Logo; senão, o nome do escritório.
+  if (S.boot && S.boot.hasLogo || S.hasLogo) return `<img src="/api/logo?v=${S.logoV || 0}" alt="${esc(officeLabel())}">`;
+  return `<div class="wordmark" style="color:${dark ? '#fff' : 'var(--navy)'}">${esc(officeLabel())}</div>`;
 }
 
 async function refreshBoot() { S.boot = await GET('/api/bootstrap'); S.hasLogo = S.boot.hasLogo; }
@@ -52,6 +55,7 @@ async function boot() {
 
 function shell() {
   const u = S.me.user;
+  document.title = `${officeLabel()} — Marketing & Comercial`;
   const nav = (href, ic, label, extra = '') => `<a href="${href}">${icon(ic)}<span>${label}</span>${extra}</a>`;
   $('#root').innerHTML = `<div class="app">
     <aside class="sidebar" aria-label="Menu principal">
@@ -104,7 +108,7 @@ function officeHtml() {
     return `<label class="office-pick"><span>Escritório</span><select id="office-sel" aria-label="Escritório">${list.map(x =>
       `<option value="${esc(x.id)}"${o && o.id === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>`;
   }
-  return o ? `<div class="office-name">${esc(o.name)}</div>` : '';
+  return '';
 }
 
 async function switchOffice(office) {
