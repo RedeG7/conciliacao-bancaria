@@ -1945,7 +1945,7 @@ _APPS_HOME = [
         "icone": "📣",
         "titulo": "Marketing & Comercial",
         "descricao": "CRM, campanhas, contatos, funil, propostas e vendas. Abre em outra aba, já logado.",
-        "departamento": "Comercial",
+        "departamento": "Marketing & Comercial",
         "tela": None,
         # app separado (pasta marketing/, servico "marketing" do
         # docker-compose), no subdominio DOMINIO_MARKETING - o card passa
@@ -1985,7 +1985,8 @@ _DEPARTAMENTOS = {
     "Financeiro": {"icone": "💲", "cor": "#3b82f6"},
     "Fiscal": {"icone": "🧾", "cor": "#a855f7"},
     "Pessoal": {"icone": "👥", "cor": "#f97316"},
-    "Comercial": {"icone": "📣", "cor": "#ec4899"},
+    # "chip": rotulo curto no card (o nome inteiro vai no filtro de departamentos)
+    "Marketing & Comercial": {"icone": "📣", "cor": "#ec4899", "chip": "Comercial"},
 }
 _FILTRO_TODOS_DEPTOS = "Todos os departamentos"
 
@@ -2321,7 +2322,7 @@ def _card_app(coluna, app: dict, usuario: str, favoritos: set) -> None:
             c_chip, c_fav, c_btn = st.columns([1.5, 0.4, 2.3], vertical_alignment="center")
             c_chip.markdown(
                 f'<span class="hh-chip" style="background:{cor}26;color:{cor};border:1px solid {cor}55">'
-                f'{depto["icone"]} {html.escape(app["departamento"])}</span>',
+                f'{depto["icone"]} {html.escape(depto.get("chip", app["departamento"]))}</span>',
                 unsafe_allow_html=True,
             )
             eh_fav = app["id"] in favoritos
