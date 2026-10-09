@@ -34,11 +34,14 @@ function status(req, opts = {}) {
       needs: ['Para uso externo, o sistema precisa estar publicado em um domínio próprio (ex.: crm.seudominio.com.br).'], cost: 'Sem custo do sistema.',
     },
     {
-      key: 'meta', name: 'Meta Ads (Facebook/Instagram)', implemented: false,
-      status: has('META_ACCESS_TOKEN', 'META_AD_ACCOUNT_ID') ? 'credenciais' : 'nao_conectado',
-      statusLabel: has('META_ACCESS_TOKEN', 'META_AD_ACCOUNT_ID') ? 'Credenciais informadas — sincronização ainda não implementada' : 'Não conectado',
-      what: 'Estrutura preparada: as métricas importadas ficam por data, campanha, conteúdo e origem, sem duplicar. A leitura automática pela Marketing API ainda não foi implementada; use a importação CSV exportada do Gerenciador de Anúncios.',
-      needs: ['Conta no Meta Business (Business Manager) com a conta de anúncios.', 'Aplicativo no Meta for Developers e token de acesso com permissão ads_read.', 'Pode exigir verificação da empresa e revisão do aplicativo pela Meta.', 'Leads de formulário instantâneo exigem também leads_retrieval e páginas vinculadas.'],
+      key: 'meta', name: 'Meta Ads (Facebook/Instagram)', implemented: true,
+      status: opts.meta && opts.meta.connected ? (opts.meta.last_error ? 'credenciais' : 'ativo') : 'nao_conectado',
+      statusLabel: opts.meta && opts.meta.connected
+        ? (opts.meta.last_error ? 'Conectado, mas a última sincronização falhou' : 'Ativo — sincroniza a cada 6 horas')
+        : 'Não conectado',
+      meta: opts.meta || { connected: false },
+      what: 'Lê da Meta (Marketing API) gasto, impressões, alcance, cliques e conversas iniciadas de cada anúncio, por dia, e grava nas métricas do escritório sem duplicar. Campanhas e anúncios que ainda não existem aqui são criados automaticamente (anúncio vira conteúdo pago da campanha). Sincroniza sozinho a cada 6 horas (últimos 7 dias) e pelo botão "Sincronizar agora" (últimos 30 dias).',
+      needs: ['Conta de anúncios no Meta Business (Business Manager) do escritório.', 'Token de acesso de um "usuário do sistema" do Business Manager com a permissão ads_read e acesso à conta de anúncios (o passo a passo está abaixo).', 'O ID da conta de anúncios (número que aparece no Gerenciador de Anúncios, com ou sem "act_").'],
       cost: 'A API não é cobrada; os anúncios seguem cobrados normalmente pela Meta.',
     },
     {

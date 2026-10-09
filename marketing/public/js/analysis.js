@@ -106,12 +106,17 @@ route('/melhorar', async (main, p, alive) => {
 route('/integracoes', async (main, p, alive) => {
   const list = await GET('/api/integrations'); if (!alive()) return;
   const admin = S.me.user.role === 'admin';
+  const canSync = admin || S.me.user.role === 'marketing';
+  const metaForm = () => `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin:10px 0;max-width:760px">
+      <label class="f">ID da conta de anúncios<input id="meta-acc" placeholder="ex.: act_1234567890 ou 1234567890" autocomplete="off"></label>
+      <label class="f">Token de acesso (usuário do sistema)<input id="meta-tok" type="password" placeholder="cole o token aqui" autocomplete="off"></label></div>
+    <button class="btn primary sm" id="meta-connect">Conectar e buscar 30 dias</button>`;
   const chip = s => s === 'ativo' ? '<span class="chip green">Ativo</span>' : s === 'credenciais' ? '<span class="chip amber">Credenciais informadas</span>' : '<span class="chip">Não conectado</span>';
   main.innerHTML = `<div class="page-head"><div class="grow"><h1>Integrações</h1><p>Situação real de cada conexão. Nada aqui é simulado: sem integração configurada, os dados entram por cadastro manual ou importação CSV e <b>não são em tempo real</b>.</p></div></div>
     ${list.map(i => `<div class="card mb"><div class="card-head"><h2>${esc(i.name)}</h2>${chip(i.status)}${i.implemented ? '<span class="chip navy">Implementado no sistema</span>' : '<span class="chip">Estrutura preparada — depende de configuração externa</span>'}</div><div class="card-body">
       <p style="margin-top:0">${esc(i.what)}</p><p class="small"><b>Situação:</b> ${esc(i.statusLabel)}</p>
       <h3 class="mt-s">O que é necessário</h3><ul class="small">${i.needs.map(n => `<li>${esc(n)}</li>`).join('')}</ul><p class="small muted"><b>Custos externos:</b> ${esc(i.cost)}</p>
-      ${i.key === 'form' ? formBox(i) : ''}
+      ${i.key === 'form' ? formBox(i) : ''}${i.key === 'meta' ? metaBox(i) : ''}
     </div></div>`).join('')}`;
   const show = token => {
     const url = `${location.origin}/api/webhooks/form`;
@@ -130,6 +135,41 @@ route('/integracoes', async (main, p, alive) => {
     if (!(await confirmDlg('Desativar o formulário? Os envios do site deixam de entrar no sistema.', { danger: true, ok: 'Desativar' }))) return;
     await DEL('/api/integrations/form-token'); toast('Formulário desativado.'); render();
   };
+  const meta = list.find(i => i.key === 'meta');
+  if (meta) {
+    const wireConnect = () => { const b = $('#meta-connect', main); if (b) b.onclick = async () => {
+      b.disabled = true; b.textContent = 'Conectando…';
+      try { const r = await POST('/api/integrations/meta', { account_id: $('#meta-acc', main).value, token: $('#meta-tok', main).value });
+        toast(`Meta Ads conectado: ${r.linhas} linhas lidas (${r.novos} novas, ${r.atualizados} atualizadas).`); render(); }
+      catch (x) { toast(x.message, { err: true }); b.disabled = false; b.textContent = 'Conectar e buscar 30 dias'; } }; };
+    wireConnect();
+    const sync = $('#meta-sync', main); if (sync) sync.onclick = async () => {
+      sync.disabled = true; sync.textContent = 'Sincronizando…';
+      try { const r = await POST('/api/integrations/meta/sync', { days: 30 }); toast(`Sincronizado: ${r.linhas} linhas (${r.novos} novas, ${r.atualizados} atualizadas).`); render(); }
+      catch (x) { toast(x.message, { err: true }); render(); } };
+    const swap = $('#meta-swap', main); if (swap) swap.onclick = () => { $('#meta-swap-area', main).innerHTML = metaForm(); wireConnect(); };
+    const off = $('#meta-off', main); if (off) off.onclick = async () => {
+      if (!(await confirmDlg('Desconectar o Meta Ads? As métricas já importadas continuam; só param as novas sincronizações.', { danger: true, ok: 'Desconectar' }))) return;
+      await DEL('/api/integrations/meta'); toast('Meta Ads desconectado.'); render(); };
+  }
+  function metaBox(i) {
+    const m = i.meta || {};
+    const when = d => d ? new Date(d).toLocaleString('pt-BR') : '—';
+    const how = `<details class="small" style="margin-top:10px"><summary>Como gerar o token e achar o ID da conta</summary><ol>
+      <li>Entre em <b>business.facebook.com</b> › Configurações do negócio (Business Settings).</li>
+      <li>Em <b>Usuários › Usuários do sistema</b>, clique em <b>Adicionar</b>, dê um nome (ex.: "Hub Marketing") e escolha a função <b>Funcionário</b>.</li>
+      <li>Com o usuário do sistema selecionado, clique em <b>Atribuir ativos</b> › <b>Contas de anúncios</b>, marque a conta e dê a permissão <b>Ver desempenho</b> (ou Gerenciar campanhas).</li>
+      <li>Em <b>Contas › Apps</b>, crie (ou use) um app do tipo Empresa e atribua esse app ao usuário do sistema.</li>
+      <li>Ainda no usuário do sistema, clique em <b>Gerar novo token</b>, escolha o app, validade <b>Nunca expira</b> e marque a permissão <b>ads_read</b>. Copie o token.</li>
+      <li>O <b>ID da conta de anúncios</b> está no Gerenciador de Anúncios (número ao lado do nome da conta, ou em Configurações do negócio › Contas de anúncios).</li>
+      <li>Cole os dois aqui e clique em <b>Conectar</b>. O token fica guardado cifrado e só vale para este escritório.</li></ol></details>`;
+    if (!m.connected) return admin ? `${metaForm()}${how}` : '<p class="small muted">Só administradores conectam o Meta Ads.</p>';
+    return `<div class="callout small"><b>Conta:</b> ${esc(m.account_id)} &nbsp;·&nbsp; <b>Última sincronização:</b> ${esc(when(m.last_sync))}${m.last_count !== null && m.last_count !== undefined ? ` (${esc(String(m.last_count))} linhas)` : ''}
+      ${m.last_error ? `<br><b style="color:#b42318">Erro na última tentativa:</b> ${esc(m.last_error)}` : ''}</div>
+      <div class="row" style="gap:8px;margin:10px 0">${canSync ? '<button class="btn primary sm" id="meta-sync">Sincronizar agora (30 dias)</button>' : ''}
+      ${admin ? '<button class="btn sm" id="meta-swap">Trocar token/conta</button><button class="btn sm" id="meta-off">Desconectar</button>' : ''}</div>
+      <div id="meta-swap-area"></div>${admin ? how : ''}`;
+  }
   function formBox(i) {
     const has = i.status === 'ativo';
     return `${admin ? `<div class="row" style="gap:8px;margin:10px 0"><button class="btn primary sm" id="form-token-gen" data-has="${has ? 1 : 0}">${has ? 'Gerar novo código' : 'Gerar código'}</button>${has ? '<button class="btn sm" id="form-token-off">Desativar</button>' : ''}</div>` : '<p class="small muted">Só administradores geram o código do formulário.</p>'}
