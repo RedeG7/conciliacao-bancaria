@@ -29,6 +29,14 @@ auth.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_hub_user ON users(hub_user)')
 // escritório do Hub dono do usuário (ver /sso em server.js) - define qual
 // arquivo de dados ele enxerga
 try { auth.exec('ALTER TABLE users ADD COLUMN office TEXT'); } catch (e) { /* coluna já existe */ }
+// nome do escritório e, para o super administrador do Hub (is_global), a lista
+// de escritórios que ele pode escolher; sessions.office = escritório escolhido
+for (const sql of ['ALTER TABLE users ADD COLUMN office_name TEXT',
+  'ALTER TABLE users ADD COLUMN is_global INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE users ADD COLUMN offices TEXT',
+  'ALTER TABLE sessions ADD COLUMN office TEXT']) {
+  try { auth.exec(sql); } catch (e) { /* coluna já existe */ }
+}
 
 // id do escritório -> trecho seguro para nome de arquivo
 const officeSlug = office => String(office || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');

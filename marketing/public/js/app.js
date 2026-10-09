@@ -55,7 +55,7 @@ function shell() {
   const nav = (href, ic, label, extra = '') => `<a href="${href}">${icon(ic)}<span>${label}</span>${extra}</a>`;
   $('#root').innerHTML = `<div class="app">
     <aside class="sidebar" aria-label="Menu principal">
-      <div class="brand">${brandHtml(true)}<div class="sub">Marketing &amp; Comercial</div></div>
+      <div class="brand">${brandHtml(true)}<div class="sub">Marketing &amp; Comercial</div>${officeHtml()}</div>
       <nav class="nav">
         ${nav('#/painel', 'dash', 'Painel')}
         <div class="group">Comercial</div>
@@ -92,7 +92,25 @@ function shell() {
   $('#alerts-btn').onclick = showAlerts;
   $('#user-btn').onclick = userMenu;
   if ($('#leave-demo')) $('#leave-demo').onclick = () => switchMode('real');
+  if ($('#office-sel')) $('#office-sel').onchange = e => switchOffice(e.target.value);
   setupSearch();
+}
+
+// Escritório em uso: super administrador do Hub escolhe qualquer um (como nos
+// outros módulos do Hub); os demais só veem o nome do próprio escritório.
+function officeHtml() {
+  const o = S.me.office; const list = S.me.offices;
+  if (list && list.length) {
+    return `<label class="office-pick"><span>Escritório</span><select id="office-sel" aria-label="Escritório">${list.map(x =>
+      `<option value="${esc(x.id)}"${o && o.id === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>`;
+  }
+  return o ? `<div class="office-name">${esc(o.name)}</div>` : '';
+}
+
+async function switchOffice(office) {
+  await POST('/api/office', { office });
+  S.me = await GET('/api/me'); await refreshBoot(); shell(); render(); refreshAlerts();
+  toast('Escritório: ' + (S.me.office ? S.me.office.name : ''));
 }
 
 async function switchMode(mode) {
