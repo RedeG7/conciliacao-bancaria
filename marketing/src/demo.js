@@ -5,11 +5,11 @@ const L = require('./logic');
 
 function rng(seed) { let s = seed; return () => { s = (s * 1664525 + 1013904223) % 4294967296; return s / 4294967296; }; }
 
-function seed(db) {
+function seed(db, office) {
   const { auth } = require('./db');
   const r = rng(42);
   const pick = a => a[Math.floor(r() * a.length)];
-  const users = auth.prepare("SELECT id, role FROM users WHERE active = 1").all();
+  const users = auth.prepare("SELECT id, role FROM users WHERE active = 1 AND office IS ?").all(office || null);
   const sellers = users.filter(u => u.role !== 'marketing').map(u => u.id);
   const owners = sellers.length ? sellers : (users.length ? users.map(u => u.id) : [null]);
   const T = L.today();

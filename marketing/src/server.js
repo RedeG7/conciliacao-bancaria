@@ -2,7 +2,7 @@
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
-const { auth, dataDb, resetDemo, tx } = require('./db');
+const { auth, dataDb, allRealDbs, resetDemo, tx } = require('./db');
 const L = require('./logic');
 const A = require('./analytics');
 const integrations = require('./integrations');
@@ -38,6 +38,8 @@ function setCookie(res, val, maxAge) {
 }
 const h = fn => (req, res, next) => { try { const r = fn(req, res, next); if (r && r.then) r.catch(next); } catch (e) { next(e); } };
 const err = L.httpErr;
+// logo é por escritório (usuários sem escritório usam a chave antiga 'logo')
+const logoKey = office => (office ? 'logo:' + office : 'logo');
 const userName = id => { const u = id && auth.prepare('SELECT name FROM users WHERE id = ?').get(id); return u ? u.name : null; };
 function audit(req, action, entity, id, details) {
   try {
@@ -91,7 +93,7 @@ function startSession(req, res, u, action) {
     .run(sha(token), u.id, 'real', new Date(Date.now() + SESSION_DAYS * 86400000).toISOString(), L.nowIso());
   auth.prepare('DELETE FROM sessions WHERE expires_at < ?').run(L.nowIso());
   setCookie(res, token, SESSION_DAYS * 86400);
-  req.user = u; req.db = dataDb('real'); audit(req, action, 'usuário', u.id);
+  req.user = u; req.db = dataDb('real', u.office); audit(req, action, 'usuário', u.id);
 }
 // Login único vindo do Hub (ver src/sso.js): usuário do Hub entra direto, sem senha.
 // No primeiro acesso cria o usuário aqui (admin do Hub vira Administrador, os demais
@@ -103,19 +105,34 @@ function ssoErro(res, status, msg) {
 app.get('/sso', h((req, res) => {
   const p = sso.verificar(req.query.t, process.env.SSO_SECRET);
   if (!p) return ssoErro(res, 401, 'O link de acesso expirou ou é inválido. Abra o Marketing de novo pelo Hub.');
+  // escritório do Hub: cada escritório só enxerga os próprios dados (um arquivo de banco por escritório)
+  const office = typeof p.office === 'string' && p.office ? p.office : null;
+  if (!office) return ssoErro(res, 403, 'Seu usuário do Hub não tem escritório definido. Fale com o administrador.');
   let u = auth.prepare('SELECT * FROM users WHERE hub_user = ?').get(p.sub);
   if (!u) {
     const nome = String(p.name || p.sub).slice(0, 120);
-    const id = auth.prepare('INSERT INTO users (name, email, pass_hash, role, created_at, hub_user) VALUES (?,?,?,?,?,?)')
-      .run(nome, 'hub:' + p.sub, hashPass(crypto.randomBytes(32).toString('hex')), p.admin ? 'admin' : 'comercial', L.nowIso(), p.sub).lastInsertRowid;
+    const id = auth.prepare('INSERT INTO users (name, email, pass_hash, role, created_at, hub_user, office) VALUES (?,?,?,?,?,?,?)')
+      .run(nome, 'hub:' + p.sub, hashPass(crypto.randomBytes(32).toString('hex')), p.admin ? 'admin' : 'comercial', L.nowIso(), p.sub, office).lastInsertRowid;
     u = auth.prepare('SELECT * FROM users WHERE id = ?').get(Number(id));
+  } else if (u.office !== office) {
+    // usuário mudou de escritório no Hub (ou foi criado antes desta separação): segue o Hub
+    auth.prepare('UPDATE users SET office = ? WHERE id = ?').run(office, u.id);
+    auth.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+    u = auth.prepare('SELECT * FROM users WHERE id = ?').get(u.id);
   }
   if (!u.active) return ssoErro(res, 403, 'Seu usuário está inativo no Marketing. Fale com o administrador.');
   startSession(req, res, u, 'login pelo Hub');
   res.redirect(302, '/');
 }));
+function sessionUser(req) {
+  const t = cookies(req)[COOKIE];
+  const s = t && auth.prepare('SELECT * FROM sessions WHERE token_hash = ?').get(sha(t));
+  if (!s || s.expires_at < L.nowIso()) return null;
+  return auth.prepare('SELECT id, office FROM users WHERE id = ?').get(s.user_id) || null;
+}
 app.get('/api/logo', h((req, res) => {
-  const r = auth.prepare("SELECT value FROM settings WHERE key = 'logo'").get();
+  const su = sessionUser(req);
+  const r = auth.prepare('SELECT value FROM settings WHERE key = ?').get(logoKey(su ? su.office : null));
   if (!r) return res.status(404).end();
   const m = r.value.match(/^data:(image\/(png|jpeg|svg\+xml|webp));base64,(.+)$/);
   if (!m) return res.status(404).end();
@@ -125,23 +142,27 @@ app.get('/api/logo', h((req, res) => {
 }));
 // Link rastreável próprio: registra um clique ANÔNIMO (sem IP, sem identificação) e redireciona.
 app.get('/r/:code', h((req, res) => {
-  const db = dataDb('real');
-  const c = db.prepare('SELECT * FROM contents WHERE short_code = ?').get(req.params.code);
+  // procura o código em todos os escritórios (códigos são aleatórios)
+  let db = null; let c = null;
+  for (const d of allRealDbs()) { c = d.prepare('SELECT * FROM contents WHERE short_code = ?').get(req.params.code); if (c) { db = d; break; } }
   if (!c || !c.url) return res.status(404).send('Link não encontrado.');
   db.prepare('INSERT INTO link_clicks (content_id, at) VALUES (?,?)').run(c.id, L.nowIso());
   res.redirect(302, integrations.trackedUrl(c));
 }));
 // Recebimento de formulários (site, landing page). Exige token configurado no servidor.
-app.post('/api/webhooks/form', h((req, res) => integrations.receiveForm(req, res, dataDb('real'))));
+// ?escritorio=<id do escritório no Hub> escolhe em qual escritório o lead entra
+// (padrão: FORM_DEFAULT_OFFICE).
+app.post('/api/webhooks/form', h((req, res) => integrations.receiveForm(req, res,
+  dataDb('real', String(req.query.escritorio || process.env.FORM_DEFAULT_OFFICE || '') || null))));
 
 // ---------- autenticação ----------
 app.use('/api', (req, res, next) => {
   const t = cookies(req)[COOKIE];
   const s = t && auth.prepare('SELECT * FROM sessions WHERE token_hash = ?').get(sha(t));
   if (!s || s.expires_at < L.nowIso()) return next(err(401, 'Sessão expirada. Entre novamente.'));
-  const u = auth.prepare('SELECT id, name, email, role, active, must_change FROM users WHERE id = ?').get(s.user_id);
+  const u = auth.prepare('SELECT id, name, email, role, active, must_change, office FROM users WHERE id = ?').get(s.user_id);
   if (!u || !u.active) return next(err(401, 'Usuário inativo.'));
-  req.user = u; req.mode = s.mode; req.sessionHash = s.token_hash; req.db = dataDb(s.mode);
+  req.user = u; req.office = u.office || null; req.mode = s.mode; req.sessionHash = s.token_hash; req.db = dataDb(s.mode, req.office);
   // proteção CSRF: toda alteração precisa do cabeçalho enviado pela aplicação
   if (req.method !== 'GET' && req.get('X-R4U') !== '1') return next(err(403, 'Requisição bloqueada.'));
   next();
@@ -160,27 +181,27 @@ app.post('/api/me/password', h((req, res) => {
 app.post('/api/mode', h((req, res) => {
   const mode = req.body.mode === 'demo' ? 'demo' : 'real';
   auth.prepare('UPDATE sessions SET mode = ? WHERE token_hash = ?').run(mode, req.sessionHash);
-  dataDb(mode); res.json({ ok: true, mode });
+  dataDb(mode, req.office); res.json({ ok: true, mode });
 }));
 app.post('/api/demo/reset', need('admin'), h((req, res) => {
   if (req.mode !== 'demo') throw err(400, 'Entre no modo demonstração para recriar os dados fictícios.');
-  resetDemo(); res.json({ ok: true });
+  resetDemo(req.office); res.json({ ok: true });
 }));
 
 // ---------- usuários ----------
 app.get('/api/users', h((req, res) => {
-  const all = auth.prepare('SELECT id, name, email, role, active, created_at FROM users ORDER BY name').all();
+  const all = auth.prepare('SELECT id, name, email, role, active, created_at FROM users WHERE office IS ? ORDER BY name').all(req.office);
   res.json(req.user.role === 'admin' ? all : all.map(u => ({ id: u.id, name: u.name, role: u.role, active: u.active })));
 }));
 app.post('/api/users', need('admin'), h((req, res) => {
   const { name, email, role, password } = req.body;
   if (!name || !L.normEmail(email) || !ROLES[role] || !password || password.length < 8) throw err(400, 'Preencha nome, e-mail, perfil e uma senha provisória (mín. 8 caracteres).');
   if (auth.prepare('SELECT id FROM users WHERE email = ?').get(L.normEmail(email))) throw err(409, 'Já existe usuário com este e-mail.');
-  const id = auth.prepare('INSERT INTO users (name, email, pass_hash, role, must_change, created_at) VALUES (?,?,?,?,1,?)').run(name.trim(), L.normEmail(email), hashPass(password), role, L.nowIso()).lastInsertRowid;
+  const id = auth.prepare('INSERT INTO users (name, email, pass_hash, role, must_change, created_at, office) VALUES (?,?,?,?,1,?,?)').run(name.trim(), L.normEmail(email), hashPass(password), role, L.nowIso(), req.office).lastInsertRowid;
   audit(req, 'criou usuário', 'usuário', Number(id), { name, role }); res.json({ id: Number(id) });
 }));
 app.put('/api/users/:id', need('admin'), h((req, res) => {
-  const id = Number(req.params.id); const u = auth.prepare('SELECT * FROM users WHERE id = ?').get(id); if (!u) throw err(404, 'Usuário não encontrado.');
+  const id = Number(req.params.id); const u = auth.prepare('SELECT * FROM users WHERE id = ? AND office IS ?').get(id, req.office); if (!u) throw err(404, 'Usuário não encontrado.');
   const { name, role, active, password } = req.body;
   if (id === req.user.id && (active === 0 || active === false || (role && role !== 'admin'))) throw err(400, 'Você não pode desativar ou rebaixar o próprio acesso.');
   if (name) auth.prepare('UPDATE users SET name = ? WHERE id = ?').run(name.trim(), id);
@@ -201,10 +222,10 @@ app.get('/api/bootstrap', h((req, res) => {
   for (const t of Object.keys(LISTS)) o[t] = db.prepare(`SELECT * FROM ${t} ORDER BY sort, id`).all();
   o.campaigns = db.prepare('SELECT id, name, status, service_id, channel, archived FROM campaigns ORDER BY start_date DESC, id DESC').all();
   o.contents = db.prepare('SELECT id, title, campaign_id, hook, cta, channel, format, service_id, archived FROM contents ORDER BY published_at DESC, id DESC').all();
-  o.users = auth.prepare('SELECT id, name, role, active FROM users ORDER BY name').all();
+  o.users = auth.prepare('SELECT id, name, role, active FROM users WHERE office IS ? ORDER BY name').all(req.office);
   o.hooks = db.prepare("SELECT DISTINCT hook FROM contents WHERE hook IS NOT NULL AND hook <> '' ORDER BY hook").all().map(r => r.hook);
   o.goalMetrics = A.GOAL_METRICS;
-  o.hasLogo = !!auth.prepare("SELECT 1 FROM settings WHERE key = 'logo'").get();
+  o.hasLogo = !!auth.prepare('SELECT 1 FROM settings WHERE key = ?').get(logoKey(req.office));
   o.today = L.today();
   res.json(o);
 }));
@@ -239,10 +260,10 @@ app.post('/api/lists/stages/reorder', need('admin'), h((req, res) => {
 app.post('/api/logo', need('admin'), h((req, res) => {
   const v = String(req.body.dataUrl || '');
   if (!/^data:image\/(png|jpeg|svg\+xml|webp);base64,/.test(v) || v.length > 4e6) throw err(400, 'Envie PNG, JPG, SVG ou WEBP com até 3 MB.');
-  auth.prepare("INSERT INTO settings (key, value) VALUES ('logo', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(v);
+  auth.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(logoKey(req.office), v);
   audit(req, 'atualizou a logo', 'configurações'); res.json({ ok: true });
 }));
-app.delete('/api/logo', need('admin'), h((req, res) => { auth.prepare("DELETE FROM settings WHERE key = 'logo'").run(); res.json({ ok: true }); }));
+app.delete('/api/logo', need('admin'), h((req, res) => { auth.prepare('DELETE FROM settings WHERE key = ?').run(logoKey(req.office)); res.json({ ok: true }); }));
 
 // ---------- contatos ----------
 const CONTACT_FIELDS = ['name', 'phone', 'email', 'company', 'city', 'kind', 'profile', 'profile_other', 'decision_maker', 'notes', 'captured_at', 'owner_id'];
