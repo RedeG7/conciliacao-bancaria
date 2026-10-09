@@ -28,6 +28,9 @@ services:
     environment:
       - DATABASE_URL=postgresql://conciliacao:${POSTGRES_PASSWORD}@db:5432/conciliacao
       - RPA_ENC_KEY=${RPA_ENC_KEY}
+      # endereco do CRM de Marketing - o card dele na home do Hub abre
+      # esse link (o CRM tem login proprio, nao embute no Hub)
+      - DOMINIO_MARKETING=${DOMINIO_MARKETING:-mkt.redeg7.com}
     depends_on:
       db:
         condition: service_healthy
@@ -84,6 +87,32 @@ services:
         condition: service_healthy
     # Sem expose/ports: so fala com o Postgres, nunca recebe HTTP.
 
+  # Real 4U - Marketing & Comercial (CRM, pasta marketing/): app Node
+  # separado, com banco proprio em SQLite (auth.db/real.db/demo.db) no
+  # volume marketing_data - nao usa o Postgres nem o login do Hub. Fica
+  # num subdominio proprio (DOMINIO_MARKETING) porque usa /api e /r na
+  # raiz, que colidiriam com as rotas do Hub se fosse um caminho
+  # (/marketing) no mesmo dominio.
+  # Profile "marketing": so sobe com COMPOSE_PROFILES=marketing no .env do
+  # VPS - assim o deploy do Hub nao quebra enquanto o pacote da imagem no
+  # GHCR ainda nao esta publico / o DNS ainda nao existe (ver DEPLOY.md).
+  marketing:
+    image: ghcr.io/redeg7/real4u-marketing:latest
+    profiles: ["marketing"]
+    container_name: real4u-marketing
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - DATA_DIR=/data
+      - COOKIE_SECURE=1
+      - TRUST_PROXY=1
+      - FORM_WEBHOOK_TOKEN=${FORM_WEBHOOK_TOKEN:-}
+      - FORM_DEFAULT_OWNER_ID=${FORM_DEFAULT_OWNER_ID:-}
+    volumes:
+      - marketing_data:/data
+    expose:
+      - "3000"
+
   caddy:
     image: caddy:2-alpine
     container_name: conciliacao-caddy
@@ -93,6 +122,9 @@ services:
       - "443:443"
     environment:
       - DOMINIO=${DOMINIO}
+      # subdominio do CRM de Marketing (padrao mkt.redeg7.com; pode
+      # ser trocado no .env) - precisa do registro DNS A apontando pro VPS
+      - DOMINIO_MARKETING=${DOMINIO_MARKETING:-mkt.redeg7.com}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -105,3 +137,4 @@ volumes:
   pgdata:
   caddy_data:
   caddy_config:
+  marketing_data:

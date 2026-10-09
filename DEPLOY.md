@@ -240,3 +240,48 @@ de pastas, e continuam aparecendo no Hub.
 > simulação local do portal - acompanhe a primeira execução real: se a
 > SEFAZ usar outro texto em algum botão/campo, a consulta fica com erro e
 > o print da tela mostra exatamente em que passo parou.
+
+## Real 4U — Marketing & Comercial (CRM)
+
+Sistema separado (Node.js, pasta `marketing/`) que roda no mesmo VPS do
+Hub: serviço `marketing` do `docker-compose.yml`, imagem
+`ghcr.io/redeg7/real4u-marketing:latest` (buildada pelo mesmo workflow a
+cada push na `main`). Tem **login e banco próprios** (SQLite em
+`auth.db`/`real.db`/`demo.db`, no volume Docker `marketing_data`) — não
+usa o Postgres nem os usuários do Hub. Na home do Hub aparece o card
+"📣 Marketing & Comercial", que abre o CRM numa aba nova.
+
+Fica num **subdomínio próprio**: `mkt.redeg7.com` (padrão do
+`docker-compose.yml`; dá pra trocar com `DOMINIO_MARKETING` no `.env`): o
+CRM usa `/api` e `/r` na raiz, que colidiriam com as rotas do Hub num
+caminho do mesmo domínio.
+
+Ativar (uma vez só):
+
+1. Faça o merge na `main` e espere o workflow terminar. No GitHub:
+   **Packages → real4u-marketing → Package settings → Change visibility →
+   Public** (igual aos outros pacotes).
+2. No DNS do `redeg7.com`, crie um registro **A** `mkt` apontando pro
+   mesmo IP do Hub.
+3. Nada a fazer no `.env`: o próprio deploy acrescenta
+   `COMPOSE_PROFILES=marketing` no `.env` do VPS assim que a imagem do CRM
+   puder ser baixada (pacote público do passo 1). Enquanto o pacote for
+   privado, o deploy só avisa no log e segue com o Hub normal. Opcional - o
+   formulário do site (`POST https://mkt.redeg7.com/api/webhooks/form`)
+   precisa de `FORM_WEBHOOK_TOKEN=...` (gere com `openssl rand -hex 32`) no
+   `.env`, colocado à mão.
+4. Rode o workflow de novo (Actions → Build e Deploy → Re-run, ou o próximo
+   merge na `main`) - ou suba na mão: `cd /opt/conciliacao-bancaria && docker compose pull && docker compose up -d && docker compose restart caddy`
+5. Acesse `https://mkt.redeg7.com` e crie o administrador do CRM no
+   primeiro acesso (depois, Configurações › Usuários para a equipe).
+
+Se um escritório tiver "apps permitidos" restritos, libere o app
+"Marketing & Comercial" em Gerenciar Escritórios/Usuários para o card
+aparecer.
+
+Backup dos dados do CRM (os 3 arquivos SQLite):
+
+```bash
+docker run --rm -v conciliacao-bancaria_marketing_data:/data -v $(pwd):/b alpine \
+  tar czf /b/marketing-$(date +%Y%m%d).tgz -C /data .
+```

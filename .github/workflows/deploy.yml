@@ -75,6 +75,15 @@ jobs:
           cache-from: type=gha,scope=worker
           cache-to: type=gha,mode=max,scope=worker
 
+      # CRM Real 4U - Marketing & Comercial (pasta marketing/, Node)
+      - uses: docker/build-push-action@v5
+        with:
+          context: marketing
+          push: true
+          tags: ghcr.io/redeg7/real4u-marketing:latest
+          cache-from: type=gha,scope=marketing
+          cache-to: type=gha,mode=max,scope=marketing
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -100,6 +109,19 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             cd /opt/conciliacao-bancaria
+            # liga o CRM de Marketing (profile "marketing" do compose) no
+            # .env - so quando a imagem dele ja pode ser baixada (pacote
+            # publico no GHCR): antes disso, ligar o profile faria o
+            # "compose pull/up" falhar e derrubaria o deploy do Hub junto.
+            if docker pull -q ghcr.io/redeg7/real4u-marketing:latest >/dev/null 2>&1; then
+              if ! grep -q '^COMPOSE_PROFILES=' .env; then
+                printf '\nCOMPOSE_PROFILES=marketing\n' >> .env
+              elif ! grep -q '^COMPOSE_PROFILES=.*marketing' .env; then
+                sed -i 's/^COMPOSE_PROFILES=\(.*\)$/COMPOSE_PROFILES=\1,marketing/' .env
+              fi
+            else
+              echo "Imagem real4u-marketing ainda nao acessivel (pacote privado?) - CRM de Marketing nao ligado"
+            fi
             docker compose pull
             docker compose up -d
             # Caddyfile e bind mount - scp-action troca o arquivo via
