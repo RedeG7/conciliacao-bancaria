@@ -425,4 +425,5 @@ def sso_marketing(sessao_token: Optional[str] = Cookie(None)):
         return RedirectResponse("/", status_code=302)
     if not _app_permitido(dados, "marketing"):
         return HTMLResponse("Seu usuário não tem acesso ao Marketing & Comercial.", status_code=403)
+    auth.registrar_acesso(dados["usuario"], dados.get("escritorio_id"), "Marketing & Comercial")
     return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)

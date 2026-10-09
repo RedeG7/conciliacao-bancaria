@@ -17,6 +17,7 @@ Permite:
 
 from __future__ import annotations
 
+import html
 import io
 import os
 import re
@@ -26,6 +27,7 @@ import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -393,6 +395,7 @@ def _tela_login() -> None:
                 st.error("Este usuário está inativo. Fale com o administrador do seu escritório.")
             else:
                 token = auth.criar_sessao(usuario)
+                auth.registrar_acesso(usuario, dados.get("escritorio_id"), "Login no Hub")
                 # limpa qualquer resto de sessao anterior (outro usuario/
                 # escritorio) ANTES de popular a nova - ver
                 # _resetar_estado_nao_login pro bug que isso evita.
@@ -1924,7 +1927,8 @@ _APPS_HOME = [
         "id": "conciliacao",
         "icone": "🏦",
         "titulo": "Conciliação Bancária Automática",
-        "descricao": "Extrato/fluxo de caixa × razão contábil × balancete → espelho e arquivo de importação Domínio.",
+        "descricao": "Extrato, fluxo de caixa, razão contábil e balancete com importação do Domínio.",
+        "departamento": "Financeiro",
         "tela": "conciliacao",
     },
     {
@@ -1932,27 +1936,31 @@ _APPS_HOME = [
         "icone": "🤖",
         "titulo": "RPA — Fechamento REST/DMS",
         "descricao": "Fechamento mensal de REST e DMS no ISS Web.",
+        "departamento": "Fiscal",
         "tela": "rpa_hub",
     },
     {
         "id": "rpa_folha",
         "icone": "📋",
         "titulo": "RPA — Folha de Pagamento",
-        "descricao": "Fechamento da folha no Domínio Folha. Ainda roda por automação assistida, sem tela própria aqui.",
+        "descricao": "Fechamento da folha no Domínio Folha com automação assistida.",
+        "departamento": "Pessoal",
         "tela": None,
     },
     {
         "id": "rpa_nfgo",
         "icone": "🧾",
         "titulo": "RPA NF GO",
-        "descricao": "Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO, com quantidade de notas e print da consulta.",
+        "descricao": "Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO.",
+        "departamento": "Fiscal",
         "tela": "rpa_nfgo",
     },
     {
         "id": "marketing",
         "icone": "📣",
         "titulo": "Marketing & Comercial",
-        "descricao": "CRM da Real 4U: campanhas, conteúdos, contatos, funil, propostas, vendas e indicadores. Abre em outra aba, já logado.",
+        "descricao": "CRM, campanhas, contatos, funil, propostas e vendas. Abre em outra aba, já logado.",
+        "departamento": "Comercial",
         "tela": None,
         # app separado (pasta marketing/, servico "marketing" do
         # docker-compose), no subdominio DOMINIO_MARKETING - o card passa
@@ -1986,88 +1994,361 @@ def _apps_permitidos_efetivos(escritorio_id: str, usuario: str) -> set:
     return apps_escritorio & apps_usuario
 
 
-def _tela_home() -> None:
-    """Tela inicial: um icone por aplicativo do escritorio. Cada app novo
-    (proxima automacao) so precisa de uma entrada em _APPS_HOME - nao mexe
-    no roteamento das telas que ja existem. A sidebar daqui e a unica
-    dona de Gerenciar Escritorios/Usuarios - a tela de Conciliacao
-    Bancaria nao mostra mais esses dois (sao administracao do hub, nao
-    algo especifico daquele app)."""
-    papel_usuario = st.session_state.get("papel_usuario")
-    with st.sidebar:
-        st.caption(f"👤 {st.session_state.get('nome_usuario')} · {papel_usuario}")
-        st.caption(f"🏢 {st.session_state.get('escritorio_nome')}")
-        csb1, csb2 = st.columns(2)
-        with csb1:
-            if st.button("Trocar senha", use_container_width=True, key="home_trocar_senha"):
-                st.session_state["mostrar_trocar_senha"] = True
-                st.rerun()
-        with csb2:
-            if st.button("Sair", use_container_width=True, key="home_sair"):
-                _fazer_logout()
-        if papel_usuario in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
-            st.divider()
-            st.caption("Administração")
-            if papel_usuario == auth.PAPEL_SUPER_GLOBAL:
-                if st.button("🌐 Gerenciar Escritórios", use_container_width=True, key="home_gerenciar_escritorios"):
-                    st.session_state["tela"] = "gerenciar_escritorios"
-                    st.rerun()
-            if st.button("👥 Gerenciar Usuários", use_container_width=True, key="home_gerenciar_usuarios"):
-                st.session_state["tela"] = "gerenciar_usuarios"
-                st.rerun()
+# Departamentos dos apps (chip colorido no card, filtro "Todos os
+# departamentos" e contador na faixa de numeros da tela inicial).
+_DEPARTAMENTOS = {
+    "Financeiro": {"icone": "💲", "cor": "#3b82f6"},
+    "Fiscal": {"icone": "🧾", "cor": "#a855f7"},
+    "Pessoal": {"icone": "👥", "cor": "#f97316"},
+    "Comercial": {"icone": "📣", "cor": "#ec4899"},
+}
+_FILTRO_TODOS_DEPTOS = "Todos os departamentos"
 
+_PAPEL_ROTULO = {
+    auth.PAPEL_SUPER_GLOBAL: "Super administrador",
+    auth.PAPEL_ADMIN_ESCRITORIO: "Administrador do escritório",
+    auth.PAPEL_USUARIO: "Usuário",
+}
+
+
+def _app_disponivel(app: dict) -> bool:
+    return bool(app.get("tela") or app.get("url"))
+
+
+def _estilo_home() -> None:
+    """Visual da tela inicial (mesma identidade da tela de login: fundo
+    escuro, verde em degrade, quebra-cabeca). Os seletores st-key-* pegam
+    os elementos pelo `key=` dado no Python (Streamlit >= 1.39)."""
     st.markdown(
-        "<div style='text-align:center;font-size:2.25rem;font-weight:700;"
-        "margin-bottom:0.25rem;'>👋 Bem-vindo(a)</div>"
-        "<div style='text-align:center;color:rgba(250,250,250,0.6);"
-        "margin-bottom:2rem;'>Escolha um aplicativo para começar.</div>",
+        """
+        <style>
+        header[data-testid="stHeader"] {background:transparent;}
+        footer {visibility:hidden; height:0;}
+        .block-container {padding-top:2.2rem !important; padding-bottom:1rem !important; max-width:1400px !important;}
+        .stApp {
+            background:
+                radial-gradient(1100px 600px at 85% -10%, rgba(34,224,138,0.14), transparent 60%),
+                radial-gradient(900px 500px at -10% 110%, rgba(34,224,138,0.08), transparent 60%),
+                linear-gradient(160deg, #070b14 0%, #0b1220 55%, #060a12 100%);
+        }
+        .hh-decor {position:fixed; inset:0; z-index:0; overflow:hidden; pointer-events:none;}
+        .hh-decor .puzzle {
+            position:absolute; top:10px; right:12%; font-size:340px; line-height:1; opacity:0.08;
+            transform:rotate(12deg); filter:hue-rotate(70deg) saturate(1.6) grayscale(0.2);
+        }
+        .hh-decor svg {position:absolute; left:0; bottom:-30px; width:100%; opacity:0.5;}
+        [data-testid="stMainBlockContainer"] > div {position:relative; z-index:1;}
+
+        /* ---- sidebar ---- */
+        section[data-testid="stSidebar"] {background:#0a101c; border-right:1px solid rgba(255,255,255,0.06);}
+        .hh-brand {display:flex; align-items:center; gap:10px; margin:-8px 0 18px 4px;}
+        .hh-brand .ic {font-size:34px; filter:hue-rotate(70deg) saturate(1.6) brightness(1.15) drop-shadow(0 0 10px rgba(34,224,138,.45));}
+        .hh-brand .tx {font-size:28px; font-weight:800; color:#f5f7fa; letter-spacing:-0.5px;}
+        .hh-brand .tx span {background:linear-gradient(90deg,#22e08a,#a8e63d); -webkit-background-clip:text; background-clip:text; color:transparent;}
+        .hh-sep {border-top:1px solid rgba(255,255,255,0.07); margin:10px 0 12px;}
+        .hh-sec {font-size:11px; letter-spacing:1.5px; color:#5b6a82; text-transform:uppercase; margin:2px 0 6px 6px;}
+        [class*="st-key-nav_"] button {
+            justify-content:flex-start !important; border:none !important; background:transparent !important;
+            color:#c3cddd !important; padding:0.55rem 0.8rem !important; border-radius:10px !important;
+        }
+        [class*="st-key-nav_"] button > div {justify-content:flex-start !important; width:100%;}
+        [class*="st-key-nav_"] button > div > span {gap:12px;}
+        [class*="st-key-nav_"] button:hover {background:rgba(255,255,255,0.05) !important; color:#fff !important;}
+        [class*="st-key-nav_"] button[kind="primary"] {
+            background:linear-gradient(90deg,rgba(34,224,138,0.28),rgba(34,224,138,0.10)) !important;
+            border:1px solid rgba(34,224,138,0.35) !important; color:#fff !important; font-weight:700 !important;
+        }
+        .st-key-nav_sair button {color:#f87171 !important;}
+
+        /* ---- topo ---- */
+        .hh-user {display:flex; align-items:center; justify-content:flex-end; gap:10px;}
+        .hh-avatar {width:40px; height:40px; border-radius:50%; background:#0f766e; color:#e6fffa; font-weight:700;
+            display:flex; align-items:center; justify-content:center; font-size:14px;}
+        .hh-user .n {font-weight:700; color:#f5f7fa; font-size:14px; line-height:1.1;}
+        .hh-user .p {font-size:12px; color:#93a1b7;}
+        .hh-hello {font-size:38px; font-weight:800; color:#f5f7fa; margin:0; line-height:1.15;}
+        .hh-hello span {background:linear-gradient(90deg,#22e08a,#a8e63d); -webkit-background-clip:text; background-clip:text; color:transparent;}
+        .hh-welcome {font-size:19px; font-weight:700; color:#f5f7fa; margin-top:6px;}
+        .hh-welcome span {color:#22e08a;}
+        .hh-sub {color:#93a1b7; font-size:15px; margin-top:2px;}
+        .hh-office {margin-top:14px; font-weight:700; color:#e6edf6; font-size:14.5px;}
+        .hh-tagline {padding-top:18px;}
+        .hh-tagline p {font-style:italic; font-size:21px; line-height:1.35; color:#dfe6ef; margin:0 0 12px;}
+        .hh-underline {width:70px; height:4px; border-radius:4px; background:linear-gradient(90deg,#22e08a,#a8e63d);}
+
+        /* ---- numeros ---- */
+        .hh-stats {display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin:26px 0 30px;}
+        .hh-stat {display:flex; align-items:center; gap:18px; padding:20px 22px; border-radius:16px;
+            background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.09);}
+        .hh-stat .bub {width:62px; height:62px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-size:26px;}
+        .hh-stat .big {font-size:32px; font-weight:800; color:#f5f7fa; line-height:1;}
+        .hh-stat .lbl {font-size:15px; color:#dfe6ef; margin-left:8px;}
+        .hh-stat .dsc {font-size:13px; color:#93a1b7; margin-top:6px;}
+        .hh-stat .deco {margin-left:auto; font-size:26px; opacity:.55;}
+        @media (max-width: 900px) {.hh-stats {grid-template-columns:1fr;}}
+
+        /* ---- secao de apps ---- */
+        .hh-sect-title {font-size:22px; font-weight:800; color:#f5f7fa;}
+        .hh-sect-sub {font-size:13.5px; color:#93a1b7;}
+        [class*="st-key-hcard_"] {
+            background:rgba(255,255,255,0.03) !important; border:1px solid rgba(255,255,255,0.09) !important;
+            border-radius:16px !important; padding:16px 18px 14px !important;
+        }
+        .hh-card-head {display:flex; gap:14px; align-items:flex-start; min-height:104px;}
+        .hh-tile {width:62px; height:62px; border-radius:14px; flex:none; display:flex; align-items:center; justify-content:center; font-size:30px;}
+        .hh-card-title {display:flex; justify-content:space-between; gap:8px; align-items:flex-start;}
+        .hh-card-title b {color:#f5f7fa; font-size:15.5px;}
+        .hh-badge {font-size:11.5px; padding:3px 9px; border-radius:20px; white-space:nowrap; font-weight:600;}
+        .hh-badge.ok {background:rgba(34,224,138,0.12); color:#4ade80; border:1px solid rgba(34,224,138,0.25);}
+        .hh-badge.soon {background:rgba(148,163,184,0.12); color:#cbd5e1; border:1px solid rgba(148,163,184,0.25);}
+        .hh-desc {color:#93a1b7; font-size:13px; margin-top:6px; line-height:1.4;}
+        .hh-chip {display:inline-block; font-size:12px; padding:6px 10px; border-radius:9px; font-weight:600; white-space:nowrap;}
+        .st-key-home_busca [data-baseweb="input"], .st-key-home_busca input,
+        .st-key-home_depto [role="group"], .st-key-home_depto input,
+        .st-key-home_depto [data-baseweb="select"] > div {
+            background:#111a2c !important; border-color:rgba(255,255,255,0.12) !important;
+            color:#e6edf6 !important; border-radius:10px !important;
+        }
+        .st-key-home_depto button, .st-key-home_depto svg {color:#e6edf6 !important; background:transparent !important;}
+        .st-key-home_busca input::placeholder {color:#7c8aa3 !important;}
+        [class*="st-key-acessar_"] button, [class*="st-key-acessar_"] a {
+            background:linear-gradient(90deg,#22e08a,#a8e63d) !important; color:#06210f !important;
+            font-weight:800 !important; border:none !important; border-radius:10px !important;
+        }
+        [class*="st-key-embreve_"] button {background:#1e293b !important; color:#94a3b8 !important; border:none !important; border-radius:10px !important;}
+        [class*="st-key-fav_"] button {background:transparent !important; border:none !important; font-size:20px !important; color:#facc15 !important; padding:0 !important;}
+        .hh-empty {color:#93a1b7; padding:24px 4px;}
+        .hh-footer {text-align:center; margin-top:34px; font-size:11px; letter-spacing:2.5px; color:#4a5773;}
+        </style>
+        <div class="hh-decor">
+            <div class="puzzle">🧩</div>
+            <svg viewBox="0 0 1600 260" preserveAspectRatio="none">
+                <path d="M0,140 C300,220 500,60 850,120 C1150,175 1350,80 1600,140 L1600,260 L0,260 Z" fill="rgba(34,224,138,0.08)"/>
+                <path d="M0,180 C320,240 620,120 900,160 C1200,200 1380,140 1600,190 L1600,260 L0,260 Z" fill="rgba(34,224,138,0.13)"/>
+            </svg>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
-    _ids_visiveis = _apps_permitidos_efetivos(
-        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado"),
-    )
+
+def _iniciais(nome: str) -> str:
+    partes = [p for p in (nome or "").split() if p]
+    if not partes:
+        return "?"
+    if len(partes) == 1:
+        return partes[0][:2].upper()
+    return (partes[0][0] + partes[-1][0]).upper()
+
+
+def _sidebar_home(papel_usuario: str) -> None:
+    """Menu lateral da tela inicial (Hub APP)."""
+    filtro = st.session_state.get("home_filtro", "todos")
+
+    def _nav(rotulo, chave, icone, ativo=False):
+        return st.button(rotulo, key=f"nav_{chave}", icon=icone, use_container_width=True,
+                         type="primary" if ativo else "secondary")
+
+    with st.sidebar:
+        st.markdown('<div class="hh-brand"><div class="ic">🧩</div><div class="tx">Hub <span>APP</span></div></div>',
+                    unsafe_allow_html=True)
+        if _nav("Início", "inicio", ":material/home:", ativo=filtro == "todos"):
+            st.session_state["home_filtro"] = "todos"
+            st.session_state.pop("home_busca", None)
+            st.session_state["home_depto"] = _FILTRO_TODOS_DEPTOS
+            st.rerun()
+        if _nav("Aplicativos", "aplicativos", ":material/apps:"):
+            st.session_state["home_filtro"] = "todos"
+            st.rerun()
+        if _nav("Meus Favoritos", "favoritos", ":material/star:", ativo=filtro == "favoritos"):
+            st.session_state["home_filtro"] = "favoritos"
+            st.rerun()
+
+        if papel_usuario in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
+            st.markdown('<div class="hh-sep"></div><div class="hh-sec">Administração</div>', unsafe_allow_html=True)
+            if papel_usuario == auth.PAPEL_SUPER_GLOBAL and _nav(
+                    "Gerenciar Escritórios", "escritorios", ":material/domain:"):
+                st.session_state["tela"] = "gerenciar_escritorios"
+                st.rerun()
+            if _nav("Gerenciar Usuários", "usuarios", ":material/group:"):
+                st.session_state["tela"] = "gerenciar_usuarios"
+                st.rerun()
+            # permissoes de app ficam na tela de usuarios (apps permitidos)
+            if _nav("Permissões", "permissoes", ":material/verified_user:"):
+                st.session_state["tela"] = "gerenciar_usuarios"
+                st.rerun()
+            if _nav("Logs de Acesso", "logs", ":material/list:"):
+                st.session_state["tela"] = "logs_acesso"
+                st.rerun()
+
+        st.markdown('<div class="hh-sep"></div>', unsafe_allow_html=True)
+        if _nav("Configurações (trocar senha)", "config", ":material/settings:"):
+            st.session_state["mostrar_trocar_senha"] = True
+            st.rerun()
+        if _nav("Sair", "sair", ":material/logout:"):
+            _fazer_logout()
+
+
+def _tela_home() -> None:
+    """Tela inicial (Hub APP): menu lateral, saudacao, numeros, busca/filtro
+    por departamento e um card por aplicativo. Cada app novo so precisa de
+    uma entrada em _APPS_HOME - nao mexe no roteamento das telas."""
+    papel_usuario = st.session_state.get("papel_usuario")
+    usuario = st.session_state.get("usuario_logado")
+    nome = st.session_state.get("nome_usuario") or usuario
+    _estilo_home()
+    _sidebar_home(papel_usuario)
+
+    col_esq, col_dir = st.columns([3, 1.1])
+    with col_esq:
+        st.markdown(
+            f'<div class="hh-hello">Olá, <span>{html.escape(nome)}</span>! 👋</div>'
+            '<div class="hh-welcome">Bem-vindo ao <span>Hub APP</span>!</div>'
+            '<div class="hh-sub">Sua central inteligente de automação contábil para todos os departamentos.</div>'
+            f'<div class="hh-office">🏢 &nbsp;{html.escape(st.session_state.get("escritorio_nome") or "")}</div>',
+            unsafe_allow_html=True,
+        )
+    with col_dir:
+        st.markdown(
+            f'<div class="hh-user"><div class="hh-avatar">{html.escape(_iniciais(nome))}</div>'
+            f'<div><div class="n">{html.escape(nome)}</div>'
+            f'<div class="p">{html.escape(_PAPEL_ROTULO.get(papel_usuario, papel_usuario or ""))}</div></div></div>'
+            '<div class="hh-tagline"><p>Conectando<br/>pessoas, processos<br/>e resultados.</p>'
+            '<div class="hh-underline"></div></div>',
+            unsafe_allow_html=True,
+        )
+
+    _ids_visiveis = _apps_permitidos_efetivos(st.session_state.get("escritorio_id"), usuario)
     _apps_visiveis = [a for a in _APPS_HOME if a["id"] in _ids_visiveis]
+    n_disponiveis = sum(1 for a in _apps_visiveis if _app_disponivel(a))
+    n_deptos = len({a["departamento"] for a in _apps_visiveis})
+    st.markdown(
+        '<div class="hh-stats">'
+        '<div class="hh-stat"><div class="bub" style="background:rgba(34,224,138,0.14)">🟩</div>'
+        f'<div><span class="big">{n_disponiveis}</span><span class="lbl">Aplicativos</span>'
+        '<div class="dsc">Disponíveis no seu acesso</div></div><div class="deco">📶</div></div>'
+        '<div class="hh-stat"><div class="bub" style="background:rgba(168,85,247,0.16)">👥</div>'
+        f'<div><span class="big">{n_deptos}</span><span class="lbl">Departamentos</span>'
+        '<div class="dsc">Integrados e automatizados</div></div><div class="deco">🔗</div></div>'
+        '<div class="hh-stat"><div class="bub" style="background:rgba(59,130,246,0.16)">🛡️</div>'
+        '<div><span class="big">24/7</span><span class="lbl">Acesso seguro</span>'
+        '<div class="dsc">Seus dados protegidos</div></div><div class="deco">🔒</div></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    favoritos = set(auth.carregar_usuarios().get(usuario, {}).get("apps_favoritos") or [])
+    so_favoritos = st.session_state.get("home_filtro") == "favoritos"
+
+    c_tit, c_busca, c_depto = st.columns([2.6, 1.3, 1.1], vertical_alignment="bottom")
+    with c_tit:
+        st.markdown(
+            f'<div class="hh-sect-title">{"⭐ Meus favoritos" if so_favoritos else "🟩 Seus aplicativos"}</div>'
+            '<div class="hh-sect-sub">Selecione um aplicativo para acessar e automatize seus processos.</div>',
+            unsafe_allow_html=True,
+        )
+    with c_busca:
+        busca = st.text_input("Pesquisar aplicativo", key="home_busca", placeholder="🔍  Pesquisar aplicativo...",
+                              label_visibility="collapsed")
+    with c_depto:
+        deptos = [_FILTRO_TODOS_DEPTOS] + sorted({a["departamento"] for a in _apps_visiveis})
+        depto = st.selectbox("Departamento", deptos, key="home_depto", label_visibility="collapsed")
+
+    termo = (busca or "").strip().lower()
+    apps = [
+        a for a in _apps_visiveis
+        if (not so_favoritos or a["id"] in favoritos)
+        and (depto == _FILTRO_TODOS_DEPTOS or a["departamento"] == depto)
+        and (not termo or termo in (a["titulo"] + " " + a["descricao"]).lower())
+    ]
     if not _apps_visiveis:
-        st.info("Nenhum aplicativo liberado para o seu usuário ainda — fale com o administrador do seu escritório.")
-        return
+        st.markdown('<div class="hh-empty">Nenhum aplicativo liberado para o seu usuário ainda — fale com o '
+                    'administrador do seu escritório.</div>', unsafe_allow_html=True)
+    elif not apps:
+        msg = ("Você ainda não marcou nenhum favorito — use a ☆ no card de um aplicativo."
+               if so_favoritos and not favoritos else "Nenhum aplicativo encontrado com esse filtro.")
+        st.markdown(f'<div class="hh-empty">{msg}</div>', unsafe_allow_html=True)
+    else:
+        st.write("")
+        # grade de _CARDS_POR_LINHA: app novo entra na linha de baixo com o
+        # mesmo tamanho de card (ultima linha incompleta alinhada a esquerda).
+        for inicio in range(0, len(apps), _CARDS_POR_LINHA):
+            colunas = st.columns(_CARDS_POR_LINHA)
+            for coluna, app in zip(colunas, apps[inicio:inicio + _CARDS_POR_LINHA]):
+                _card_app(coluna, app, usuario, favoritos)
 
-    # grade de _CARDS_POR_LINHA: app novo entra na linha de baixo com o
-    # mesmo tamanho de card, em vez de espremer todos numa linha só (a
-    # última linha incompleta fica alinhada à esquerda, colunas vazias).
-    for inicio in range(0, len(_apps_visiveis), _CARDS_POR_LINHA):
-        colunas = st.columns(_CARDS_POR_LINHA)
-        for coluna, app in zip(colunas, _apps_visiveis[inicio:inicio + _CARDS_POR_LINHA]):
-            _card_app(coluna, app)
+    st.markdown('<div class="hh-footer">HUB APP &nbsp;|&nbsp; A CONTABILIDADE MAIS INTELIGENTE</div>',
+                unsafe_allow_html=True)
 
 
-def _card_app(coluna, app: dict) -> None:
-    """Um card da home (ícone, título, descrição e botão Abrir/Em breve)."""
+def _card_app(coluna, app: dict, usuario: str, favoritos: set) -> None:
+    """Um card da tela inicial: icone, titulo, status, descricao,
+    departamento, estrela de favorito e botao Acessar/Em breve."""
+    depto = _DEPARTAMENTOS.get(app["departamento"], {"icone": "•", "cor": "#64748b"})
+    cor = depto["cor"]
+    disponivel = _app_disponivel(app)
+    badge = ('<span class="hh-badge ok">✔ Disponível</span>' if disponivel
+             else '<span class="hh-badge soon">⏱ Em breve</span>')
     with coluna:
-        with st.container(border=True):
-            # titulo+descricao num min-height fixo (em vez de
-            # st.caption separado): garante que os 3 cards tenham a
-            # mesma altura e o botao "Abrir" comece sempre na mesma
-            # posicao, mesmo com textos de tamanhos diferentes.
+        with st.container(border=True, key=f"hcard_{app['id']}"):
             st.markdown(
-                f"<div style='text-align:center;font-size:3rem;margin-bottom:0.4rem;'>{app['icone']}</div>"
-                f"<div style='min-height:150px;'>"
-                f"<div style='text-align:center;font-weight:600;margin-bottom:0.3rem;'>{app['titulo']}</div>"
-                f"<div style='text-align:center;color:rgba(250,250,250,0.6);font-size:0.875rem;'>"
-                f"{app['descricao']}</div>"
-                f"</div>",
+                f'<div class="hh-card-head"><div class="hh-tile" style="background:{cor}22">{app["icone"]}</div>'
+                f'<div style="flex:1"><div class="hh-card-title"><b>{html.escape(app["titulo"])}</b>{badge}</div>'
+                f'<div class="hh-desc">{html.escape(app["descricao"])}</div></div></div>',
                 unsafe_allow_html=True,
             )
-            if app.get("url"):
-                st.link_button("Abrir ↗", app["url"], use_container_width=True, type="primary")
-            elif app["tela"]:
-                if st.button("Abrir", key=f"home_abrir_{app['tela']}",
-                             use_container_width=True, type="primary"):
-                    st.session_state["tela"] = app["tela"]
-                    st.rerun()
-            else:
-                st.button("Em breve", key=f"home_em_breve_{app['id']}",
-                          use_container_width=True, disabled=True)
+            c_chip, c_fav, c_btn = st.columns([1.5, 0.4, 2.3], vertical_alignment="center")
+            c_chip.markdown(
+                f'<span class="hh-chip" style="background:{cor}26;color:{cor};border:1px solid {cor}55">'
+                f'{depto["icone"]} {html.escape(app["departamento"])}</span>',
+                unsafe_allow_html=True,
+            )
+            eh_fav = app["id"] in favoritos
+            if c_fav.button("★" if eh_fav else "☆", key=f"fav_{app['id']}",
+                            help="Tirar dos favoritos" if eh_fav else "Adicionar aos favoritos"):
+                novos = (favoritos - {app["id"]}) if eh_fav else (favoritos | {app["id"]})
+                auth.definir_favoritos(usuario, sorted(novos))
+                st.rerun()
+            with c_btn:
+                if app.get("url"):
+                    with st.container(key=f"acessar_{app['id']}"):
+                        st.link_button("Acessar →", app["url"], use_container_width=True)
+                elif app["tela"]:
+                    with st.container(key=f"acessar_{app['id']}"):
+                        if st.button("Acessar →", key=f"home_abrir_{app['tela']}", use_container_width=True):
+                            st.session_state["tela"] = app["tela"]
+                            st.rerun()
+                else:
+                    with st.container(key=f"embreve_{app['id']}"):
+                        st.button("Em breve", key=f"home_em_breve_{app['id']}",
+                                  use_container_width=True, disabled=True)
+
+
+def _tela_logs_acesso() -> None:
+    """Ultimos acessos (login no Hub e entrada no Marketing pelo card).
+    super_admin_global ve todos os escritorios; admin de escritorio so o
+    proprio."""
+    if st.button("← Início"):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    st.title("📜 Logs de Acesso")
+    global_ = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
+    linhas = auth.listar_acessos(None if global_ else st.session_state.get("escritorio_id"))
+    if not linhas:
+        st.info("Nenhum acesso registrado ainda.")
+        return
+    escritorios = auth.carregar_escritorios() if global_ else {}
+    usuarios = auth.carregar_usuarios()
+    tabela = []
+    for l in linhas:
+        quando = l["quando"].astimezone(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
+        item = {"Quando": quando, "Usuário": l["usuario"],
+                "Nome": usuarios.get(l["usuario"], {}).get("nome", "—"), "Acesso": l["origem"]}
+        if global_:
+            item["Escritório"] = escritorios.get(l["escritorio_id"] or "", {}).get("nome", l["escritorio_id"] or "—")
+        tabela.append(item)
+    st.caption(f"Últimos {len(tabela)} acessos (mais recentes primeiro).")
+    st.dataframe(tabela, use_container_width=True, hide_index=True)
 
 
 _renderizar_cookie_pendente()
@@ -2098,7 +2379,7 @@ if st.session_state.get("mostrar_trocar_senha"):
 # tela atual também na URL (?tela=...): F5 ou uma sessão nova do Streamlit
 # (reconexão, Hub reiniciado no deploy) voltava sempre pra tela inicial
 _TELAS_URL = {"home", "rpa_hub", "rpa_nfgo", "conciliacao", "historico", "gerenciar_clientes",
-              "gerenciar_escritorios", "gerenciar_usuarios"}
+              "gerenciar_escritorios", "gerenciar_usuarios", "logs_acesso"}
 if "tela" not in st.session_state:
     _tela_url = st.query_params.get("tela", "home")
     st.session_state["tela"] = _tela_url if _tela_url in _TELAS_URL else "home"
@@ -2121,6 +2402,13 @@ if st.session_state.get("tela") == "gerenciar_usuarios":
         st.session_state["tela"] = "home"
     else:
         _tela_gerenciar_usuarios()
+        st.stop()
+
+if st.session_state.get("tela") == "logs_acesso":
+    if st.session_state.get("papel_usuario") not in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
+        st.session_state["tela"] = "home"
+    else:
+        _tela_logs_acesso()
         st.stop()
 
 if st.session_state.get("tela") == "historico":

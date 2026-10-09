@@ -39,7 +39,7 @@ import hashlib
 import os
 import re
 import secrets
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import psycopg
 from psycopg.rows import dict_row
@@ -127,6 +127,22 @@ def garantir_schema() -> None:
                 expira_em TIMESTAMPTZ NOT NULL
             )
         """)
+        # apps_favoritos: ids de app (_APPS_HOME) marcados com estrela pelo
+        # proprio usuario na tela inicial ("Meus Favoritos").
+        conn.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS apps_favoritos TEXT[]")
+        # acessos: registro de cada entrada no Hub (login por senha) e no
+        # CRM de Marketing pelo card - tela "Logs de Acesso". Sem FK pro
+        # usuario: o log continua valendo mesmo se ele for removido depois.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS acessos (
+                id BIGSERIAL PRIMARY KEY,
+                usuario TEXT NOT NULL,
+                escritorio_id TEXT,
+                origem TEXT NOT NULL,
+                quando TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS acessos_quando ON acessos (quando DESC)")
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +528,48 @@ def definir_apps_usuario(usuario: str, apps: list) -> None:
             (apps or None, usuario),
         )
         conn.commit()
+
+
+def definir_favoritos(usuario: str, apps: list) -> None:
+    """Apps marcados com estrela pelo usuario na tela inicial."""
+    with _conectar() as conn:
+        conn.execute(
+            "UPDATE usuarios SET apps_favoritos = %s WHERE usuario = %s",
+            (apps or None, usuario),
+        )
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Logs de acesso
+# ---------------------------------------------------------------------------
+
+def registrar_acesso(usuario: str, escritorio_id: Optional[str], origem: str) -> None:
+    """Grava uma entrada no log de acessos. Falha aqui nunca bloqueia o
+    login - o log e informativo."""
+    try:
+        with _conectar() as conn:
+            conn.execute(
+                "INSERT INTO acessos (usuario, escritorio_id, origem) VALUES (%s, %s, %s)",
+                (usuario, escritorio_id, origem),
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+
+def listar_acessos(escritorio_id: Optional[str] = None, limite: int = 500) -> List[dict]:
+    """Ultimos acessos, mais recentes primeiro. escritorio_id None = todos
+    (so pra super_admin_global)."""
+    with _conectar() as conn:
+        if escritorio_id is None:
+            return conn.execute(
+                "SELECT * FROM acessos ORDER BY quando DESC LIMIT %s", (limite,)
+            ).fetchall()
+        return conn.execute(
+            "SELECT * FROM acessos WHERE escritorio_id = %s ORDER BY quando DESC LIMIT %s",
+            (escritorio_id, limite),
+        ).fetchall()
 
 
 def definir_pasta_raiz_local(escritorio_id: str, pasta: str) -> None:
