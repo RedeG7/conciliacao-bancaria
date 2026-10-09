@@ -105,11 +105,35 @@ route('/melhorar', async (main, p, alive) => {
 // ---------- integrações ----------
 route('/integracoes', async (main, p, alive) => {
   const list = await GET('/api/integrations'); if (!alive()) return;
+  const admin = S.me.user.role === 'admin';
   const chip = s => s === 'ativo' ? '<span class="chip green">Ativo</span>' : s === 'credenciais' ? '<span class="chip amber">Credenciais informadas</span>' : '<span class="chip">Não conectado</span>';
   main.innerHTML = `<div class="page-head"><div class="grow"><h1>Integrações</h1><p>Situação real de cada conexão. Nada aqui é simulado: sem integração configurada, os dados entram por cadastro manual ou importação CSV e <b>não são em tempo real</b>.</p></div></div>
     ${list.map(i => `<div class="card mb"><div class="card-head"><h2>${esc(i.name)}</h2>${chip(i.status)}${i.implemented ? '<span class="chip navy">Implementado no sistema</span>' : '<span class="chip">Estrutura preparada — depende de configuração externa</span>'}</div><div class="card-body">
       <p style="margin-top:0">${esc(i.what)}</p><p class="small"><b>Situação:</b> ${esc(i.statusLabel)}</p>
       <h3 class="mt-s">O que é necessário</h3><ul class="small">${i.needs.map(n => `<li>${esc(n)}</li>`).join('')}</ul><p class="small muted"><b>Custos externos:</b> ${esc(i.cost)}</p>
-      ${i.key === 'form' ? `<details class="small"><summary>Como enviar dados do formulário</summary><p>Envie um <code class="inline">POST</code> para <code class="inline">${esc(location.origin)}/api/webhooks/form</code> com o cabeçalho <code class="inline">X-Webhook-Token</code> e um JSON com: <code class="inline">nome, telefone, email, empresa, cidade, servico, mensagem, origem, campanha, conteudo, utm_source, utm_medium, utm_campaign, utm_content, utm_term</code>. Contatos existentes (mesmo telefone ou e-mail) recebem uma nova interação em vez de um cadastro duplicado.</p></details>` : ''}
+      ${i.key === 'form' ? formBox(i) : ''}
     </div></div>`).join('')}`;
+  const show = token => {
+    const url = `${location.origin}/api/webhooks/form`;
+    $('#form-token-out', main).innerHTML = `<div class="callout"><b>Copie agora — este código não será mostrado de novo.</b><br>
+      Código: <code class="inline">${esc(token)}</code><br>
+      Endereço: <code class="inline">${esc(url)}?token=${esc(token)}</code><br>
+      <span class="small">Ou envie para <code class="inline">${esc(url)}</code> com o cabeçalho <code class="inline">X-Webhook-Token: ${esc(token)}</code>.</span></div>`;
+  };
+  const gen = $('#form-token-gen', main); const off = $('#form-token-off', main);
+  if (gen) gen.onclick = async () => {
+    if (gen.dataset.has === '1' && !(await confirmDlg('Gerar um novo código? O código atual deixa de funcionar e o site precisa ser atualizado.', { ok: 'Gerar novo código' }))) return;
+    const r = await POST('/api/integrations/form-token'); show(r.token); toast('Código do formulário gerado.');
+    gen.dataset.has = '1'; gen.textContent = 'Gerar novo código';
+  };
+  if (off) off.onclick = async () => {
+    if (!(await confirmDlg('Desativar o formulário? Os envios do site deixam de entrar no sistema.', { danger: true, ok: 'Desativar' }))) return;
+    await DEL('/api/integrations/form-token'); toast('Formulário desativado.'); render();
+  };
+  function formBox(i) {
+    const has = i.status === 'ativo';
+    return `${admin ? `<div class="row" style="gap:8px;margin:10px 0"><button class="btn primary sm" id="form-token-gen" data-has="${has ? 1 : 0}">${has ? 'Gerar novo código' : 'Gerar código'}</button>${has ? '<button class="btn sm" id="form-token-off">Desativar</button>' : ''}</div>` : '<p class="small muted">Só administradores geram o código do formulário.</p>'}
+      <div id="form-token-out"></div>
+      <details class="small"><summary>Como enviar dados do formulário</summary><p>Envie um <code class="inline">POST</code> para <code class="inline">${esc(location.origin)}/api/webhooks/form?token=SEU_CÓDIGO</code> (ou com o cabeçalho <code class="inline">X-Webhook-Token</code>) e um JSON com: <code class="inline">nome, telefone, email, empresa, cidade, servico, mensagem, origem, campanha, conteudo, utm_source, utm_medium, utm_campaign, utm_content, utm_term</code>. Contatos existentes (mesmo telefone ou e-mail) recebem uma nova interação em vez de um cadastro duplicado. Os leads entram no escritório dono do código.</p></details>`;
+  }
 });

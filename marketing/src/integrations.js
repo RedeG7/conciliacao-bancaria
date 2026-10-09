@@ -14,17 +14,18 @@ function trackedUrl(c) {
   } catch (e) { return c.url; }
 }
 
-function status(req) {
+function status(req, opts = {}) {
   const env = process.env;
   const has = (...k) => k.every(x => !!env[x]);
-  const formReady = has('FORM_WEBHOOK_TOKEN');
+  // código do escritório (gerado em Integrações) ou, legado, o código único do servidor
+  const formReady = !!opts.formToken || has('FORM_WEBHOOK_TOKEN');
   return [
     {
       key: 'form', name: 'Formulários do site / landing pages (webhook)', implemented: true,
       status: formReady ? 'ativo' : 'nao_conectado',
       statusLabel: formReady ? 'Ativo — aguardando envios' : 'Não conectado',
-      what: 'Recebe envios de formulário em POST /api/webhooks/form, cria ou atualiza o contato (verificando telefone e e-mail), registra a origem com as UTMs e abre uma oportunidade na primeira etapa. Grava sempre nos dados reais.',
-      needs: ['Definir a variável FORM_WEBHOOK_TOKEN no servidor (um código secreto longo).', 'O site ou a ferramenta de formulário precisa enviar os campos para o endereço público do sistema (HTTPS) com o cabeçalho X-Webhook-Token.', 'Opcional: FORM_DEFAULT_OWNER_ID para definir o responsável padrão.'],
+      what: 'Recebe envios de formulário em POST /api/webhooks/form, cria ou atualiza o contato (verificando telefone e e-mail), registra a origem com as UTMs e abre uma oportunidade na primeira etapa. Grava sempre nos dados reais do escritório dono do código.',
+      needs: ['Um administrador gera o código do escritório aqui mesmo (botão "Gerar código") — cada escritório tem o seu, e os leads de cada código entram só nele.', 'O site ou a ferramenta de formulário envia os campos para o endereço do sistema com o código (cabeçalho X-Webhook-Token ou ?token= na URL).'],
       cost: 'Sem custo do sistema. Exige o sistema publicado em um endereço acessível pela internet.',
     },
     {
@@ -59,12 +60,8 @@ function status(req) {
   ];
 }
 
-function receiveForm(req, res, db) {
-  const expected = process.env.FORM_WEBHOOK_TOKEN;
-  if (!expected) return res.status(503).json({ error: 'Integração de formulários não configurada.' });
-  const got = String(req.get('X-Webhook-Token') || req.query.token || '');
-  const a = Buffer.from(sha(got)); const b = Buffer.from(sha(expected));
-  if (!crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Token inválido.' });
+// db: banco do escritório dono do código (o servidor já conferiu o código e escolheu o banco)
+function receiveForm(req, res, db, owner = null) {
   const p = Object.assign({}, req.body || {});
   const g = (...k) => { for (const x of k) if (p[x]) return String(p[x]).trim(); return null; };
   const name = g('nome', 'name'); const phone = g('telefone', 'phone', 'whatsapp'); const email = g('email', 'e-mail');
@@ -72,7 +69,6 @@ function receiveForm(req, res, db) {
   if (!name || (!phone_norm && !email_norm)) return res.status(400).json({ error: 'Envie nome e telefone ou e-mail.' });
   const lookup = (table, col, v) => { if (!v) return null; const r = db.prepare(`SELECT id FROM ${table} WHERE ${/^\d+$/.test(v) ? 'id = ?' : `lower(${col}) = lower(?)`}`).get(/^\d+$/.test(v) ? Number(v) : v); return r ? r.id : null; };
   const now = L.nowIso(); const today = L.today();
-  const owner = process.env.FORM_DEFAULT_OWNER_ID ? Number(process.env.FORM_DEFAULT_OWNER_ID) : null;
   db.exec('BEGIN');
   try {
     let c = db.prepare('SELECT * FROM contacts WHERE (phone_norm IS NOT NULL AND phone_norm = ?) OR (email_norm IS NOT NULL AND email_norm = ?) ORDER BY archived, id LIMIT 1').get(phone_norm || '#', email_norm || '#');
@@ -104,4 +100,4 @@ function receiveForm(req, res, db) {
 }
 function sha(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
 
-module.exports = { trackedUrl, status, receiveForm };
+module.exports = { trackedUrl, status, receiveForm, sha };
