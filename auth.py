@@ -505,6 +505,44 @@ def definir_status_usuario(usuario: str, ativo: bool) -> "tuple[bool, str]":
     return True, ("Usuário ativado." if ativo else "Usuário inativado.")
 
 
+def definir_papel_usuario(usuario: str, papel: str) -> "tuple[bool, str]":
+    """Troca o papel de um usuario ja cadastrado (sem mexer na senha). Ao
+    rebaixar, nunca deixa o app sem super_admin_global nem um escritorio sem
+    nenhum admin - mesma protecao por lock de linha de `remover_usuario`."""
+    if papel not in (PAPEL_USUARIO, PAPEL_ADMIN_ESCRITORIO, PAPEL_SUPER_GLOBAL):
+        return False, "Papel inválido."
+    with _conectar() as conn:
+        with conn.transaction():
+            dados = conn.execute(
+                "SELECT * FROM usuarios WHERE usuario = %s FOR UPDATE", (usuario,)
+            ).fetchone()
+            if not dados:
+                return False, "Usuário não encontrado."
+            atual = dados["papel"]
+            if atual == papel:
+                return True, "Papel já era esse."
+
+            if atual == PAPEL_SUPER_GLOBAL:
+                qtd = conn.execute(
+                    "SELECT COUNT(*) AS n FROM usuarios WHERE papel = %s AND usuario <> %s",
+                    (PAPEL_SUPER_GLOBAL, usuario),
+                ).fetchone()["n"]
+                if qtd == 0:
+                    return False, "Não é possível rebaixar: é o último super admin do sistema."
+            if atual in (PAPEL_SUPER_GLOBAL, PAPEL_ADMIN_ESCRITORIO) and papel == PAPEL_USUARIO:
+                qtd = conn.execute(
+                    """SELECT COUNT(*) AS n FROM usuarios
+                       WHERE papel IN (%s, %s) AND escritorio_id = %s AND usuario <> %s""",
+                    (PAPEL_ADMIN_ESCRITORIO, PAPEL_SUPER_GLOBAL, dados["escritorio_id"], usuario),
+                ).fetchone()["n"]
+                if qtd == 0:
+                    return False, "Não é possível rebaixar: é o único admin deste escritório."
+
+            conn.execute("UPDATE usuarios SET papel = %s WHERE usuario = %s", (papel, usuario))
+
+    return True, "Papel atualizado."
+
+
 # ---------------------------------------------------------------------------
 # Permissao de apps (quais telas o escritorio/usuario ve na tela inicial)
 # ---------------------------------------------------------------------------
