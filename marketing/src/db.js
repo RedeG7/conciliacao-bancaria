@@ -1,8 +1,10 @@
 'use strict';
 // Banco de dados: SQLite embutido no Node (node:sqlite).
 // auth.db  -> usuários, sessões e configurações gerais
-// real.db  -> dados reais da Real 4U
-// demo.db  -> dados fictícios do modo demonstração (separados dos reais)
+// real-<escritorio>.db -> dados reais de cada escritório do Hub (um arquivo por
+//                         escritório: um escritório nunca enxerga os dados de outro)
+// demo-<escritorio>.db -> dados fictícios do modo demonstração, também por escritório
+// real.db / demo.db    -> dados de usuários sem escritório (cadastro antigo, antes do Hub)
 const fs = require('fs');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
@@ -24,28 +26,44 @@ auth.exec(AUTH_SCHEMA);
 try { auth.exec('ALTER TABLE users ADD COLUMN hub_user TEXT'); } catch (e) { /* coluna já existe */ }
 auth.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_hub_user ON users(hub_user)');
 
+// escritório do Hub dono do usuário (ver /sso em server.js) - define qual
+// arquivo de dados ele enxerga
+try { auth.exec('ALTER TABLE users ADD COLUMN office TEXT'); } catch (e) { /* coluna já existe */ }
+
+// id do escritório -> trecho seguro para nome de arquivo
+const officeSlug = office => String(office || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+const dbFile = (mode, office) => (officeSlug(office) ? `${mode}-${officeSlug(office)}.db` : `${mode}.db`);
+
 const dbs = {};
-function dataDb(mode) {
+function dataDb(mode, office) {
   const m = mode === 'demo' ? 'demo' : 'real';
-  if (!dbs[m]) {
-    const db = open(m + '.db');
+  const file = dbFile(m, office);
+  if (!dbs[file]) {
+    const db = open(file);
     db.exec(DATA_SCHEMA);
     seedLists(db);
-    dbs[m] = db;
+    dbs[file] = db;
     if (m === 'demo') {
       const n = db.prepare('SELECT COUNT(*) AS n FROM contacts').get().n;
-      if (!n) require('./demo').seed(db);
+      if (!n) require('./demo').seed(db, office);
     }
   }
-  return dbs[m];
+  return dbs[file];
 }
 
-function resetDemo() {
-  if (dbs.demo) { dbs.demo.close(); delete dbs.demo; }
-  for (const f of ['demo.db', 'demo.db-wal', 'demo.db-shm']) {
+// todos os bancos de dados reais existentes (link curto /r/código procura em todos)
+function allRealDbs() {
+  return fs.readdirSync(DATA_DIR).filter(f => /^real(-[a-z0-9_-]+)?\.db$/.test(f))
+    .map(f => (f === 'real.db' ? dataDb('real', null) : dataDb('real', f.slice(5, -3))));
+}
+
+function resetDemo(office) {
+  const file = dbFile('demo', office);
+  if (dbs[file]) { dbs[file].close(); delete dbs[file]; }
+  for (const f of [file, file + '-wal', file + '-shm']) {
     try { fs.unlinkSync(path.join(DATA_DIR, f)); } catch (e) { /* ignore */ }
   }
-  return dataDb('demo');
+  return dataDb('demo', office);
 }
 
 function tx(db, fn) {
@@ -53,4 +71,4 @@ function tx(db, fn) {
   try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 
-module.exports = { auth, dataDb, resetDemo, tx, DATA_DIR };
+module.exports = { auth, dataDb, allRealDbs, resetDemo, tx, DATA_DIR };

@@ -284,6 +284,15 @@ usuário é criado no CRM: admin do Hub vira Administrador e os demais
 Comercial (dá pra trocar o perfil em Configurações › Usuários). O segredo
 compartilhado `MARKETING_SSO_SECRET` é gerado sozinho no `.env` pelo deploy.
 
+**Dados separados por escritório:** cada escritório do Hub tem o próprio
+arquivo de dados no CRM (`real-<id do escritório>.db` no volume
+`marketing_data`). Quem entra pelo card só vê contatos, campanhas, funil,
+usuários e logo do próprio escritório - igual às outras telas do Hub. O
+escritório vem do usuário do Hub a cada entrada (se ele mudar de escritório
+no Hub, passa a ver o escritório novo). O formulário do site manda o lead
+para o escritório de `?escritorio=<id>` na URL do webhook (ou
+`FORM_DEFAULT_OFFICE` no `.env`).
+
 Se um escritório tiver "apps permitidos" restritos, libere o app
 "Marketing & Comercial" em Gerenciar Escritórios/Usuários para o card
 aparecer.

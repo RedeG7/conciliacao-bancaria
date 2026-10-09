@@ -112,6 +112,9 @@ services:
       - TRUST_PROXY=1
       - FORM_WEBHOOK_TOKEN=${FORM_WEBHOOK_TOKEN:-}
       - FORM_DEFAULT_OWNER_ID=${FORM_DEFAULT_OWNER_ID:-}
+      # escritorio (id no Hub) que recebe os leads do formulario quando o
+      # site nao manda ?escritorio=... na URL do webhook
+      - FORM_DEFAULT_OFFICE=${FORM_DEFAULT_OFFICE:-}
       # login unico vindo do Hub (marketing/src/sso.js) - mesmo segredo da api
       - SSO_SECRET=${MARKETING_SSO_SECRET:-}
       - HUB_URL=https://${DOMINIO}

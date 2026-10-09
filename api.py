@@ -405,6 +405,9 @@ def _bilhete_sso(dados: dict, segredo: str) -> str:
         "sub": dados["usuario"],
         "name": dados.get("nome") or dados["usuario"],
         "admin": dados.get("papel") in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO),
+        # escritorio do usuario: o CRM guarda os dados de cada escritorio
+        # separados e so mostra os do escritorio de quem entrou
+        "office": dados.get("escritorio_id") or "",
         "exp": int(time.time()) + _SSO_VALIDADE_S,
         "jti": secrets.token_urlsafe(16),
     }
