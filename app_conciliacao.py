@@ -602,7 +602,7 @@ def _tela_gerenciar_escritorios() -> None:
             st.markdown("**Usuários deste escritório**")
             if usuarios_do:
                 for uname, udados in usuarios_do.items():
-                    st.write(f"- **{uname}** — {udados.get('nome', uname)} · {udados.get('papel')}")
+                    st.write(f"- **{uname}** — {udados.get('nome', uname)} · {_ROTULO_PAPEL.get(udados.get('papel'), udados.get('papel'))}")
             else:
                 st.caption("Nenhum usuário cadastrado neste escritório.")
 
@@ -621,6 +621,17 @@ def _tela_gerenciar_escritorios() -> None:
                     st.rerun()
                 else:
                     st.error(msg)
+
+
+_ROTULO_PAPEL = {
+    auth.PAPEL_USUARIO: "Usuário",
+    auth.PAPEL_ADMIN_ESCRITORIO: "Admin do escritório",
+    auth.PAPEL_SUPER_GLOBAL: "Super admin (RedeG7)",
+}
+
+
+def _manter_aberto(uname: str) -> None:
+    st.session_state[f"aberto_{uname}"] = True
 
 
 def _tela_gerenciar_usuarios() -> None:
@@ -664,7 +675,7 @@ def _tela_gerenciar_usuarios() -> None:
     with st.form("gerenciar_usuario_form", clear_on_submit=True):
         alvo = st.text_input("Usuário (novo ou existente)")
         nome_completo = st.text_input("Nome completo (opcional)")
-        papel = st.selectbox("Papel", papeis_disponiveis)
+        papel = st.selectbox("Permissão", papeis_disponiveis, format_func=lambda p: _ROTULO_PAPEL.get(p, p))
         nova_senha = st.text_input("Senha (mín. 6 caracteres)", type="password")
         salvar = st.form_submit_button("Salvar", type="primary")
     if salvar:
@@ -704,9 +715,34 @@ def _tela_gerenciar_usuarios() -> None:
             st.session_state.get(f"confirmar_remover_{uname}")
             or st.session_state.get(f"aberto_{uname}")
         )
-        rotulo = f"{dados.get('nome', uname)} (`{uname}`) · {dados.get('papel')} · {status_txt}"
+        papel_txt = _ROTULO_PAPEL.get(dados.get("papel"), dados.get("papel"))
+        rotulo = f"{dados.get('nome', uname)} (`{uname}`) · {papel_txt} · {status_txt}"
         with st.expander(rotulo, expanded=aberto):
-            st.caption(f"Papel: {dados.get('papel')}" + (" · (você)" if voce else ""))
+            st.caption(f"Permissão: {papel_txt}" + (" · (você)" if voce else ""))
+
+            if voce:
+                st.caption("Você não pode alterar a própria permissão.")
+            elif dados.get("papel") == auth.PAPEL_SUPER_GLOBAL and not eh_global:
+                st.caption("Só um super admin pode alterar a permissão deste usuário.")
+            else:
+                _papel_atual = dados.get("papel")
+                _opcoes_papel = list(papeis_disponiveis)
+                if _papel_atual not in _opcoes_papel:
+                    _opcoes_papel.append(_papel_atual)
+                _papel_novo = st.selectbox(
+                    "Permissão do usuário", _opcoes_papel, index=_opcoes_papel.index(_papel_atual),
+                    format_func=lambda p: _ROTULO_PAPEL.get(p, p), key=f"papel_usuario_{uname}",
+                    on_change=_manter_aberto, args=(uname,),
+                )
+                if st.button("Salvar permissão", key=f"salvar_papel_{uname}", disabled=_papel_novo == _papel_atual):
+                    ok, msg = auth.definir_papel_usuario(uname, _papel_novo)
+                    if ok:
+                        st.session_state[f"aberto_{uname}"] = False
+                        _flash("flash_usuario_status", f"✅ {uname}: {msg} Vale a partir do próximo login dele.")
+                        st.rerun()
+                    else:
+                        st.session_state[f"aberto_{uname}"] = True
+                        st.error(msg)
 
             c1, c2 = st.columns(2)
             with c1:
@@ -753,9 +789,11 @@ def _tela_gerenciar_usuarios() -> None:
                 "Apps", options=_ids_apps_escritorio_do_user,
                 format_func=lambda aid: next((a["titulo"] for a in _APPS_HOME if a["id"] == aid), aid),
                 default=_apps_atuais_user, key=f"apps_usuario_{uname}", label_visibility="collapsed",
+                on_change=_manter_aberto, args=(uname,),
             )
             if st.button("Salvar apps permitidos", key=f"salvar_apps_usuario_{uname}"):
                 auth.definir_apps_usuario(uname, _apps_escolhidos_user)
+                st.session_state[f"aberto_{uname}"] = False
                 _flash("flash_usuario_status", "✅ Apps permitidos do usuário atualizados.")
                 st.rerun()
 
