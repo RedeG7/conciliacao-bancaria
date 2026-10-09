@@ -296,6 +296,16 @@ Integrações › Formulários (botão "Gerar código"); o lead enviado com esse
 código entra só naquele escritório. (Legado: `FORM_WEBHOOK_TOKEN` no `.env`,
 com `?escritorio=<id>` ou `FORM_DEFAULT_OFFICE`.)
 
+**Meta Ads:** cada escritório conecta a própria conta em Integrações › Meta
+Ads (ID da conta de anúncios + token de um usuário do sistema do Business
+Manager com `ads_read`). O token fica cifrado no `auth.db` (chave derivada de
+`MARKETING_SSO_SECRET`). Sincroniza sozinho a cada 6 horas (últimos 7 dias;
+`META_SYNC_HOURS` muda o intervalo) e pelo botão "Sincronizar agora" (30 dias).
+
+**Administrador:** é definido no Hub (admin do escritório ou super
+administrador) e vale para a plataforma inteira - no CRM o perfil
+Administrador acompanha o Hub a cada entrada pelo card.
+
 Se um escritório tiver "apps permitidos" restritos, libere o app
 "Marketing & Comercial" em Gerenciar Escritórios/Usuários para o card
 aparecer.

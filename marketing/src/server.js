@@ -7,6 +7,7 @@ const L = require('./logic');
 const A = require('./analytics');
 const integrations = require('./integrations');
 const sso = require('./sso');
+const meta = require('./meta');
 
 const app = express();
 app.disable('x-powered-by');
@@ -130,6 +131,12 @@ app.get('/sso', h((req, res) => {
     auth.prepare('UPDATE users SET office = ? WHERE id = ?').run(office, u.id);
     auth.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
   }
+  // Administrador é definido no Hub (admin do escritório ou super administrador)
+  // e vale para a plataforma inteira: admin no Hub é admin aqui; quem deixou de
+  // ser admin no Hub perde o perfil de administrador (vira Comercial).
+  const roleNow = (auth.prepare('SELECT role FROM users WHERE id = ?').get(u.id) || {}).role;
+  if (p.admin && roleNow !== 'admin') auth.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(u.id);
+  else if (!p.admin && roleNow === 'admin') auth.prepare("UPDATE users SET role = 'comercial' WHERE id = ?").run(u.id);
   // super administrador do Hub vê todos os escritórios e escolhe qual abrir
   const offices = p.global && Array.isArray(p.offices)
     ? p.offices.filter(o => o && typeof o.id === 'string' && o.id).map(o => ({ id: o.id, name: String(o.name || o.id).slice(0, 120) }))
@@ -256,6 +263,9 @@ app.put('/api/users/:id', need('admin'), h((req, res) => {
   const id = Number(req.params.id); const u = auth.prepare('SELECT * FROM users WHERE id = ? AND office IS ?').get(id, req.office); if (!u) throw err(404, 'Usuário não encontrado.');
   const { name, role, active, password } = req.body;
   if (id === req.user.id && (active === 0 || active === false || (role && role !== 'admin'))) throw err(400, 'Você não pode desativar ou rebaixar o próprio acesso.');
+  // usuário vindo do Hub: o perfil Administrador é definido no Hub (Gerenciar Usuários)
+  if (u.hub_user && role && ROLES[role] && role !== u.role && (role === 'admin' || u.role === 'admin'))
+    throw err(400, 'Administrador é definido no Hub (Gerenciar Usuários › papel do usuário) e vale para toda a plataforma.');
   if (name) auth.prepare('UPDATE users SET name = ? WHERE id = ?').run(name.trim(), id);
   if (role && ROLES[role]) auth.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, id);
   if (active !== undefined) { auth.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, id); if (!active) auth.prepare('DELETE FROM sessions WHERE user_id = ?').run(id); }
@@ -915,7 +925,22 @@ app.get('/api/export/:entity', h((req, res) => {
 // ---------- auditoria e integrações ----------
 app.get('/api/audit', need('admin'), h((req, res) => res.json(req.db.prepare('SELECT * FROM audit ORDER BY at DESC, id DESC LIMIT 500').all())));
 app.get('/api/integrations', h((req, res) => res.json(integrations.status(req, {
-  formToken: !!auth.prepare('SELECT 1 FROM settings WHERE key = ?').get(formTokenKey(req.office)) }))));
+  formToken: !!auth.prepare('SELECT 1 FROM settings WHERE key = ?').get(formTokenKey(req.office)),
+  meta: meta.publicConfig(req.office) }))));
+// Meta Ads do escritório: conectar (token + conta), sincronizar agora e desconectar
+app.post('/api/integrations/meta', need('admin'), h(async (req, res) => {
+  try {
+    const r = await meta.connect(req.office, (req.body || {}).account_id, (req.body || {}).token);
+    audit(req, 'conectou Meta Ads', 'integrações', null, { conta: meta.normAccount(req.body.account_id) }); res.json(r);
+  } catch (e) { throw err(400, e.message); }
+}));
+app.post('/api/integrations/meta/sync', need('admin', 'marketing'), h(async (req, res) => {
+  try { const r = await meta.syncOffice(req.office, Number((req.body || {}).days) || 30); audit(req, 'sincronizou Meta Ads', 'integrações', null, r); res.json(r); }
+  catch (e) { throw err(400, e.message); }
+}));
+app.delete('/api/integrations/meta', need('admin'), h((req, res) => {
+  meta.removeConfig(req.office); audit(req, 'desconectou Meta Ads', 'integrações'); res.json({ ok: true });
+}));
 // código do formulário do escritório: gerar/trocar (o anterior deixa de valer) e desativar.
 // O código só aparece na resposta da geração; o sistema guarda apenas o hash.
 app.post('/api/integrations/form-token', need('admin'), h((req, res) => {
