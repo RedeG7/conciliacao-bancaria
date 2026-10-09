@@ -408,9 +408,21 @@ def _bilhete_sso(dados: dict, segredo: str) -> str:
         # escritorio do usuario: o CRM guarda os dados de cada escritorio
         # separados e so mostra os do escritorio de quem entrou
         "office": dados.get("escritorio_id") or "",
+    }
+    escritorios = auth.carregar_escritorios()
+    payload["office_name"] = escritorios.get(payload["office"], {}).get("nome", payload["office"])
+    if dados.get("papel") == auth.PAPEL_SUPER_GLOBAL:
+        # super administrador ve todos os escritorios no CRM e escolhe qual
+        # abrir (igual aos outros modulos do Hub)
+        payload["global"] = True
+        payload["offices"] = sorted(
+            ({"id": eid, "name": e.get("nome", eid)} for eid, e in escritorios.items()),
+            key=lambda o: o["name"].lower(),
+        )
+    payload.update({
         "exp": int(time.time()) + _SSO_VALIDADE_S,
         "jti": secrets.token_urlsafe(16),
-    }
+    })
     corpo = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     assinatura = hmac.new(segredo.encode(), corpo.encode(), hashlib.sha256).digest()
     return corpo + "." + base64.urlsafe_b64encode(assinatura).decode().rstrip("=")

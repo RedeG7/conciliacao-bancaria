@@ -274,3 +274,9 @@ code.inline { background: var(--line-2); padding: 1px 6px; border-radius: 4px; f
 }
 .content:has(.board) { max-width: none; }
 .t th.center { text-align: center; }
+
+/* escritório em uso (login único do Hub) */
+.office-name {margin-top:8px; font-size:12px; opacity:.8;}
+.office-pick {display:flex; flex-direction:column; gap:4px; margin-top:10px; font-size:11px; opacity:.9;}
+.office-pick select {width:100%; padding:6px 8px; border-radius:8px; border:1px solid rgba(255,255,255,.25); background:rgba(255,255,255,.08); color:inherit; font-size:13px;}
+.office-pick option {color:#111;}

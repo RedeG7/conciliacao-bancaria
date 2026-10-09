@@ -289,7 +289,9 @@ arquivo de dados no CRM (`real-<id do escritório>.db` no volume
 `marketing_data`). Quem entra pelo card só vê contatos, campanhas, funil,
 usuários e logo do próprio escritório - igual às outras telas do Hub. O
 escritório vem do usuário do Hub a cada entrada (se ele mudar de escritório
-no Hub, passa a ver o escritório novo). O formulário do site manda o lead
+no Hub, passa a ver o escritório novo). O **super administrador** do Hub vê todos
+os escritórios: no menu do CRM aparece "Escritório" para escolher qual
+abrir (igual aos outros módulos do Hub). O formulário do site manda o lead
 para o escritório de `?escritorio=<id>` na URL do webhook (ou
 `FORM_DEFAULT_OFFICE` no `.env`).
 

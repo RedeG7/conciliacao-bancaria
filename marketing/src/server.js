@@ -38,6 +38,17 @@ function setCookie(res, val, maxAge) {
 }
 const h = fn => (req, res, next) => { try { const r = fn(req, res, next); if (r && r.then) r.catch(next); } catch (e) { next(e); } };
 const err = L.httpErr;
+// escritórios que o usuário pode ver: o próprio, ou - super administrador do
+// Hub - a lista que o Hub mandou no login único
+function userOffices(u) {
+  if (u.is_global) { try { const l = JSON.parse(u.offices || '[]'); if (Array.isArray(l) && l.length) return l; } catch (e) { /* lista inválida */ } }
+  return u.office ? [{ id: u.office, name: u.office_name || u.office }] : [];
+}
+// escritório em uso na sessão: o escolhido (só super administrador) ou o do usuário
+function sessionOffice(u, s) {
+  if (u.is_global && s && s.office && userOffices(u).some(o => o.id === s.office)) return s.office;
+  return u.office || null;
+}
 // logo é por escritório (usuários sem escritório usam a chave antiga 'logo')
 const logoKey = office => (office ? 'logo:' + office : 'logo');
 const userName = id => { const u = id && auth.prepare('SELECT name FROM users WHERE id = ?').get(id); return u ? u.name : null; };
@@ -118,8 +129,14 @@ app.get('/sso', h((req, res) => {
     // usuário mudou de escritório no Hub (ou foi criado antes desta separação): segue o Hub
     auth.prepare('UPDATE users SET office = ? WHERE id = ?').run(office, u.id);
     auth.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
-    u = auth.prepare('SELECT * FROM users WHERE id = ?').get(u.id);
   }
+  // super administrador do Hub vê todos os escritórios e escolhe qual abrir
+  const offices = p.global && Array.isArray(p.offices)
+    ? p.offices.filter(o => o && typeof o.id === 'string' && o.id).map(o => ({ id: o.id, name: String(o.name || o.id).slice(0, 120) }))
+    : [];
+  auth.prepare('UPDATE users SET office_name = ?, is_global = ?, offices = ? WHERE id = ?')
+    .run(String(p.office_name || office).slice(0, 120), offices.length ? 1 : 0, offices.length ? JSON.stringify(offices) : null, u.id);
+  u = auth.prepare('SELECT * FROM users WHERE id = ?').get(u.id);
   if (!u.active) return ssoErro(res, 403, 'Seu usuário está inativo no Marketing. Fale com o administrador.');
   startSession(req, res, u, 'login pelo Hub');
   res.redirect(302, '/');
@@ -128,7 +145,8 @@ function sessionUser(req) {
   const t = cookies(req)[COOKIE];
   const s = t && auth.prepare('SELECT * FROM sessions WHERE token_hash = ?').get(sha(t));
   if (!s || s.expires_at < L.nowIso()) return null;
-  return auth.prepare('SELECT id, office FROM users WHERE id = ?').get(s.user_id) || null;
+  const u = auth.prepare('SELECT id, office, office_name, is_global, offices FROM users WHERE id = ?').get(s.user_id);
+  return u ? { id: u.id, office: sessionOffice(u, s) } : null;
 }
 app.get('/api/logo', h((req, res) => {
   const su = sessionUser(req);
@@ -160,16 +178,32 @@ app.use('/api', (req, res, next) => {
   const t = cookies(req)[COOKIE];
   const s = t && auth.prepare('SELECT * FROM sessions WHERE token_hash = ?').get(sha(t));
   if (!s || s.expires_at < L.nowIso()) return next(err(401, 'Sessão expirada. Entre novamente.'));
-  const u = auth.prepare('SELECT id, name, email, role, active, must_change, office FROM users WHERE id = ?').get(s.user_id);
+  const u = auth.prepare('SELECT id, name, email, role, active, must_change, office, office_name, is_global, offices FROM users WHERE id = ?').get(s.user_id);
   if (!u || !u.active) return next(err(401, 'Usuário inativo.'));
-  req.user = u; req.office = u.office || null; req.mode = s.mode; req.sessionHash = s.token_hash; req.db = dataDb(s.mode, req.office);
+  req.user = u; req.office = sessionOffice(u, s); req.mode = s.mode; req.sessionHash = s.token_hash; req.db = dataDb(s.mode, req.office);
   // proteção CSRF: toda alteração precisa do cabeçalho enviado pela aplicação
   if (req.method !== 'GET' && req.get('X-R4U') !== '1') return next(err(403, 'Requisição bloqueada.'));
   next();
 });
 
 app.post('/api/logout', h((req, res) => { auth.prepare('DELETE FROM sessions WHERE token_hash = ?').run(req.sessionHash); setCookie(res, '', 0); res.json({ ok: true }); }));
-app.get('/api/me', h((req, res) => res.json({ user: req.user, mode: req.mode, roleLabel: ROLES[req.user.role] })));
+app.get('/api/me', h((req, res) => {
+  const offices = userOffices(req.user);
+  const cur = offices.find(o => o.id === req.office);
+  const { offices: _o, is_global: _g, ...user } = req.user;
+  res.json({ user, mode: req.mode, roleLabel: ROLES[req.user.role],
+    office: req.office ? { id: req.office, name: cur ? cur.name : req.office } : null,
+    offices: req.user.is_global ? offices : null });
+}));
+// super administrador do Hub troca o escritório que está vendo
+app.post('/api/office', h((req, res) => {
+  if (!req.user.is_global) throw err(403, 'Só o super administrador do Hub escolhe o escritório.');
+  const office = String((req.body || {}).office || '');
+  if (!userOffices(req.user).some(o => o.id === office)) throw err(400, 'Escritório inválido.');
+  auth.prepare('UPDATE sessions SET office = ? WHERE token_hash = ?').run(office, req.sessionHash);
+  dataDb(req.mode, office); audit({ user: req.user, db: dataDb('real', office) }, 'abriu o escritório', 'escritório', null, { office });
+  res.json({ ok: true });
+}));
 app.post('/api/me/password', h((req, res) => {
   const { current, password } = req.body || {};
   const u = auth.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
