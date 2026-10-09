@@ -501,10 +501,7 @@ def _tela_gerenciar_escritorios() -> None:
     cadastrados: criar, renomear, ver quantos usuários cada um tem, e
     excluir. Fica separada do painel de usuários porque mexe no tenant em
     si, não em quem tem acesso a ele."""
-    st.title("🌐 Gerenciar Escritórios")
-    if st.button("← Início"):
-        st.session_state["tela"] = "home"
-        st.rerun()
+    _cabecalho_app("🌐", "Gerenciar Escritórios", "Escritórios clientes do Hub, apps liberados e licenças.")
     st.caption("Cada escritório é isolado: usuários de um não enxergam nem gerenciam os de outro.")
     st.divider()
 
@@ -632,10 +629,7 @@ def _tela_gerenciar_usuarios() -> None:
     definitivamente. super_admin_global enxerga e gerencia usuários de
     TODOS os escritórios (escolhendo qual ver); admin_escritorio só
     enxerga/gerencia o próprio (isolamento entre escritórios-cliente)."""
-    st.title("👥 Gerenciar Usuários")
-    if st.button("← Início"):
-        st.session_state["tela"] = "home"
-        st.rerun()
+    _cabecalho_app("👥", "Gerenciar Usuários", "Usuários, papéis e aplicativos permitidos (permissões).")
     st.divider()
 
     eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
@@ -787,10 +781,7 @@ def _tela_historico() -> None:
     sempre restrito ao PROPRIO escritorio (historico.listar ja filtra por
     escritorio_id); so super_admin_global tem o seletor pra escolher
     QUALQUER escritorio, por ser quem administra o hub inteiro."""
-    st.title("📜 Histórico de Lançamentos")
-    if st.button("← Início"):
-        st.session_state["tela"] = "home"
-        st.rerun()
+    _cabecalho_app("📜", "Histórico de Lançamentos", "Conciliações já geradas pelo escritório.")
     st.divider()
 
     eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
@@ -832,10 +823,7 @@ def _tela_gerenciar_clientes() -> None:
     super_admin_global escolhe qual escritório ver; os demais só enxergam
     o próprio. Remoção fica restrita a admin_escritorio/super_admin_global
     pra evitar que alguém apague por engano um código usado por outros."""
-    st.title("🏢 Gerenciar Clientes")
-    if st.button("← Início"):
-        st.session_state["tela"] = "home"
-        st.rerun()
+    _cabecalho_app("🏢", "Gerenciar Clientes", "Empresas clientes usadas na Conciliação Bancária.")
     st.divider()
 
     eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
@@ -1640,7 +1628,8 @@ def _bloco_programa_nfgo(escritorio_id: str) -> None:
     )
 
 
-def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs") -> None:
+def _tela_rpa_hub(modulos: list | None = None, titulo: str = "Hub de RPAs", icone: str = "🤖",
+                  subtitulo: str = "Fechamento mensal de REST e DMS no ISS Web.") -> None:
     """Hub de RPAs do escritório: cadastro de credenciais de procurador,
     upload de planilha e acompanhamento das execuções, por módulo (ISS Web
     é o primeiro — novos módulos só entram em rpa/registry.py, esta tela
@@ -1656,11 +1645,7 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "🤖 Hub de RPAs")
     super_admin_global tem o seletor pra escolher QUALQUER escritório
     (mesmo padrão de _tela_historico/_tela_gerenciar_clientes), pra poder
     dar suporte sem precisar logar como o cliente."""
-    st.title(titulo)
-    if st.button("← Início"):
-        st.session_state["tela"] = "home"
-        st.rerun()
-    st.divider()
+    _cabecalho_app(icone, titulo, subtitulo)
 
     eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
     if eh_global:
@@ -2118,6 +2103,11 @@ def _estilo_home() -> None:
         [class*="st-key-embreve_"] button {background:#1e293b !important; color:#94a3b8 !important; border:none !important; border-radius:10px !important;}
         [class*="st-key-fav_"] button {background:transparent !important; border:none !important; font-size:20px !important; color:#facc15 !important; padding:0 !important;}
         .hh-empty {color:#93a1b7; padding:24px 4px;}
+        .hh-crumb {font-size:12.5px; color:#6f7f97; margin-bottom:8px;}
+        .hh-page {display:flex; align-items:center; gap:16px;}
+        .hh-page-ic {width:60px; height:60px; border-radius:14px; flex:none; display:flex; align-items:center;
+            justify-content:center; font-size:30px; background:rgba(34,224,138,0.12); border:1px solid rgba(34,224,138,0.25);}
+        .hh-page-t {font-size:30px; font-weight:800; color:#f5f7fa; line-height:1.15;}
         .hh-footer {text-align:center; margin-top:34px; font-size:11px; letter-spacing:2.5px; color:#4a5773;}
         </style>
         <div class="hh-decor">
@@ -2141,43 +2131,52 @@ def _iniciais(nome: str) -> str:
     return (partes[0][0] + partes[-1][0]).upper()
 
 
-def _sidebar_home(papel_usuario: str) -> None:
-    """Menu lateral da tela inicial (Hub APP)."""
+_TELAS_APPS = {"conciliacao", "rpa_hub", "rpa_nfgo", "historico", "gerenciar_clientes"}
+
+
+def _sidebar_hub(papel_usuario: str) -> None:
+    """Menu lateral do Hub APP, o mesmo em todas as telas (a tela atual
+    fica destacada). Telas com opcoes proprias (ex.: Parametros da
+    Conciliacao) acrescentam o conteudo delas abaixo deste menu."""
+    tela = st.session_state.get("tela", "home")
     filtro = st.session_state.get("home_filtro", "todos")
 
     def _nav(rotulo, chave, icone, ativo=False):
         return st.button(rotulo, key=f"nav_{chave}", icon=icone, use_container_width=True,
                          type="primary" if ativo else "secondary")
 
+    def _ir_home(filtro_novo):
+        st.session_state["tela"] = "home"
+        st.session_state["home_filtro"] = filtro_novo
+        st.rerun()
+
     with st.sidebar:
         st.markdown('<div class="hh-brand"><div class="ic">🧩</div><div class="tx">Hub <span>APP</span></div></div>',
                     unsafe_allow_html=True)
-        if _nav("Início", "inicio", ":material/home:", ativo=filtro == "todos"):
-            st.session_state["home_filtro"] = "todos"
+        if _nav("Início", "inicio", ":material/home:", ativo=tela == "home" and filtro == "todos"):
             st.session_state.pop("home_busca", None)
-            st.session_state["home_depto"] = _FILTRO_TODOS_DEPTOS
-            st.rerun()
-        if _nav("Aplicativos", "aplicativos", ":material/apps:"):
-            st.session_state["home_filtro"] = "todos"
-            st.rerun()
-        if _nav("Meus Favoritos", "favoritos", ":material/star:", ativo=filtro == "favoritos"):
-            st.session_state["home_filtro"] = "favoritos"
-            st.rerun()
+            st.session_state.pop("home_depto", None)
+            _ir_home("todos")
+        if _nav("Aplicativos", "aplicativos", ":material/apps:", ativo=tela in _TELAS_APPS):
+            _ir_home("todos")
+        if _nav("Meus Favoritos", "favoritos", ":material/star:", ativo=tela == "home" and filtro == "favoritos"):
+            _ir_home("favoritos")
 
         if papel_usuario in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
             st.markdown('<div class="hh-sep"></div><div class="hh-sec">Administração</div>', unsafe_allow_html=True)
             if papel_usuario == auth.PAPEL_SUPER_GLOBAL and _nav(
-                    "Gerenciar Escritórios", "escritorios", ":material/domain:"):
+                    "Gerenciar Escritórios", "escritorios", ":material/domain:",
+                    ativo=tela == "gerenciar_escritorios"):
                 st.session_state["tela"] = "gerenciar_escritorios"
                 st.rerun()
-            if _nav("Gerenciar Usuários", "usuarios", ":material/group:"):
+            if _nav("Gerenciar Usuários", "usuarios", ":material/group:", ativo=tela == "gerenciar_usuarios"):
                 st.session_state["tela"] = "gerenciar_usuarios"
                 st.rerun()
             # permissoes de app ficam na tela de usuarios (apps permitidos)
             if _nav("Permissões", "permissoes", ":material/verified_user:"):
                 st.session_state["tela"] = "gerenciar_usuarios"
                 st.rerun()
-            if _nav("Logs de Acesso", "logs", ":material/list:"):
+            if _nav("Logs de Acesso", "logs", ":material/list:", ativo=tela == "logs_acesso"):
                 st.session_state["tela"] = "logs_acesso"
                 st.rerun()
 
@@ -2189,6 +2188,32 @@ def _sidebar_home(papel_usuario: str) -> None:
             _fazer_logout()
 
 
+def _chip_usuario_html() -> str:
+    nome = st.session_state.get("nome_usuario") or st.session_state.get("usuario_logado") or ""
+    papel = st.session_state.get("papel_usuario")
+    return (f'<div class="hh-user"><div class="hh-avatar">{html.escape(_iniciais(nome))}</div>'
+            f'<div><div class="n">{html.escape(nome)}</div>'
+            f'<div class="p">{html.escape(_PAPEL_ROTULO.get(papel, papel or ""))}</div></div></div>')
+
+
+def _cabecalho_app(icone: str, titulo: str, subtitulo: str = "") -> None:
+    """Cabecalho padrao das telas do Hub (mesmo visual da tela inicial):
+    caminho Inicio › tela, icone, titulo, subtitulo e o usuario logado."""
+    c_tit, c_user = st.columns([3, 1.1])
+    with c_tit:
+        st.markdown(
+            f'<div class="hh-crumb">Início &nbsp;›&nbsp; {html.escape(titulo)}</div>'
+            f'<div class="hh-page"><div class="hh-page-ic">{icone}</div>'
+            f'<div><div class="hh-page-t">{html.escape(titulo)}</div>'
+            + (f'<div class="hh-sub">{html.escape(subtitulo)}</div>' if subtitulo else "")
+            + '</div></div>',
+            unsafe_allow_html=True,
+        )
+    with c_user:
+        st.markdown(_chip_usuario_html(), unsafe_allow_html=True)
+    st.markdown('<div class="hh-sep" style="margin:14px 0 18px"></div>', unsafe_allow_html=True)
+
+
 def _tela_home() -> None:
     """Tela inicial (Hub APP): menu lateral, saudacao, numeros, busca/filtro
     por departamento e um card por aplicativo. Cada app novo so precisa de
@@ -2196,8 +2221,6 @@ def _tela_home() -> None:
     papel_usuario = st.session_state.get("papel_usuario")
     usuario = st.session_state.get("usuario_logado")
     nome = st.session_state.get("nome_usuario") or usuario
-    _estilo_home()
-    _sidebar_home(papel_usuario)
 
     col_esq, col_dir = st.columns([3, 1.1])
     with col_esq:
@@ -2210,9 +2233,7 @@ def _tela_home() -> None:
         )
     with col_dir:
         st.markdown(
-            f'<div class="hh-user"><div class="hh-avatar">{html.escape(_iniciais(nome))}</div>'
-            f'<div><div class="n">{html.escape(nome)}</div>'
-            f'<div class="p">{html.escape(_PAPEL_ROTULO.get(papel_usuario, papel_usuario or ""))}</div></div></div>'
+            _chip_usuario_html() +
             '<div class="hh-tagline"><p>Conectando<br/>pessoas, processos<br/>e resultados.</p>'
             '<div class="hh-underline"></div></div>',
             unsafe_allow_html=True,
@@ -2328,10 +2349,7 @@ def _tela_logs_acesso() -> None:
     """Ultimos acessos (login no Hub e entrada no Marketing pelo card).
     super_admin_global ve todos os escritorios; admin de escritorio so o
     proprio."""
-    if st.button("← Início"):
-        st.session_state["tela"] = "home"
-        st.rerun()
-    st.title("📜 Logs de Acesso")
+    _cabecalho_app("📜", "Logs de Acesso", "Entradas no Hub e no Marketing & Comercial.")
     global_ = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
     linhas = auth.listar_acessos(None if global_ else st.session_state.get("escritorio_id"))
     if not linhas:
@@ -2386,6 +2404,9 @@ if "tela" not in st.session_state:
 if st.session_state["tela"] in _TELAS_URL and st.query_params.get("tela") != st.session_state["tela"]:
     st.query_params["tela"] = st.session_state["tela"]
 
+_estilo_home()
+_sidebar_hub(st.session_state.get("papel_usuario"))
+
 if st.session_state.get("tela") == "home":
     _tela_home()
     st.stop()
@@ -2438,7 +2459,8 @@ if st.session_state.get("tela") == "rpa_nfgo":
         st.rerun()
     _tela_rpa_hub(
         modulos=[m for m, info in rpa_registry.MODULOS.items() if info.get("app_home") == "rpa_nfgo"],
-        titulo="🧾 RPA NF GO",
+        titulo="RPA NF GO", icone="🧾",
+        subtitulo="Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO.",
     )
     st.stop()
 
@@ -2454,26 +2476,14 @@ if st.session_state.get("tela") == "conciliacao":
     # permissao antes de renderizar).
 
 with st.sidebar:
-    st.caption(f"👤 {st.session_state.get('nome_usuario')} · {st.session_state.get('papel_usuario')}")
-    st.caption(f"🏢 {st.session_state.get('escritorio_nome')}")
-    csb1, csb2 = st.columns(2)
-    with csb1:
-        if st.button("Trocar senha", use_container_width=True):
-            st.session_state["mostrar_trocar_senha"] = True
-            st.rerun()
-    with csb2:
-        if st.button("Sair", use_container_width=True):
-            _fazer_logout()
-    if st.button("🏠 Início", use_container_width=True):
-        st.session_state["tela"] = "home"
-        st.rerun()
-    if st.button("🏢 Gerenciar Clientes", use_container_width=True):
+    st.markdown('<div class="hh-sep"></div><div class="hh-sec">Conciliação Bancária</div>', unsafe_allow_html=True)
+    if st.button("Gerenciar Clientes", key="nav_clientes", icon=":material/business:", use_container_width=True):
         st.session_state["tela"] = "gerenciar_clientes"
         st.rerun()
-    if st.button("📜 Histórico de Lançamentos", use_container_width=True):
+    if st.button("Histórico de Lançamentos", key="nav_historico", icon=":material/history:", use_container_width=True):
         st.session_state["tela"] = "historico"
         st.rerun()
-    st.divider()
+    st.markdown('<div class="hh-sep"></div>', unsafe_allow_html=True)
 
 def _resetar_empresa() -> None:
     """Limpa os arquivos e parametros preenchidos, pra comecar a
@@ -2521,13 +2531,12 @@ def _resetar_lancamento() -> None:
         st.session_state[f"radio_modo_arquivos_{_seq_novo}"] = _modo_atual
 
 
+_cabecalho_app("🏦", "Conciliação Bancária Automatizada",
+               "Extrato/fluxo de caixa × razão contábil × balancete → espelho + arquivo de importação Domínio")
 _titulo_col, _reset_col = st.columns([5, 1.4])
 with _titulo_col:
-    st.title("🏦 Conciliação Bancária Automatizada")
-    st.caption(f"{st.session_state.get('escritorio_nome')} · "
-               "Extrato/fluxo de caixa × razão contábil × balancete → espelho + arquivo de importação Domínio")
+    st.caption(f"🏢 {st.session_state.get('escritorio_nome')}")
 with _reset_col:
-    st.write("")
     if st.button(
         "🆕 Novo lançamento", use_container_width=True, key="btn_nova_empresa_topo",
         help="Limpa arquivos, parâmetros e cache, pra começar a conciliação de outra empresa do zero.",

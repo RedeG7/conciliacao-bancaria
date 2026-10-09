@@ -1,0 +1,8 @@
+# Tema escuro do Hub APP (mesma identidade da tela de login e da tela
+# inicial) - vale para todas as telas e widgets do Streamlit.
+[theme]
+base = "dark"
+primaryColor = "#22e08a"
+backgroundColor = "#0b1220"
+secondaryBackgroundColor = "#111a2c"
+textColor = "#e6edf6"
