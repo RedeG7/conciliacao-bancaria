@@ -280,3 +280,8 @@ code.inline { background: var(--line-2); padding: 1px 6px; border-radius: 4px; f
 .office-pick {display:flex; flex-direction:column; gap:4px; margin-top:10px; font-size:11px; opacity:.9;}
 .office-pick select {width:100%; padding:6px 8px; border-radius:8px; border:1px solid rgba(255,255,255,.25); background:rgba(255,255,255,.08); color:inherit; font-size:13px;}
 .office-pick option {color:#111;}
+
+/* menu mais alto que a tela: o topo (nome do escritório + seletor) e a lista
+   não podem ser espremidos - a barra lateral rola em vez de sobrepor */
+.sidebar > .brand, .sidebar > .nav, .sidebar > .foot { flex-shrink: 0; }
+.brand .wordmark { line-height: 1.2; overflow-wrap: anywhere; font-size: 18px; }
