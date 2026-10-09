@@ -1952,12 +1952,14 @@ _APPS_HOME = [
         "id": "marketing",
         "icone": "📣",
         "titulo": "Marketing & Comercial",
-        "descricao": "CRM da Real 4U: campanhas, conteúdos, contatos, funil, propostas, vendas e indicadores. Abre em outra aba, com login próprio.",
+        "descricao": "CRM da Real 4U: campanhas, conteúdos, contatos, funil, propostas, vendas e indicadores. Abre em outra aba, já logado.",
         "tela": None,
         # app separado (pasta marketing/, servico "marketing" do
-        # docker-compose), no subdominio DOMINIO_MARKETING - o card so
-        # leva pra la. Sem a variavel, fica "Em breve".
-        "url": f"https://{os.environ['DOMINIO_MARKETING']}" if os.environ.get("DOMINIO_MARKETING") else None,
+        # docker-compose), no subdominio DOMINIO_MARKETING - o card passa
+        # pela API do Hub (/api/sso/marketing, ver api.py), que entra no
+        # CRM direto com o usuario ja logado aqui. Sem a variavel, fica
+        # "Em breve".
+        "url": "/api/sso/marketing" if os.environ.get("DOMINIO_MARKETING") else None,
     },
 ]
 

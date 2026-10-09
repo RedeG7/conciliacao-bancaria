@@ -20,6 +20,9 @@ const { AUTH_SCHEMA, DATA_SCHEMA, seedLists } = require('./schema');
 
 const auth = open('auth.db');
 auth.exec(AUTH_SCHEMA);
+// login único vindo do Hub (ver src/sso.js): liga o usuário daqui ao usuário do Hub
+try { auth.exec('ALTER TABLE users ADD COLUMN hub_user TEXT'); } catch (e) { /* coluna já existe */ }
+auth.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_hub_user ON users(hub_user)');
 
 const dbs = {};
 function dataDb(mode) {

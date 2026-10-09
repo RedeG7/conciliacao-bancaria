@@ -55,6 +55,10 @@ services:
     environment:
       - DATABASE_URL=postgresql://conciliacao:${POSTGRES_PASSWORD}@db:5432/conciliacao
       - RPA_ENC_KEY=${RPA_ENC_KEY}
+      # login unico no CRM de Marketing (/api/sso/marketing em api.py) -
+      # o segredo e gerado sozinho no .env pelo deploy (deploy.yml)
+      - DOMINIO_MARKETING=${DOMINIO_MARKETING:-mkt.redeg7.com}
+      - MARKETING_SSO_SECRET=${MARKETING_SSO_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -108,6 +112,9 @@ services:
       - TRUST_PROXY=1
       - FORM_WEBHOOK_TOKEN=${FORM_WEBHOOK_TOKEN:-}
       - FORM_DEFAULT_OWNER_ID=${FORM_DEFAULT_OWNER_ID:-}
+      # login unico vindo do Hub (marketing/src/sso.js) - mesmo segredo da api
+      - SSO_SECRET=${MARKETING_SSO_SECRET:-}
+      - HUB_URL=https://${DOMINIO}
     volumes:
       - marketing_data:/data
     expose:

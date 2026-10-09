@@ -276,6 +276,14 @@ Ativar (uma vez só):
 5. Acesse `https://mkt.redeg7.com` e crie o administrador do CRM no
    primeiro acesso (depois, Configurações › Usuários para a equipe).
 
+**Login único:** quem está logado no Hub e clica no card entra direto no
+CRM, sem senha. O card passa por `/api/sso/marketing` (api.py), que confere
+a sessão do Hub e manda um bilhete assinado de 60s para
+`https://mkt.redeg7.com/sso` (`marketing/src/sso.js`). No primeiro acesso o
+usuário é criado no CRM: admin do Hub vira Administrador e os demais
+Comercial (dá pra trocar o perfil em Configurações › Usuários). O segredo
+compartilhado `MARKETING_SSO_SECRET` é gerado sozinho no `.env` pelo deploy.
+
 Se um escritório tiver "apps permitidos" restritos, libere o app
 "Marketing & Comercial" em Gerenciar Escritórios/Usuários para o card
 aparecer.

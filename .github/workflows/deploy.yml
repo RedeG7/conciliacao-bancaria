@@ -136,6 +136,12 @@ jobs:
             else
               echo "Imagem real4u-marketing nao acessivel - CRM de Marketing nao ligado"
             fi
+            # segredo do login unico Hub -> CRM de Marketing (api.py e
+            # marketing/src/sso.js): gerado uma vez e guardado no .env
+            if ! grep -q '^MARKETING_SSO_SECRET=.' .env; then
+              sed -i '/^MARKETING_SSO_SECRET=/d' .env
+              printf '\nMARKETING_SSO_SECRET=%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
+            fi
             docker compose pull
             docker compose up -d
             # Caddyfile e bind mount - scp-action troca o arquivo via
