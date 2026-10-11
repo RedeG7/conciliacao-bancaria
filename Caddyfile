@@ -15,3 +15,11 @@
 {$DOMINIO_MARKETING:mkt.redeg7.com} {
 	reverse_proxy marketing:3000
 }
+
+# Honorarios Control (repo RedeG7/honorariocontrol, em /opt/honorarios).
+# O container do app entra na rede deste compose com o alias
+# "honorarios-app" (deploy/compose.proxy-hub.yml daquele repo). Se ele
+# estiver fora do ar, so este site responde 502; o Hub nao e afetado.
+{$DOMINIO_HONORARIOS:honorarios.redeg7.com} {
+	reverse_proxy honorarios-app:5000
+}
