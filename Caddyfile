@@ -23,3 +23,9 @@
 {$DOMINIO_HONORARIOS:honorarios.redeg7.com} {
 	reverse_proxy honorarios-app:5000
 }
+
+# Dominio oficial do Honorarios Control (mesmo app acima). O "www" e
+# redirecionado para o dominio sem www pelo proprio app.
+honorarioscontrol.com.br, www.honorarioscontrol.com.br {
+	reverse_proxy honorarios-app:5000
+}
