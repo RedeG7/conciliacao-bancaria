@@ -442,3 +442,25 @@ def sso_marketing(sessao_token: Optional[str] = Cookie(None)):
         return HTMLResponse("Seu usuário não tem acesso ao Marketing & Comercial.", status_code=403)
     auth.registrar_acesso(dados["usuario"], dados.get("escritorio_id"), "Marketing & Comercial")
     return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Login unico no Honorarios Control (honorarioscontrol.com.br)
+# ---------------------------------------------------------------------------
+# Mesmo bilhete do Marketing, com segredo proprio (HONORARIOS_SSO_SECRET). O
+# Honorarios entra na conta cujo usuario ou e-mail e igual ao usuario do Hub
+# (server/auth.ts, rota /sso, no repo RedeG7/honorariocontrol).
+
+@app.get("/api/sso/honorarios")
+def sso_honorarios(sessao_token: Optional[str] = Cookie(None)):
+    dominio = os.environ.get("DOMINIO_HONORARIOS", "")
+    segredo = os.environ.get("HONORARIOS_SSO_SECRET", "")
+    if not dominio or not segredo:
+        return HTMLResponse("Acesso ao Honorários Control ainda não configurado no servidor.", status_code=503)
+    dados = auth.validar_sessao(sessao_token or "")
+    if not dados:
+        return RedirectResponse("/", status_code=302)
+    if not _app_permitido(dados, "honorarios"):
+        return HTMLResponse("Seu usuário não tem acesso ao Honorários Control.", status_code=403)
+    auth.registrar_acesso(dados["usuario"], dados.get("escritorio_id"), "Honorários Control")
+    return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)
