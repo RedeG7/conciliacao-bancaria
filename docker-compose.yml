@@ -31,6 +31,9 @@ services:
       # endereco do CRM de Marketing - o card dele na home do Hub abre
       # esse link (o CRM tem login proprio, nao embute no Hub)
       - DOMINIO_MARKETING=${DOMINIO_MARKETING:-mkt.redeg7.com}
+      # Honorarios Control (repo RedeG7/honorariocontrol, em /opt/honorarios)
+      # - o card dele na home passa por /api/sso/honorarios (api.py)
+      - DOMINIO_HONORARIOS=${DOMINIO_HONORARIOS:-honorarioscontrol.com.br}
     depends_on:
       db:
         condition: service_healthy
@@ -59,6 +62,10 @@ services:
       # o segredo e gerado sozinho no .env pelo deploy (deploy.yml)
       - DOMINIO_MARKETING=${DOMINIO_MARKETING:-mkt.redeg7.com}
       - MARKETING_SSO_SECRET=${MARKETING_SSO_SECRET:-}
+      # login unico no Honorarios Control (/api/sso/honorarios) - o segredo
+      # e gerado no .env pelo deploy do repo honorariocontrol (mesmo VPS)
+      - DOMINIO_HONORARIOS=${DOMINIO_HONORARIOS:-honorarioscontrol.com.br}
+      - HONORARIOS_SSO_SECRET=${HONORARIOS_SSO_SECRET:-}
     depends_on:
       db:
         condition: service_healthy

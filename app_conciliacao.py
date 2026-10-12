@@ -1992,6 +1992,18 @@ _APPS_HOME = [
         # "Em breve".
         "url": "/api/sso/marketing" if os.environ.get("DOMINIO_MARKETING") else None,
     },
+    {
+        "id": "honorarios",
+        "icone": "💼",
+        "titulo": "Honorários Control",
+        "descricao": "Honorários, clientes, cobranças, boletos e NFS-e. Abre em outra aba, já logado.",
+        "departamento": "Financeiro",
+        "tela": None,
+        # app separado (repo RedeG7/honorariocontrol), no dominio
+        # DOMINIO_HONORARIOS - entra ja logado via /api/sso/honorarios
+        # (api.py), na conta com o mesmo usuario/e-mail do Hub.
+        "url": "/api/sso/honorarios" if os.environ.get("DOMINIO_HONORARIOS") else None,
+    },
 ]
 
 
