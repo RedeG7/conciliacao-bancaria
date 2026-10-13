@@ -1018,7 +1018,8 @@ app.delete('/api/integrations/form-token', need('admin'), h((req, res) => {
 
 // ---------- erros e arquivos estáticos ----------
 app.use('/api', (req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
-app.use(express.static(path.join(__dirname, '..', 'public'), { index: 'index.html', maxAge: 0 }));
+// no-cache: o navegador sempre confere se há versão nova das telas após cada deploy
+app.use(express.static(path.join(__dirname, '..', 'public'), { index: 'index.html', setHeaders: res => res.setHeader('Cache-Control', 'no-cache') }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
 // eslint-disable-next-line no-unused-vars
 app.use((e, req, res, next) => {

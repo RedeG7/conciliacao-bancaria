@@ -123,13 +123,31 @@ async function moveOpp(opp, stageId) {
 }
 function nextActionModal(opp) {
   const members = (S.boot.users || []).filter(u => u.active);
-  formModal({ title: 'Próxima ação', fields: [{ name: 'next_action', label: 'Próxima ação', required: true, value: opp.next_action, full: true }, { name: 'next_action_date', label: 'Prazo', type: 'date', required: true, value: opp.next_action_date && opp.next_action_date >= today() ? opp.next_action_date : today() },
+  // etapa do funil: escolher uma etapa preenche a próxima ação e, ao salvar, move a oportunidade para ela
+  const stages = listOf('stages', opp.stage_id).filter(x => x.kind === 'open');
+  const canMove = can('admin', 'comercial') && opp.status === 'open' && stages.length;
+  const fields = [];
+  if (canMove) fields.push({ name: 'stage_id', label: 'Etapa do funil', type: 'select', full: true, options: opts(stages, opp.stage_id), help: 'Ao salvar, a oportunidade vai para a etapa escolhida.' });
+  fields.push({ name: 'next_action', label: 'Próxima ação', required: true, value: opp.next_action, full: true }, { name: 'next_action_date', label: 'Prazo', type: 'date', required: true, value: opp.next_action_date && opp.next_action_date >= today() ? opp.next_action_date : today() },
     { name: 'next_action_time', label: 'Hora', type: 'time', value: opp.next_action_time || '' },
-    { name: 'next_action_owner_id', label: 'Membro que vai executar', type: 'select', full: true, options: opts(members, opp.next_action_owner_id || opp.owner_id, { empty: 'Ninguém em específico' }), help: 'O membro escolhido recebe um aviso de que há uma demanda para ele(a).' }],
+    { name: 'next_action_owner_id', label: 'Membro que vai executar', type: 'select', full: true, options: opts(members, opp.next_action_owner_id || opp.owner_id, { empty: 'Ninguém em específico' }), help: 'O membro escolhido recebe um aviso de que há uma demanda para ele(a).' });
+  formModal({ title: 'Próxima ação', fields,
+    onMount: m => {
+      const f = m.el.querySelector('form'); if (!f.elements.stage_id) return;
+      const names = stages.map(x => x.name);
+      f.elements.stage_id.onchange = () => {
+        const st = stages.find(x => String(x.id) === f.elements.stage_id.value); const na = f.elements.next_action;
+        if (st && (!na.value.trim() || names.includes(na.value.trim()) || na.value.trim() === opp.next_action)) na.value = st.name;
+      };
+    },
     onSubmit: async v => {
+      const stageId = Number(v.stage_id); delete v.stage_id;
+      let moved = null;
+      if (stageId && stageId !== opp.stage_id) { await POST(`/api/opportunities/${opp.id}/move`, { stage_id: stageId }); moved = byId('stages', stageId); }
       await PUT('/api/opportunities/' + opp.id, v);
       const m = members.find(u => String(u.id) === String(v.next_action_owner_id));
-      toast(m && m.id !== S.me.user.id ? `Próxima ação atualizada. ${m.name} foi avisado(a).` : 'Próxima ação atualizada.'); if (drawerState) loadDrawer(); dataChanged();
+      const msg = [moved ? `Movida para "${moved.name}".` : '', 'Próxima ação atualizada.', m && m.id !== S.me.user.id ? `${m.name} foi avisado(a).` : ''].filter(Boolean).join(' ');
+      toast(msg); if (drawerState) loadDrawer(); dataChanged();
     } });
 }
 function wonModal(opp, stageId) {
