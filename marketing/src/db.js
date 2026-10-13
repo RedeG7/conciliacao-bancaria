@@ -43,6 +43,7 @@ auth.exec(`CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, office TEXT, mode TEXT NOT NULL DEFAULT 'real',
   title TEXT NOT NULL, body TEXT, contact_id INTEGER, opp_id INTEGER, created_by INTEGER, created_by_name TEXT,
   created_at TEXT NOT NULL, read_at TEXT)`);
+try { auth.exec('ALTER TABLE notifications ADD COLUMN task_id INTEGER'); } catch (e) { /* coluna já existe */ }
 auth.exec('CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, read_at)');
 
 // id do escritório -> trecho seguro para nome de arquivo
@@ -58,7 +59,7 @@ function dataDb(mode, office) {
     db.exec(DATA_SCHEMA);
     // membro escolhido para executar a próxima ação (pode ser diferente do responsável)
     // e o horário do prazo (HH:MM, opcional)
-    for (const sql of ['ALTER TABLE opportunities ADD COLUMN next_action_owner_id INTEGER', 'ALTER TABLE opportunities ADD COLUMN next_action_time TEXT']) {
+    for (const sql of ['ALTER TABLE opportunities ADD COLUMN next_action_owner_id INTEGER', 'ALTER TABLE opportunities ADD COLUMN next_action_time TEXT', 'ALTER TABLE tasks ADD COLUMN due_time TEXT']) {
       try { db.exec(sql); } catch (e) { /* coluna já existe */ }
     }
     seedLists(db);

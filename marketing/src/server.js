@@ -541,7 +541,7 @@ function oppPayload(b, allowClosed) {
   for (const k of ['estimated_value', 'one_time_value', 'monthly_value']) if (o[k] !== undefined) o[k] = L.num(o[k]);
   if (o.contract_months !== undefined) o.contract_months = o.contract_months ? Number(o.contract_months) : null;
   for (const k of ['next_action_date', 'retake_date', 'meeting_scheduled_at', 'meeting_done_at', 'proposal_sent_at', 'first_contact_at', 'won_at', 'lost_at']) if (o[k] !== undefined && o[k] !== null) o[k] = L.parseDateBR(o[k]);
-  if (o.next_action_time !== undefined) o.next_action_time = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(o.next_action_time || '')) ? o.next_action_time : null;
+  if (o.next_action_time !== undefined) o.next_action_time = hhmm(o.next_action_time);
   if (o.urgency && !['alta', 'media', 'baixa', 'desconhecida'].includes(o.urgency)) o.urgency = 'desconhecida';
   return o;
 }
@@ -624,10 +624,7 @@ app.put('/api/opportunities/:id', h((req, res) => {
     if (status === 'qualificado' && !cur.qualified_at) o.qualified_at = L.today();
     if (status !== 'qualificado') o.qualified_at = null;
   }
-  if (o.next_action_owner_id) {
-    const m = auth.prepare('SELECT id FROM users WHERE id = ? AND active = 1 AND office IS ?').get(o.next_action_owner_id, req.office);
-    if (!m) throw err(400, 'Membro inválido para a próxima ação.');
-  }
+  if (o.next_action_owner_id) checkMember(req, o.next_action_owner_id, 'Membro inválido para a próxima ação.');
   o.updated_at = L.nowIso(); update(db, 'opportunities', cur.id, o);
   const changed = Object.keys(o).filter(k => k !== 'updated_at' && String(cur[k] ?? '') !== String(o[k] ?? ''));
   audit(req, 'editou oportunidade', 'oportunidade', cur.id, { campos: changed });
@@ -703,16 +700,24 @@ app.post('/api/tasks', h((req, res) => {
   const title = clean(req.body.title); if (!title) throw err(400, 'Descreva a tarefa.');
   let contactId = idOrNull(req.body.contact_id); const oppId = idOrNull(req.body.opp_id);
   if (oppId && !contactId) contactId = get(req.db, 'opportunities', oppId).contact_id;
-  const id = insert(req.db, 'tasks', { title, due_date: L.parseDateBR(req.body.due_date), owner_id: idOrNull(req.body.owner_id) || req.user.id, opp_id: oppId, contact_id: contactId, created_by: req.user.id, created_at: L.nowIso() });
-  audit(req, 'criou tarefa', contactId ? 'contato' : 'tarefa', contactId || id, { title }); res.json({ id });
+  const ownerId = idOrNull(req.body.owner_id) || req.user.id;
+  if (ownerId !== req.user.id) checkMember(req, ownerId, 'Responsável inválido para a tarefa.');
+  const id = insert(req.db, 'tasks', { title, due_date: L.parseDateBR(req.body.due_date), due_time: hhmm(req.body.due_time), owner_id: ownerId, opp_id: oppId, contact_id: contactId, created_by: req.user.id, created_at: L.nowIso() });
+  audit(req, 'criou tarefa', contactId ? 'contato' : 'tarefa', contactId || id, { title });
+  notifyTask(req, get(req.db, 'tasks', id)); res.json({ id });
 }));
 app.put('/api/tasks/:id', h((req, res) => {
   const t = get(req.db, 'tasks', req.params.id); const u = {};
   if (req.body.title !== undefined) u.title = clean(req.body.title);
+  if (u.title === null) throw err(400, 'Descreva a tarefa.');
   if (req.body.due_date !== undefined) u.due_date = L.parseDateBR(req.body.due_date);
-  if (req.body.owner_id !== undefined) u.owner_id = idOrNull(req.body.owner_id);
+  if (req.body.due_time !== undefined) u.due_time = hhmm(req.body.due_time);
+  if (req.body.owner_id !== undefined) { u.owner_id = idOrNull(req.body.owner_id); if (u.owner_id && u.owner_id !== t.owner_id) checkMember(req, u.owner_id, 'Responsável inválido para a tarefa.'); }
   if (req.body.done !== undefined) u.done_at = req.body.done ? L.nowIso() : null;
-  update(req.db, 'tasks', t.id, u); audit(req, req.body.done ? 'concluiu tarefa' : 'alterou tarefa', t.contact_id ? 'contato' : 'tarefa', t.contact_id || t.id, { title: t.title }); res.json({ ok: true });
+  update(req.db, 'tasks', t.id, u); audit(req, req.body.done ? 'concluiu tarefa' : 'alterou tarefa', t.contact_id ? 'contato' : 'tarefa', t.contact_id || t.id, { title: t.title });
+  const changed = ['owner_id', 'title', 'due_date', 'due_time'].some(k => u[k] !== undefined && String(u[k] ?? '') !== String(t[k] ?? ''));
+  if (changed) notifyTask(req, get(req.db, 'tasks', t.id));
+  res.json({ ok: true });
 }));
 app.delete('/api/tasks/:id', h((req, res) => { const t = get(req.db, 'tasks', req.params.id); req.db.prepare('DELETE FROM tasks WHERE id = ?').run(t.id); audit(req, 'excluiu tarefa', 'tarefa', t.id, { title: t.title }); res.json({ ok: true }); }));
 
@@ -891,14 +896,28 @@ app.get('/api/analytics/losses', h((req, res) => res.json(A.losses(req.db, req.q
 app.get('/api/analytics/attribution', h((req, res) => res.json(A.attribution(req.db, req.query))));
 app.get('/api/analytics/improve', h((req, res) => res.json(A.improve(req.db, req.query))));
 // ---------- avisos de demanda (pop-up para o membro escolhido) ----------
+const hhmm = v => (/^([01]\d|2[0-3]):[0-5]\d$/.test(String(v || '')) ? String(v) : null);
+// membro escolhido precisa ser usuário ativo do mesmo escritório
+function checkMember(req, id, msg) {
+  if (!auth.prepare('SELECT id FROM users WHERE id = ? AND active = 1 AND office IS ?').get(id, req.office)) throw err(400, msg);
+}
+const prazoTxt = (d, t) => (d ? ' — prazo ' + d.split('-').reverse().join('/') + (t ? ' às ' + t : '') : '');
+function notify(req, userId, title, body, ref) {
+  const info = auth.prepare('INSERT INTO notifications (user_id, office, mode, title, body, contact_id, opp_id, task_id, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run(userId, req.office ?? null, req.mode, title, body, ref.contact_id || null, ref.opp_id || null, ref.task_id || null, req.user.id, req.user.name, L.nowIso());
+  pushTo(userId, { id: Number(info.lastInsertRowid) });
+}
 function notifyDemand(req, o) {
   const c = req.db.prepare('SELECT name FROM contacts WHERE id = ?').get(o.contact_id) || {};
-  const prazo = o.next_action_date ? ' — prazo ' + o.next_action_date.split('-').reverse().join('/') + (o.next_action_time ? ' às ' + o.next_action_time : '') : '';
-  const info = auth.prepare('INSERT INTO notifications (user_id, office, mode, title, body, contact_id, opp_id, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
-    .run(o.next_action_owner_id, req.office ?? null, req.mode, 'Nova demanda para você',
-      `${o.next_action || 'Próxima ação'}${prazo}${c.name ? ' · ' + c.name : ''}${o.title ? ' (' + o.title + ')' : ''}`,
-      o.contact_id, o.id, req.user.id, req.user.name, L.nowIso());
-  pushTo(o.next_action_owner_id, { id: Number(info.lastInsertRowid) });
+  notify(req, o.next_action_owner_id, 'Nova demanda para você',
+    `${o.next_action || 'Próxima ação'}${prazoTxt(o.next_action_date, o.next_action_time)}${c.name ? ' · ' + c.name : ''}${o.title ? ' (' + o.title + ')' : ''}`,
+    { contact_id: o.contact_id, opp_id: o.id });
+}
+function notifyTask(req, t) {
+  if (!t.owner_id || t.owner_id === req.user.id || t.done_at) return;
+  const c = t.contact_id ? req.db.prepare('SELECT name FROM contacts WHERE id = ?').get(t.contact_id) || {} : {};
+  notify(req, t.owner_id, 'Nova tarefa para você', `${t.title}${prazoTxt(t.due_date, t.due_time)}${c.name ? ' · ' + c.name : ''}`,
+    { contact_id: t.contact_id, opp_id: t.opp_id, task_id: t.id });
 }
 // canal ao vivo (Server-Sent Events): o aviso chega na hora para quem está com o sistema aberto
 const streams = new Map(); // user_id -> Set(res)
@@ -913,7 +932,7 @@ app.get('/api/notifications/stream', (req, res) => {
   req.on('close', () => { clearInterval(ping); const set = streams.get(uid); if (set) { set.delete(res); if (!set.size) streams.delete(uid); } });
 });
 app.get('/api/notifications', h((req, res) => res.json(auth.prepare(
-  'SELECT id, title, body, contact_id, opp_id, created_by_name, created_at FROM notifications WHERE user_id = ? AND office IS ? AND mode = ? AND read_at IS NULL ORDER BY id LIMIT 20')
+  'SELECT id, title, body, contact_id, opp_id, task_id, created_by_name, created_at FROM notifications WHERE user_id = ? AND office IS ? AND mode = ? AND read_at IS NULL ORDER BY id LIMIT 20')
   .all(req.user.id, req.office ?? null, req.mode))));
 app.post('/api/notifications/:id/read', h((req, res) => {
   auth.prepare('UPDATE notifications SET read_at = ? WHERE id = ? AND user_id = ? AND read_at IS NULL').run(L.nowIso(), Number(req.params.id), req.user.id);

@@ -122,8 +122,10 @@ route('/tarefas', async (main, p, alive) => {
     <div class="card" id="list"></div>`;
   $('#sc', main).onclick = e => { const b = e.target.closest('[data-v]'); if (b) { f.scope = b.dataset.v; render(); } };
   $('#ss', main).onclick = e => { const b = e.target.closest('[data-v]'); if (b) { f.status = b.dataset.v; render(); } };
-  $('#new', main).onclick = () => formModal({ title: 'Nova tarefa', fields: [{ name: 'title', label: 'Tarefa', required: true, full: true }, { name: 'due_date', label: 'Prazo', type: 'date', value: today() }, { name: 'owner_id', label: 'Responsável', type: 'select', options: opts(users, S.me.user.id) }],
-    intro: H`<p class="small muted" style="margin-top:0">Para vincular a um contato, crie a tarefa pela ficha do contato.</p>`, onSubmit: async v => { await POST('/api/tasks', v); load(); } });
+  $('#new', main).onclick = () => formModal({ title: 'Nova tarefa', fields: taskFields(users),
+    intro: H`<p class="small muted" style="margin-top:0">Para vincular a um contato, crie a tarefa pela ficha do contato.</p>`, onSubmit: async v => { await POST('/api/tasks', v); taskToast(v, users, 'Tarefa criada.'); load(); } });
+  const editTask = t => formModal({ title: 'Editar tarefa', fields: taskFields(users, t),
+    onSubmit: async v => { await PUT('/api/tasks/' + t.id, v); taskToast(String(v.owner_id) !== String(t.owner_id) || v.title !== t.title || v.due_date !== (t.due_date || '') || v.due_time !== (t.due_time || '') ? v : {}, users, 'Tarefa atualizada.'); load(); refreshAlerts(); } });
   async function load() {
     const rows = await GET('/api/tasks?' + qs(f)); if (!alive()) return;
     const T = today();
@@ -132,9 +134,10 @@ route('/tarefas', async (main, p, alive) => {
       <td style="width:30px"><input type="checkbox" data-done="${t.id}" ${t.done_at ? 'checked' : ''} aria-label="Concluir tarefa"></td>
       <td>${t.done_at ? `<s>${esc(t.title)}</s>` : `<b>${esc(t.title)}</b>`} ${t.overdue ? '<span class="chip red">Atrasada</span>' : ''}</td>
       <td>${t.contact_id ? `<a href="#" data-open-contact="${t.contact_id}" ${t.opp_id ? `data-opp="${t.opp_id}"` : ''}>${esc(t.contact_name || 'Contato')}</a>` : '<span class="muted">—</span>'}</td>
-      <td class="nowrap">${F.date(t.due_date)}</td><td>${esc(t.owner || '')}</td><td class="right"><button class="btn sm danger" data-del="${t.id}">Excluir</button></td></tr>`).join('')}</tbody></table>`).join('')
+      <td class="nowrap">${F.date(t.due_date)}${t.due_time ? ' ' + esc(t.due_time) : ''}</td><td>${esc(t.owner || '')}</td><td class="right nowrap">${t.done_at ? '' : `<button class="btn sm" data-edit="${t.id}">Editar</button> `}<button class="btn sm danger" data-del="${t.id}">Excluir</button></td></tr>`).join('')}</tbody></table>`).join('')
       : '<div class="empty"><b>Nenhuma tarefa.</b>Tudo em dia.</div>';
     $$('[data-done]', main).forEach(c => { c.onchange = async () => { await PUT('/api/tasks/' + c.dataset.done, { done: c.checked }).catch(fail); load(); refreshAlerts(); }; });
+    $$('[data-edit]', main).forEach(b => { b.onclick = () => editTask(rows.find(t => t.id === Number(b.dataset.edit))); });
     $$('[data-del]', main).forEach(b => { b.onclick = async () => { if (await confirmDlg('Excluir esta tarefa?', { danger: true, ok: 'Excluir' })) { await DEL('/api/tasks/' + b.dataset.del).catch(fail); load(); } }; });
   }
   S.refreshPage = load; await load();
