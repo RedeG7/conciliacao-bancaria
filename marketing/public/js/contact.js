@@ -122,8 +122,14 @@ async function moveOpp(opp, stageId) {
   dataChanged(); return r;
 }
 function nextActionModal(opp) {
-  formModal({ title: 'Próxima ação', fields: [{ name: 'next_action', label: 'Próxima ação', required: true, value: opp.next_action, full: true }, { name: 'next_action_date', label: 'Prazo', type: 'date', required: true, value: opp.next_action_date && opp.next_action_date >= today() ? opp.next_action_date : today() }],
-    onSubmit: async v => { await PUT('/api/opportunities/' + opp.id, v); toast('Próxima ação atualizada.'); dataChanged(); } });
+  const members = (S.boot.users || []).filter(u => u.active);
+  formModal({ title: 'Próxima ação', fields: [{ name: 'next_action', label: 'Próxima ação', required: true, value: opp.next_action, full: true }, { name: 'next_action_date', label: 'Prazo', type: 'date', required: true, value: opp.next_action_date && opp.next_action_date >= today() ? opp.next_action_date : today() },
+    { name: 'next_action_owner_id', label: 'Membro que vai executar', type: 'select', options: opts(members, opp.next_action_owner_id || opp.owner_id, { empty: 'Ninguém em específico' }), help: 'O membro escolhido recebe um aviso de que há uma demanda para ele(a).' }],
+    onSubmit: async v => {
+      await PUT('/api/opportunities/' + opp.id, v);
+      const m = members.find(u => String(u.id) === String(v.next_action_owner_id));
+      toast(m && m.id !== S.me.user.id ? `Próxima ação atualizada. ${m.name} foi avisado(a).` : 'Próxima ação atualizada.'); dataChanged();
+    } });
 }
 function wonModal(opp, stageId) {
   return new Promise(res => {
@@ -217,7 +223,7 @@ function tabOpp(body, d, st) {
       <div><div class="small muted">Valor</div><b>${o.status === 'won' ? `${o.one_time_value ? F.brl(o.one_time_value) : ''}${o.monthly_value ? ` ${F.brl(o.monthly_value)}/mês` : ''}` : F.brl(o.estimated_value)}</b></div>
     </div>
     ${o.status === 'open' ? `<div class="mt-s ${late ? 'callout red' : !o.next_action_date ? 'callout' : 'callout navy'}" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <div style="flex:1"><b>Próxima ação:</b> ${esc(o.next_action || 'não definida')} ${o.next_action_date ? `— prazo ${F.date(o.next_action_date)}` : ''} ${late ? '<span class="chip red">Atrasada</span>' : ''}</div>
+      <div style="flex:1"><b>Próxima ação:</b> ${esc(o.next_action || 'não definida')} ${o.next_action_date ? `— prazo ${F.date(o.next_action_date)}` : ''} ${o.next_action_owner ? `— para <b>${esc(o.next_action_owner)}</b>` : ''} ${late ? '<span class="chip red">Atrasada</span>' : ''}</div>
       <button class="btn sm" id="next-btn">Atualizar</button></div>` : ''}
     ${commercial ? `<div class="actions mt-s">${o.status === 'open' ? `<button class="btn sm success" id="won-btn">Marcar como ganha</button><button class="btn sm danger" id="lost-btn">Marcar como perdida</button>` : `<button class="btn sm" id="reopen-btn">Reabrir oportunidade</button>`}</div>` : '<p class="small muted mt-s">Perfil Marketing: visualização e edição de informações; a movimentação de etapas é feita pelo comercial.</p>'}
   </div>
