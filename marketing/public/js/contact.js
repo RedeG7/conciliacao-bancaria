@@ -121,6 +121,16 @@ async function moveOpp(opp, stageId) {
   toast(`Movida para "${st.name}".`, { action: { label: 'Atualizar próxima ação', fn: () => nextActionModal(r) } });
   dataChanged(); return r;
 }
+// campos de tarefa (página Tarefas e ficha do contato): o responsável recebe o aviso pop-up
+function taskFields(users, t = {}) {
+  return [{ name: 'title', label: 'Tarefa', required: true, full: true, placeholder: 'Ex.: Enviar lista de documentos', value: t.title },
+    { name: 'due_date', label: 'Prazo', type: 'date', value: t.id ? t.due_date || '' : today() }, { name: 'due_time', label: 'Hora', type: 'time', value: t.due_time || '' },
+    { name: 'owner_id', label: 'Responsável (membro)', type: 'select', full: true, options: opts(users, t.owner_id || S.me.user.id), help: 'Se for outra pessoa, ela recebe um aviso de que há uma tarefa para ela.' }];
+}
+function taskToast(v, users, msg) {
+  const m = users.find(u => String(u.id) === String(v.owner_id));
+  toast(m && m.id !== S.me.user.id ? `${msg} ${m.name} foi avisado(a).` : msg);
+}
 function nextActionModal(opp) {
   const members = (S.boot.users || []).filter(u => u.active);
   // etapa do funil: escolher uma etapa preenche a próxima ação e, ao salvar, move a oportunidade para ela
@@ -383,11 +393,11 @@ function tabNotas(body, d, st) {
     <div><div class="card pad"><h3>Nova anotação</h3><textarea class="input mt-s" id="note-txt" rows="3" placeholder="Resumo da conversa, documentos pedidos, combinados…"></textarea>
       <div class="actions mt-s"><button class="btn primary sm" id="note-add">Adicionar anotação</button></div></div>
       <ul class="timeline mt">${d.notes.map(n => `<li>${esc(n.body).replace(/\n/g, '<br>')}<div class="when">${F.dt(n.created_at)} · ${esc(n.user || '')}</div></li>`).join('') || '<li class="muted">Sem anotações.</li>'}</ul></div>
-    <div><div class="card pad"><h3>Nova tarefa</h3><form id="task-form" class="mt-s">${formHtml([{ name: 'title', label: 'Tarefa', required: true, full: true, placeholder: 'Ex.: Enviar lista de documentos' }, { name: 'due_date', label: 'Prazo', type: 'date', value: today() }, { name: 'owner_id', label: 'Responsável', type: 'select', options: opts(users, S.me.user.id) }])}</form>
+    <div><div class="card pad"><h3>Nova tarefa</h3><form id="task-form" class="mt-s">${formHtml(taskFields(users))}</form>
       <div class="actions mt-s"><button class="btn primary sm" id="task-add">Criar tarefa</button></div></div>
-      <div class="card mt"><table class="t"><tbody>${d.tasks.map(t => `<tr><td style="width:28px"><input type="checkbox" data-done="${t.id}" ${t.done_at ? 'checked' : ''} aria-label="Concluir"></td><td>${t.done_at ? `<s>${esc(t.title)}</s>` : esc(t.title)}<div class="small muted">${esc(t.owner || '')}</div></td><td class="nowrap">${F.date(t.due_date)} ${!t.done_at && t.due_date && t.due_date < today() ? '<span class="chip red">Atrasada</span>' : ''}</td></tr>`).join('') || '<tr><td class="muted">Sem tarefas.</td></tr>'}</tbody></table></div></div></div>`;
+      <div class="card mt"><table class="t"><tbody>${d.tasks.map(t => `<tr><td style="width:28px"><input type="checkbox" data-done="${t.id}" ${t.done_at ? 'checked' : ''} aria-label="Concluir"></td><td>${t.done_at ? `<s>${esc(t.title)}</s>` : esc(t.title)}<div class="small muted">${esc(t.owner || '')}</div></td><td class="nowrap">${F.date(t.due_date)}${t.due_time ? ' ' + esc(t.due_time) : ''} ${!t.done_at && t.due_date && t.due_date < today() ? '<span class="chip red">Atrasada</span>' : ''}</td></tr>`).join('') || '<tr><td class="muted">Sem tarefas.</td></tr>'}</tbody></table></div></div></div>`;
   $('#note-add', body).onclick = async () => { const v = $('#note-txt', body).value.trim(); if (!v) return; await POST('/api/notes', { contact_id: d.contact.id, opp_id: st.oppId, body: v }).catch(fail); reloadDrawer(); };
-  $('#task-add', body).onclick = async () => { const v = readForm($('#task-form', body)); if (!v.title) return toast('Descreva a tarefa.', { err: true }); await POST('/api/tasks', Object.assign(v, { contact_id: d.contact.id, opp_id: st.oppId })).catch(fail); reloadDrawer(); };
+  $('#task-add', body).onclick = async () => { const v = readForm($('#task-form', body)); if (!v.title) return toast('Descreva a tarefa.', { err: true }); try { await POST('/api/tasks', Object.assign(v, { contact_id: d.contact.id, opp_id: st.oppId })); taskToast(v, users, 'Tarefa criada.'); } catch (e) { fail(e); } reloadDrawer(); };
   $$('[data-done]', body).forEach(c => { c.onchange = async () => { await PUT('/api/tasks/' + c.dataset.done, { done: c.checked }).catch(fail); reloadDrawer(); }; });
 }
 function tabHist(body, d) {

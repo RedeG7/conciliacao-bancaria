@@ -76,10 +76,10 @@ function showNotification(n, total) {
   const m = modal({ title: '📌 ' + n.title,
     body: H`<p style="font-size:15px;margin:0 0 10px">${n.body || ''}</p>
       <p class="muted" style="margin:0">Enviada por <b>${n.created_by_name || 'Usuário'}</b> em ${F.date(String(n.created_at).slice(0, 10))}${more}</p>`,
-    foot: H`<button class="btn" data-k="ok">Ok, ciente</button><button class="btn primary" data-k="open">Abrir oportunidade</button>`,
+    foot: H`<button class="btn" data-k="ok">Ok, ciente</button><button class="btn primary" data-k="open">${n.task_id ? 'Abrir tarefa' : 'Abrir oportunidade'}</button>`,
     onClose: () => { notifOpen = false; setTimeout(checkNotifications, 400); } });
   m.el.querySelector('[data-k=ok]').onclick = async () => { await read(); m.close(); };
-  m.el.querySelector('[data-k=open]').onclick = async () => { await read(); m.close(); if (n.contact_id) openContact(n.contact_id, n.opp_id); };
+  m.el.querySelector('[data-k=open]').onclick = async () => { await read(); m.close(); if (n.contact_id) openContact(n.contact_id, n.opp_id, n.task_id ? 'notas' : undefined); else if (n.task_id) location.hash = '#/tarefas'; };
 }
 
 function shell() {
