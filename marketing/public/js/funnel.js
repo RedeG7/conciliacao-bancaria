@@ -44,7 +44,7 @@ route('/funil', async (main, p, alive) => {
     const late = c.overdue || c.overdue_tasks > 0;
     let next = '';
     if (c.status === 'open') next = c.no_next ? `<div class="next none"><b>Sem próxima ação</b> — defina o próximo passo</div>`
-      : `<div class="next ${c.overdue ? 'late' : ''}">${c.overdue ? '<b>Atrasada:</b> ' : '<b>Próx.:</b> '}${esc(c.next_action)} · ${F.date(c.next_action_date)}</div>`;
+      : `<div class="next ${c.overdue ? 'late' : ''}">${c.overdue ? '<b>Atrasada:</b> ' : '<b>Próx.:</b> '}${esc(c.next_action)} · ${F.date(c.next_action_date)}${c.next_action_time ? ' ' + esc(c.next_action_time) : ''}</div>`;
     if (c.status === 'lost') next = `<div class="next late">Motivo: ${esc(c.loss_reason || '—')}</div>`;
     if (c.status === 'won') next = `<div class="next" style="background:var(--green-soft);color:var(--green)">Ganha em ${F.date(c.won_at)}</div>`;
     return `<article class="kcard ${late && c.status === 'open' ? 'overdue' : ''}" draggable="${can('admin', 'comercial')}" data-id="${c.id}" tabindex="0" aria-label="${esc(c.name)}">
