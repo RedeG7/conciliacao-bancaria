@@ -404,7 +404,7 @@ function oppDetail(db, o) {
   let answers = {}; try { answers = JSON.parse(o.qual_answers || '{}'); } catch (e) { /* */ }
   const q = L.computeQualification(answers, crit);
   return Object.assign({}, o, {
-    stage: st.name, stage_kind: st.kind, owner: userName(o.owner_id),
+    stage: st.name, stage_kind: st.kind, owner: userName(o.owner_id), next_action_owner: o.next_action_owner_id ? userName(o.next_action_owner_id) : null,
     qual: { auto: q, answers, status: o.qual_status, manual: !!o.qual_manual, note: o.qual_note },
     history: db.prepare('SELECT h.*, a.name AS from_name, b.name AS to_name FROM stage_history h LEFT JOIN stages a ON a.id = h.from_stage_id LEFT JOIN stages b ON b.id = h.to_stage_id WHERE opp_id = ? ORDER BY at DESC, h.id DESC').all(o.id).map(x => Object.assign(x, { user: userName(x.user_id) })),
     proposals: db.prepare('SELECT * FROM proposals WHERE opp_id = ? ORDER BY sent_at DESC').all(o.id),
@@ -533,11 +533,11 @@ app.post('/api/contacts/import/commit', h((req, res) => {
 
 // ---------- oportunidades ----------
 const OPP_FIELDS = ['title', 'service_id', 'owner_id', 'estimated_value', 'need', 'difficulty', 'urgency', 'deadline', 'budget_range', 'source_id', 'campaign_id', 'content_id',
-  'next_action', 'next_action_date', 'objection', 'feedback', 'win_factors', 'loss_detail', 'retake_date', 'qual_note'];
+  'next_action', 'next_action_date', 'next_action_owner_id', 'objection', 'feedback', 'win_factors', 'loss_detail', 'retake_date', 'qual_note'];
 const OPP_ADMIN_FIELDS = ['meeting_scheduled_at', 'meeting_done_at', 'proposal_sent_at', 'first_contact_at', 'one_time_value', 'monthly_value', 'contract_months', 'contract_type', 'won_at', 'lost_at', 'loss_reason_id'];
 function oppPayload(b, allowClosed) {
   const o = pick(b, OPP_FIELDS.concat(allowClosed ? OPP_ADMIN_FIELDS : []));
-  for (const k of ['service_id', 'owner_id', 'source_id', 'campaign_id', 'content_id', 'loss_reason_id']) if (o[k] !== undefined) o[k] = idOrNull(o[k]);
+  for (const k of ['service_id', 'owner_id', 'next_action_owner_id', 'source_id', 'campaign_id', 'content_id', 'loss_reason_id']) if (o[k] !== undefined) o[k] = idOrNull(o[k]);
   for (const k of ['estimated_value', 'one_time_value', 'monthly_value']) if (o[k] !== undefined) o[k] = L.num(o[k]);
   if (o.contract_months !== undefined) o.contract_months = o.contract_months ? Number(o.contract_months) : null;
   for (const k of ['next_action_date', 'retake_date', 'meeting_scheduled_at', 'meeting_done_at', 'proposal_sent_at', 'first_contact_at', 'won_at', 'lost_at']) if (o[k] !== undefined && o[k] !== null) o[k] = L.parseDateBR(o[k]);
@@ -623,10 +623,17 @@ app.put('/api/opportunities/:id', h((req, res) => {
     if (status === 'qualificado' && !cur.qualified_at) o.qualified_at = L.today();
     if (status !== 'qualificado') o.qualified_at = null;
   }
+  if (o.next_action_owner_id) {
+    const m = auth.prepare('SELECT id FROM users WHERE id = ? AND active = 1 AND office IS ?').get(o.next_action_owner_id, req.office);
+    if (!m) throw err(400, 'Membro inválido para a próxima ação.');
+  }
   o.updated_at = L.nowIso(); update(db, 'opportunities', cur.id, o);
   const changed = Object.keys(o).filter(k => k !== 'updated_at' && String(cur[k] ?? '') !== String(o[k] ?? ''));
   audit(req, 'editou oportunidade', 'oportunidade', cur.id, { campos: changed });
-  res.json(oppDetail(db, get(db, 'opportunities', cur.id)));
+  const after = get(db, 'opportunities', cur.id);
+  if (after.next_action_owner_id && after.next_action_owner_id !== req.user.id &&
+      changed.some(k => ['next_action_owner_id', 'next_action', 'next_action_date'].includes(k))) notifyDemand(req, after);
+  res.json(oppDetail(db, after));
 }));
 app.post('/api/opportunities/:id/move', need('admin', 'comercial'), h((req, res) => {
   const db = req.db; const cur = get(db, 'opportunities', req.params.id);
@@ -882,6 +889,23 @@ app.get('/api/analytics/compare', h((req, res) => res.json(A.compare(req.db, req
 app.get('/api/analytics/losses', h((req, res) => res.json(A.losses(req.db, req.query))));
 app.get('/api/analytics/attribution', h((req, res) => res.json(A.attribution(req.db, req.query))));
 app.get('/api/analytics/improve', h((req, res) => res.json(A.improve(req.db, req.query))));
+// ---------- avisos de demanda (pop-up para o membro escolhido) ----------
+function notifyDemand(req, o) {
+  const c = req.db.prepare('SELECT name FROM contacts WHERE id = ?').get(o.contact_id) || {};
+  const prazo = o.next_action_date ? ' — prazo ' + o.next_action_date.split('-').reverse().join('/') : '';
+  auth.prepare('INSERT INTO notifications (user_id, office, mode, title, body, contact_id, opp_id, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    .run(o.next_action_owner_id, req.office ?? null, req.mode, 'Nova demanda para você',
+      `${o.next_action || 'Próxima ação'}${prazo}${c.name ? ' · ' + c.name : ''}${o.title ? ' (' + o.title + ')' : ''}`,
+      o.contact_id, o.id, req.user.id, req.user.name, L.nowIso());
+}
+app.get('/api/notifications', h((req, res) => res.json(auth.prepare(
+  'SELECT id, title, body, contact_id, opp_id, created_by_name, created_at FROM notifications WHERE user_id = ? AND office IS ? AND mode = ? AND read_at IS NULL ORDER BY id LIMIT 20')
+  .all(req.user.id, req.office ?? null, req.mode))));
+app.post('/api/notifications/:id/read', h((req, res) => {
+  auth.prepare('UPDATE notifications SET read_at = ? WHERE id = ? AND user_id = ? AND read_at IS NULL').run(L.nowIso(), Number(req.params.id), req.user.id);
+  res.json({ ok: true });
+}));
+
 app.get('/api/alerts', h((req, res) => res.json(A.alerts(req.db))));
 
 // ---------- pesquisa global ----------

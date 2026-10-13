@@ -37,6 +37,13 @@ for (const sql of ['ALTER TABLE users ADD COLUMN office_name TEXT',
   'ALTER TABLE sessions ADD COLUMN office TEXT']) {
   try { auth.exec(sql); } catch (e) { /* coluna já existe */ }
 }
+// avisos para o usuário (ex.: "nova demanda para você" ao ser escolhido para a
+// próxima ação de uma oportunidade). office/mode = de qual banco de dados veio
+auth.exec(`CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, office TEXT, mode TEXT NOT NULL DEFAULT 'real',
+  title TEXT NOT NULL, body TEXT, contact_id INTEGER, opp_id INTEGER, created_by INTEGER, created_by_name TEXT,
+  created_at TEXT NOT NULL, read_at TEXT)`);
+auth.exec('CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, read_at)');
 
 // id do escritório -> trecho seguro para nome de arquivo
 const officeSlug = office => String(office || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -49,6 +56,8 @@ function dataDb(mode, office) {
   if (!dbs[file]) {
     const db = open(file);
     db.exec(DATA_SCHEMA);
+    // membro escolhido para executar a próxima ação (pode ser diferente do responsável)
+    try { db.exec('ALTER TABLE opportunities ADD COLUMN next_action_owner_id INTEGER'); } catch (e) { /* coluna já existe */ }
     seedLists(db);
     dbs[file] = db;
     if (m === 'demo') {

@@ -50,7 +50,31 @@ async function boot() {
   await refreshBoot();
   shell();
   if (S.me.user.must_change) setTimeout(() => changePassword(true), 300);
-  render(); refreshAlerts();
+  render(); refreshAlerts(); startNotifications();
+}
+
+// ---------- avisos de demanda: pop-up quando alguém escolhe este usuário ----------
+let notifTimer = null, notifOpen = false;
+function startNotifications() {
+  if (!notifTimer) notifTimer = setInterval(checkNotifications, 30000);
+  checkNotifications();
+}
+async function checkNotifications() {
+  if (notifOpen || document.hidden) return;
+  let list; try { list = await GET('/api/notifications'); } catch (e) { return; }
+  if (list && list.length) showNotification(list[0], list.length);
+}
+function showNotification(n, total) {
+  notifOpen = true;
+  const read = () => POST('/api/notifications/' + n.id + '/read', {}).catch(() => {});
+  const more = total > 1 ? ` · mais ${total - 1} aviso(s) na fila` : '';
+  const m = modal({ title: '📌 ' + n.title,
+    body: H`<p style="font-size:15px;margin:0 0 10px">${n.body || ''}</p>
+      <p class="muted" style="margin:0">Enviada por <b>${n.created_by_name || 'Usuário'}</b> em ${F.date(String(n.created_at).slice(0, 10))}${more}</p>`,
+    foot: H`<button class="btn" data-k="ok">Ok, ciente</button><button class="btn primary" data-k="open">Abrir oportunidade</button>`,
+    onClose: () => { notifOpen = false; setTimeout(checkNotifications, 400); } });
+  m.el.querySelector('[data-k=ok]').onclick = async () => { await read(); m.close(); };
+  m.el.querySelector('[data-k=open]').onclick = async () => { await read(); m.close(); if (n.contact_id) openContact(n.contact_id, n.opp_id); };
 }
 
 function shell() {
