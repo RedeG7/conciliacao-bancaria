@@ -56,11 +56,16 @@ async function boot() {
 // ---------- avisos de demanda: pop-up quando alguém escolhe este usuário ----------
 let notifTimer = null, notifOpen = false;
 function startNotifications() {
-  if (!notifTimer) notifTimer = setInterval(checkNotifications, 30000);
+  if (!notifTimer) {
+    notifTimer = setInterval(checkNotifications, 30000);
+    // canal ao vivo: o servidor avisa no momento em que alguém cria a demanda
+    if (window.EventSource) { const es = new EventSource('/api/notifications/stream'); es.addEventListener('demanda', () => checkNotifications()); }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) checkNotifications(); });
+  }
   checkNotifications();
 }
 async function checkNotifications() {
-  if (notifOpen || document.hidden) return;
+  if (notifOpen) return;
   let list; try { list = await GET('/api/notifications'); } catch (e) { return; }
   if (list && list.length) showNotification(list[0], list.length);
 }

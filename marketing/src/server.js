@@ -533,7 +533,7 @@ app.post('/api/contacts/import/commit', h((req, res) => {
 
 // ---------- oportunidades ----------
 const OPP_FIELDS = ['title', 'service_id', 'owner_id', 'estimated_value', 'need', 'difficulty', 'urgency', 'deadline', 'budget_range', 'source_id', 'campaign_id', 'content_id',
-  'next_action', 'next_action_date', 'next_action_owner_id', 'objection', 'feedback', 'win_factors', 'loss_detail', 'retake_date', 'qual_note'];
+  'next_action', 'next_action_date', 'next_action_owner_id', 'next_action_time', 'objection', 'feedback', 'win_factors', 'loss_detail', 'retake_date', 'qual_note'];
 const OPP_ADMIN_FIELDS = ['meeting_scheduled_at', 'meeting_done_at', 'proposal_sent_at', 'first_contact_at', 'one_time_value', 'monthly_value', 'contract_months', 'contract_type', 'won_at', 'lost_at', 'loss_reason_id'];
 function oppPayload(b, allowClosed) {
   const o = pick(b, OPP_FIELDS.concat(allowClosed ? OPP_ADMIN_FIELDS : []));
@@ -541,6 +541,7 @@ function oppPayload(b, allowClosed) {
   for (const k of ['estimated_value', 'one_time_value', 'monthly_value']) if (o[k] !== undefined) o[k] = L.num(o[k]);
   if (o.contract_months !== undefined) o.contract_months = o.contract_months ? Number(o.contract_months) : null;
   for (const k of ['next_action_date', 'retake_date', 'meeting_scheduled_at', 'meeting_done_at', 'proposal_sent_at', 'first_contact_at', 'won_at', 'lost_at']) if (o[k] !== undefined && o[k] !== null) o[k] = L.parseDateBR(o[k]);
+  if (o.next_action_time !== undefined) o.next_action_time = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(o.next_action_time || '')) ? o.next_action_time : null;
   if (o.urgency && !['alta', 'media', 'baixa', 'desconhecida'].includes(o.urgency)) o.urgency = 'desconhecida';
   return o;
 }
@@ -597,7 +598,7 @@ app.get('/api/opportunities', h((req, res) => {
       source: a.source_id ? d.srcById.get(a.source_id).name : (af.source_id ? d.srcById.get(af.source_id).name : 'Não identificado'),
       campaign: a.campaign_id ? (d.campById.get(a.campaign_id) || {}).name : null, content: a.content_id ? (d.contById.get(a.content_id) || {}).title : null,
       owner_id: o.owner_id, estimated_value: o.estimated_value, one_time_value: o.one_time_value, monthly_value: o.monthly_value,
-      stage_entered_at: o.stage_entered_at, next_action: o.next_action, next_action_date: o.next_action_date,
+      stage_entered_at: o.stage_entered_at, next_action: o.next_action, next_action_date: o.next_action_date, next_action_time: o.next_action_time,
       overdue: o.status === 'open' && !!o.next_action_date && o.next_action_date < T, no_next: o.status === 'open' && (!o.next_action || !o.next_action_date),
       overdue_tasks: openTasks.filter(t => t.due_date && t.due_date < T).length, open_tasks: openTasks.length,
       qual_status: o.qual_status, loss_reason: o.loss_reason_id ? (d.reasonById.get(o.loss_reason_id) || {}).name : null, won_at: o.won_at, lost_at: o.lost_at };
@@ -632,7 +633,7 @@ app.put('/api/opportunities/:id', h((req, res) => {
   audit(req, 'editou oportunidade', 'oportunidade', cur.id, { campos: changed });
   const after = get(db, 'opportunities', cur.id);
   if (after.next_action_owner_id && after.next_action_owner_id !== req.user.id &&
-      changed.some(k => ['next_action_owner_id', 'next_action', 'next_action_date'].includes(k))) notifyDemand(req, after);
+      changed.some(k => ['next_action_owner_id', 'next_action', 'next_action_date', 'next_action_time'].includes(k))) notifyDemand(req, after);
   res.json(oppDetail(db, after));
 }));
 app.post('/api/opportunities/:id/move', need('admin', 'comercial'), h((req, res) => {
@@ -892,12 +893,25 @@ app.get('/api/analytics/improve', h((req, res) => res.json(A.improve(req.db, req
 // ---------- avisos de demanda (pop-up para o membro escolhido) ----------
 function notifyDemand(req, o) {
   const c = req.db.prepare('SELECT name FROM contacts WHERE id = ?').get(o.contact_id) || {};
-  const prazo = o.next_action_date ? ' — prazo ' + o.next_action_date.split('-').reverse().join('/') : '';
-  auth.prepare('INSERT INTO notifications (user_id, office, mode, title, body, contact_id, opp_id, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+  const prazo = o.next_action_date ? ' — prazo ' + o.next_action_date.split('-').reverse().join('/') + (o.next_action_time ? ' às ' + o.next_action_time : '') : '';
+  const info = auth.prepare('INSERT INTO notifications (user_id, office, mode, title, body, contact_id, opp_id, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
     .run(o.next_action_owner_id, req.office ?? null, req.mode, 'Nova demanda para você',
       `${o.next_action || 'Próxima ação'}${prazo}${c.name ? ' · ' + c.name : ''}${o.title ? ' (' + o.title + ')' : ''}`,
       o.contact_id, o.id, req.user.id, req.user.name, L.nowIso());
+  pushTo(o.next_action_owner_id, { id: Number(info.lastInsertRowid) });
 }
+// canal ao vivo (Server-Sent Events): o aviso chega na hora para quem está com o sistema aberto
+const streams = new Map(); // user_id -> Set(res)
+function pushTo(userId, data) {
+  for (const res of streams.get(userId) || []) { try { res.write(`event: demanda\ndata: ${JSON.stringify(data)}\n\n`); } catch (e) { /* conexão caiu */ } }
+}
+app.get('/api/notifications/stream', (req, res) => {
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+  res.flushHeaders(); res.write('retry: 5000\n\n');
+  const uid = req.user.id; if (!streams.has(uid)) streams.set(uid, new Set()); streams.get(uid).add(res);
+  const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch (e) { /* */ } }, 25000);
+  req.on('close', () => { clearInterval(ping); const set = streams.get(uid); if (set) { set.delete(res); if (!set.size) streams.delete(uid); } });
+});
 app.get('/api/notifications', h((req, res) => res.json(auth.prepare(
   'SELECT id, title, body, contact_id, opp_id, created_by_name, created_at FROM notifications WHERE user_id = ? AND office IS ? AND mode = ? AND read_at IS NULL ORDER BY id LIMIT 20')
   .all(req.user.id, req.office ?? null, req.mode))));

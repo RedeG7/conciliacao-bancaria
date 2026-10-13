@@ -57,7 +57,10 @@ function dataDb(mode, office) {
     const db = open(file);
     db.exec(DATA_SCHEMA);
     // membro escolhido para executar a próxima ação (pode ser diferente do responsável)
-    try { db.exec('ALTER TABLE opportunities ADD COLUMN next_action_owner_id INTEGER'); } catch (e) { /* coluna já existe */ }
+    // e o horário do prazo (HH:MM, opcional)
+    for (const sql of ['ALTER TABLE opportunities ADD COLUMN next_action_owner_id INTEGER', 'ALTER TABLE opportunities ADD COLUMN next_action_time TEXT']) {
+      try { db.exec(sql); } catch (e) { /* coluna já existe */ }
+    }
     seedLists(db);
     dbs[file] = db;
     if (m === 'demo') {
