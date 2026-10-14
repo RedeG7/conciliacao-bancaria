@@ -408,6 +408,17 @@ def _datas_pela_pagina(win, data_inicial: str, data_final: str, log) -> None:
         log(f"  ⚠️  não consegui colocar as datas pela página: {exc}")
 
 
+def _salvar_diagnostico_calendario(win) -> None:
+    """Árvore da janela com o calendário aberto (Documentos\\RPA NF GO -
+    calendario.txt) - pra ajustar a escolha pelo calendário se ela falhar."""
+    try:
+        destino = Path.home() / "Documents" / "RPA NF GO - calendario.txt"
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text(arvore_da_janela(win, limite=2500), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _preencher_data(win, edit, data: str, log) -> None:
     """Data no formato do portal (01/09/2026). Digitação primeiro (sem Esc,
     que em alguns calendários desfaz o valor; Tab confirma), depois apagando
@@ -714,13 +725,16 @@ def _autenticar(win, log) -> None:
 _ULTIMO_VOLTAR = {"quando": 0.0}
 
 
-def _voltar_se_sem_permissao(win, textos: str, log) -> bool:
+def _voltar_se_sem_permissao(win, textos: str, log, qualquer_mensagem: bool = False) -> bool:
     """Mensagem de Atenção / "Você não tem permissão para acessar esta
-    página" com opção Voltar: clica em Voltar (volta pra tela anterior)."""
+    página" com opção Voltar: clica em Voltar (volta pra tela anterior).
+    qualquer_mensagem=True: em qualquer tela que não seja menu/formulário/
+    histórico/login (chamado só quando nada mais conhecido foi achado)."""
     t = textos.lower()
-    if not ("não tem permissão" in t or "nao tem permissao" in t or "atenção" in t or "atencao" in t):
+    if not qualquer_mensagem and not ("não tem permissão" in t or "nao tem permissao" in t
+                                      or "atenção" in t or "atencao" in t):
         return False
-    if arquivos.sem_resultado(textos) or "consulta de notas" in t:
+    if arquivos.sem_resultado(textos) or "consulta de notas" in t or "histórico de downloads" in t:
         return False  # "Sem Resultados!" também vem com Atenção - é resultado, não erro
     if time.time() - _ULTIMO_VOLTAR["quando"] < 20:  # nunca fica indo e voltando
         return False
@@ -729,7 +743,7 @@ def _voltar_se_sem_permissao(win, textos: str, log) -> bool:
         return False
     _ULTIMO_VOLTAR["quando"] = time.time()
     _acionar(voltar)
-    log("  → a página mostrou Atenção/sem permissão — cliquei em Voltar")
+    log("  → a página mostrou uma mensagem — cliquei em Voltar")
     return True
 
 
@@ -777,7 +791,13 @@ def preparar_portal(log=print, deve_parar=None, timeout: float = TIMEOUT_CHEGAR_
             if _voltar_se_sem_permissao(win, textos, log):
                 time.sleep(2)
                 continue
+            clicou = False
             for textos_botao, rotulo in _PASSOS_ATE_FORMULARIO:
+                if rotulo == "Home":
+                    # tela desconhecida (mensagem qualquer): Voltar antes do Home
+                    if _voltar_se_sem_permissao(win, textos, log, qualquer_mensagem=True):
+                        clicou = True
+                        break
                 el = _achar(win, textos_botao, tipos=("Hyperlink", "Button", "ListItem"))
                 # não repete o mesmo clique antes de a página ter tempo de abrir
                 if el is not None and time.time() - ultimo_clique.get(rotulo, 0) > 10:
@@ -785,9 +805,13 @@ def preparar_portal(log=print, deve_parar=None, timeout: float = TIMEOUT_CHEGAR_
                         _acionar(el)
                         ultimo_clique[rotulo] = time.time()
                         log(f"  → cliquei em '{rotulo}'")
+                        clicou = True
                     except Exception:
                         pass
                     break
+            if clicou:
+                time.sleep(2)
+                continue
         time.sleep(2)
     raise ErroFatal(f"Passaram {int(timeout // 60)} minutos sem chegar na tela 'Consulta de Notas Recebidas'. "
                     "Clique em Iniciar de novo quando ela estiver aberta.")
@@ -831,9 +855,28 @@ def pesquisar(win, data_inicial: str, data_final: str, ie: str, tipo: str, log):
 
     # datas: campos somente leitura com calendário -> primeiro direto na
     # página; digitação/calendário só se ainda não pegou
-    if any(re.sub(r"\D", "", _valor(c)) != re.sub(r"\D", "", d)
-           for c, d in ((periodo[0], data_inicial), (periodo[1], data_final))):
-        _datas_pela_pagina(win, data_inicial, data_final, log)
+    def _datas_ok() -> bool:
+        return all(re.sub(r"\D", "", _valor(c)) == re.sub(r"\D", "", d)
+                   for c, d in ((periodo[0], data_inicial), (periodo[1], data_final)))
+
+    if not _datas_ok():
+        # 1º pelo calendário do próprio campo (como uma pessoa faz - nada
+        # aparece na barra de endereço); só se não der, pela barra
+        for campo, data in ((periodo[0], data_inicial), (periodo[1], data_final)):
+            if re.sub(r"\D", "", _valor(campo)) == re.sub(r"\D", "", data):
+                continue
+            try:
+                _escolher_no_calendario(win, campo, data, log)
+            except ErroParado:
+                raise
+            except Exception as exc:
+                log(f"  (calendário não serviu pra {data}: {exc})")
+                _salvar_diagnostico_calendario(win)
+                break
+            finally:
+                _fechar_calendario(win)
+        if not _datas_ok():
+            _datas_pela_pagina(win, data_inicial, data_final, log)
     win = conectar_janela()
     periodo = _edits_abaixo_do_rotulo(win, r"^\s*Per[ií]odo") or periodo
     for campo, data in ((periodo[0], data_inicial), (periodo[1], data_final)):
