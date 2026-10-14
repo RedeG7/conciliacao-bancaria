@@ -1010,50 +1010,88 @@ def _novo_arquivo_downloads(pastas, referencia: float, nome_esperado: str = ""):
     return candidato if t1 > 0 and t1 == t2 else None
 
 
-def _aceitar_prompt_download(pasta_downloads: Path, log) -> None:
-    """Edge configurado pra perguntar o que fazer com cada download: abre
-    um balão FORA da janela do portal (gravação do escritório: janela sem
-    título, botão "Salvar como" classe "saveAs"). Prefere "Salvar" (vai
-    direto pra Downloads); só com "Salvar como", abre a janela de salvar e
-    grava em Downloads com o nome sugerido."""
+def _achar_rapido(janela, nome: str, tipo: str = "Button"):
+    """Elemento por NOME + tipo com a busca nativa do Windows (UIA
+    FindFirst) - não monta a página inteira elemento por elemento (era o
+    que deixava lento procurar o "Salvar" na janela do Edge)."""
+    try:
+        from pywinauto.controls.uiawrapper import UIAWrapper
+        from pywinauto.uia_defines import IUIA
+        from pywinauto.uia_element_info import UIAElementInfo
+        uia = IUIA()
+        cond = uia.iuia.CreateAndCondition(
+            uia.iuia.CreatePropertyCondition(uia.UIA_dll.UIA_NamePropertyId, nome),
+            uia.iuia.CreatePropertyCondition(uia.UIA_dll.UIA_ControlTypePropertyId, uia.known_control_types[tipo]),
+        )
+        el = janela.element_info.element.FindFirst(uia.tree_scope["descendants"], cond)
+        return UIAWrapper(UIAElementInfo(el)) if el else None
+    except Exception:
+        return None
+
+
+def _janelas_do_edge():
     portal = _janela_portal()
     if portal is None:
-        return
-    botoes = []
+        return []
     try:
-        pid_edge = portal.element_info.process_id
-        principal = portal.handle
-        for janela in Desktop(backend="uia").windows(process=pid_edge):
-            # a janela principal tem a página inteira (milhares de elementos -
-            # era isso que demorava); o balão de download é uma janela à parte
-            if janela.handle == principal:
-                continue
-            try:
-                botoes += janela.descendants(control_type="Button")
-            except Exception:
-                continue
+        pid = portal.element_info.process_id
+        outras = [j for j in Desktop(backend="uia").windows(process=pid) if j.handle != portal.handle]
     except Exception:
-        return
-    salvar = next((b for b in botoes if _texto(b).lower() == "salvar"), None)
-    if salvar is not None:
-        _acionar(salvar)
-        log("  (Edge perguntou onde salvar — cliquei em Salvar)")
-        return
-    salvar_como = next((b for b in botoes if _texto(b).lower() == "salvar como"), None)
-    if salvar_como is None:
-        return
-    _acionar(salvar_como)
+        outras = []
+    return [portal] + outras  # o balão de Downloads pode ser da janela principal ou à parte
+
+
+def _salvar_como_em(pasta: Path, log) -> bool:
+    """Janela "Salvar como" do Windows: grava direto na pasta da empresa
+    (campo Nome = caminho completo + nome sugerido) e confirma substituir
+    se já existir. True se conseguiu."""
     dialogo = _esperar(lambda: next(iter(Desktop(backend="uia").windows(title_re="Salvar como|Save as")), None), 15, 0.5)
     if dialogo is None:
-        return
+        return False
     try:
-        nome = dialogo.child_window(control_type="Edit", found_index=0)
-        sugerido = Path(nome.get_value() or "download.zip").name
-        nome.set_edit_text(str(pasta_downloads / sugerido))
-        nome.type_keys("{ENTER}", set_foreground=False)
-        log(f"  (Edge pediu 'Salvar como' — salvei em Downloads: {sugerido})")
+        campo = None
+        for criterio in ({"auto_id": "1001", "control_type": "Edit"}, {"control_type": "Edit", "found_index": 0}):
+            try:
+                campo = dialogo.child_window(**criterio).wrapper_object()
+                break
+            except Exception:
+                continue
+        if campo is None:
+            return False
+        sugerido = Path(_valor(campo) or "download.zip").name
+        pasta.mkdir(parents=True, exist_ok=True)
+        campo.set_edit_text(str(pasta / sugerido))
+        campo.type_keys("{ENTER}", set_foreground=False)
+        time.sleep(1)
+        # "já existe, deseja substituir?" -> Sim
+        confirma = next(iter(Desktop(backend="uia").windows(title_re="Confirmar Salvar como|Confirm Save As")), None)
+        if confirma is not None:
+            sim = _achar_rapido(confirma, "Sim") or _achar_rapido(confirma, "Yes")
+            if sim is not None:
+                _acionar(sim)
+        log(f"  (Salvar como → {pasta}\\{sugerido})")
+        return True
     except Exception as exc:
-        log(f"  ⚠️  Não consegui responder a janela 'Salvar como' do Edge: {exc} — salve em Downloads.")
+        log(f"  ⚠️  Não consegui responder a janela 'Salvar como': {exc}")
+        return False
+
+
+def _aceitar_prompt_download(pasta_destino: Path, log) -> None:
+    """Edge configurado pra perguntar o que fazer com cada download (balão
+    "O que você quer fazer com ...zip? Abrir / Salvar como / Salvar", preso
+    à janela do Edge): "Salvar como" e grava DIRETO na pasta da empresa;
+    se a janela de salvar não abrir, "Salvar" (vai pra Downloads)."""
+    for janela in _janelas_do_edge():
+        salvar_como = _achar_rapido(janela, "Salvar como")
+        if salvar_como is not None:
+            _acionar(salvar_como)
+            if _salvar_como_em(pasta_destino, log):
+                return
+        salvar = _achar_rapido(janela, "Salvar")
+        if salvar is not None:
+            _acionar(salvar)
+            log("  (Edge perguntou o que fazer — cliquei em Salvar)")
+            return
 
 
 _RX_ARQUIVO_HISTORICO = re.compile(r"(\d+)_(\d{8})_(\d{8})_(\d+)\.zip", re.I)
@@ -1154,7 +1192,7 @@ def _prefixo_pedido(ie: str, data_inicial: str, data_final: str) -> str:
     return "_".join(re.sub(r"\D", "", x) for x in (ie, data_inicial, data_final)).lower() + "_"
 
 
-def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
+def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str, pasta_destino: "Path | None" = None) -> Path:
     """Baixar todos os arquivos > Baixar documentos e eventos > Baixar. O
     portal cria uma linha no "Histórico de Downloads de XMLs" (Aguardando...
     -> Em processamento... -> Concluído); espera a linha DESTE pedido e
@@ -1181,14 +1219,15 @@ def baixar_todos(win, log, ie: str, data_inicial: str, data_final: str) -> Path:
     log("  Pedido de download enviado — aguardando a linha deste pedido no histórico do portal...")
     time.sleep(3)
     try:
-        return _aguardar_e_baixar(prefixo, referencia, antes, log, TIMEOUT_FILA_DOWNLOAD_S, mais_recente=True)
+        return _aguardar_e_baixar(prefixo, referencia, antes, log, TIMEOUT_FILA_DOWNLOAD_S, mais_recente=True,
+                                  pasta_destino=pasta_destino)
     except ErroDownloadPendente as exc:
         exc.pedido = {"prefixo": prefixo, "referencia": referencia, "antes": antes}
         raise
 
 
 def _aguardar_e_baixar(prefixo: str, referencia: float, antes: set, log, timeout: float,
-                       mais_recente: bool = True) -> Path:
+                       mais_recente: bool = True, pasta_destino: "Path | None" = None) -> Path:
     """No histórico, acha a linha do pedido: mesma IE/período, que NÃO
     estava no histórico antes do pedido (antes), pedida depois do clique
     (Data de Solicitação, com tolerância de relógio) e ainda não baixada.
@@ -1197,6 +1236,8 @@ def _aguardar_e_baixar(prefixo: str, referencia: float, antes: set, log, timeout
     Saída da mesma empresa já foi baixada). Espera Concluído (F5 a cada
     20 s), clica no Baixar XML da linha e espera o arquivo com esse nome."""
     pastas_download = _pastas_download()
+    if pasta_destino is not None:
+        pastas_download = [pasta_destino] + pastas_download  # "Salvar como" grava direto nela
     prazo = time.time() + timeout
     ultimo_refresh = time.time()
     ultima_volta = 0.0
@@ -1282,7 +1323,7 @@ def _aguardar_e_baixar(prefixo: str, referencia: float, antes: set, log, timeout
             except Exception:
                 pass
             return arquivo
-        _aceitar_prompt_download(pastas_download[0], log)
+        _aceitar_prompt_download(pasta_destino or pastas_download[0], log)
         time.sleep(0.7)
     raise ErroDownloadPendente(f"[download] cliquei em Baixar XML de {alvo['arquivo']}, mas o arquivo não chegou em "
                                f"{', '.join(str(p) for p in pastas_download)} — confira a pasta de downloads do Edge")
@@ -1331,7 +1372,7 @@ def _baixar_e_salvar(win, pasta: Path, tipo: str, mm_aaaa: str, textos: str, pri
                 "evidencia_png": print_png, "zip_path": None, "observacao": "", "erro": ""}
 
     try:
-        baixado = baixar_todos(win, log, ie, data_inicial, data_final)
+        baixado = baixar_todos(win, log, ie, data_inicial, data_final, pasta_destino=pasta)
     except ErroDownloadPendente as exc:
         # pedido feito, arquivo não baixado: guarda o necessário pra baixar
         # depois do histórico (ver baixar_pendentes)
@@ -1381,7 +1422,8 @@ def baixar_pendentes(pendentes: list, log) -> list:
         tipo_txt = "Saída" if p["tipo"] == "SAIDA" else "Entrada"
         log(f"\n↻ Baixando a {tipo_txt} que ficou pendente ({p['prefixo']}*.zip)...")
         try:
-            baixado = _aguardar_e_baixar(p["prefixo"], p["referencia"], p["antes"], log, 5 * 60, mais_recente=False)
+            baixado = _aguardar_e_baixar(p["prefixo"], p["referencia"], p["antes"], log, 5 * 60, mais_recente=False,
+                                         pasta_destino=p["pasta"])
             r = _salvar_zip(baixado, p["pasta"], p["tipo"], p["mm_aaaa"], p["qtd_portal"], p["print_png"])
             log(f"  ✅ {tipo_txt} baixada — SEFAZ: {r['qtd_notas_portal']} · XML no ZIP: {r['qtd_xml']} {r['observacao']}")
             saida.append((p, r, None))
