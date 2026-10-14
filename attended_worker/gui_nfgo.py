@@ -273,8 +273,11 @@ class App(tk.Tk):
 
         f4 = ttk.LabelFrame(self, text="Andamento")
         f4.pack(fill="both", expand=True, **pad)
-        self.txt_log = tk.Text(f4, height=14, state="disabled", wrap="word")
-        self.txt_log.pack(fill="both", expand=True, padx=6, pady=6)
+        rolagem = ttk.Scrollbar(f4, orient="vertical")
+        rolagem.pack(side="right", fill="y", padx=(0, 6), pady=6)
+        self.txt_log = tk.Text(f4, height=14, state="disabled", wrap="word", yscrollcommand=rolagem.set)
+        self.txt_log.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
+        rolagem.configure(command=self.txt_log.yview)
 
     def _atualizar_modo(self) -> None:
         hub = self.modo_var.get() == "hub"
@@ -308,9 +311,13 @@ class App(tk.Tk):
             self.pasta_var.set(caminho)
 
     def _log(self, texto: str) -> None:
+        # só acompanha o fim se já estava no fim - quem subiu a barra pra
+        # ler não é puxado de volta a cada linha nova
+        no_fim = self.txt_log.yview()[1] >= 0.999
         self.txt_log.configure(state="normal")
         self.txt_log.insert("end", texto + "\n")
-        self.txt_log.see("end")
+        if no_fim:
+            self.txt_log.see("end")
         self.txt_log.configure(state="disabled")
 
     def _config_atual(self) -> dict:

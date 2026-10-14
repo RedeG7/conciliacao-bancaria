@@ -137,6 +137,27 @@ def conectar_janela():
     return win
 
 
+def _edge_na_frente() -> None:
+    """Garante o Edge do portal em primeiro plano ANTES de digitar: as
+    teclas vão pra janela que estiver na frente - se a pessoa clicou no
+    programa (pra ler o Andamento), a IE ia parar lá ("o campo não aceitou
+    ... ficou ''")."""
+    win = _janela_portal()
+    if win is None:
+        return
+    try:
+        import ctypes
+        if ctypes.windll.user32.GetForegroundWindow() == win.handle:
+            return
+    except Exception:
+        pass
+    try:
+        win.set_focus()
+        time.sleep(0.25)
+    except Exception:
+        pass
+
+
 def _texto(el) -> str:
     try:
         return (el.window_text() or "").strip()
@@ -241,6 +262,7 @@ def _escolher_no_calendario(win, edit, data: str, log) -> None:
     navega até o mês e clica no dia. Dias repetidos na grade (fim do mês
     anterior / começo do seguinte): dia <= 15 pega o de cima, > 15 o de baixo."""
     dia, mes, ano = (int(x) for x in data.split("/"))
+    _edge_na_frente()
     try:
         edit.click_input()
     except Exception:
@@ -381,6 +403,7 @@ def _datas_pela_pagina(win, data_inicial: str, data_final: str, log) -> None:
         "e.dispatchEvent(new Event(t,{bubbles:true}))});e.readOnly=r})}())"
     ) % (data_inicial, data_final)
     try:
+        _edge_na_frente()
         win.set_focus()
         win.type_keys("^l", set_foreground=False)  # barra de endereço
         time.sleep(0.4)
@@ -434,6 +457,7 @@ def _preencher_data(win, edit, data: str, log) -> None:
     ]
     for limpar, texto in tentativas:
         try:
+            _edge_na_frente()
             edit.set_focus()
             time.sleep(0.2)
             edit.type_keys(limpar, pause=0.02, set_foreground=False)
@@ -516,6 +540,7 @@ def _opcao_marcada(win, textos: list[str]) -> bool:
 def _fechar_calendario(win) -> None:
     """Esc + clique no título do formulário (área neutra) - o calendário das
     datas cobre a IE e o Tipo de notas."""
+    _edge_na_frente()
     try:
         win.type_keys("{ESC}", set_foreground=False)
     except Exception:
@@ -552,6 +577,7 @@ def _preencher(edit, valor: str) -> None:
     for focar in ("foco", "clique"):
         for texto in (valor, digitos):
             try:
+                _edge_na_frente()
                 if focar == "foco":
                     edit.set_focus()
                 else:
@@ -699,6 +725,7 @@ def _autenticar(win, log) -> None:
     cpf = next((e for e in edits if e is not senha), None)
     if senha is None:
         return
+    _edge_na_frente()
     if cpf is not None and not re.sub(r"\D", "", _valor(cpf)) and _CREDENCIAL["cpf"]:
         try:
             cpf.set_focus()
