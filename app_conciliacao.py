@@ -2851,12 +2851,18 @@ if balancete_path:
                 balancete_path, Path(balancete_path).stat().st_mtime,
             )
 
+        _assinatura_extrato = Path(extrato_path).stat().st_size if extrato_path else None
+        if (st.session_state.get("forcar_escolha_conta")
+                and st.session_state.get("forcar_escolha_conta_assinatura") != _assinatura_extrato):
+            st.session_state["forcar_escolha_conta"] = False
+
         if conta_auto and not st.session_state.get("forcar_escolha_conta"):
             conta_contabil = conta_auto.nome
             st.success(f"Conta banco identificada automaticamente a partir do extrato: "
                        f"{conta_auto.codigo} — {conta_auto.nome}")
             if st.button("Não é essa conta — escolher manualmente"):
                 st.session_state["forcar_escolha_conta"] = True
+                st.session_state["forcar_escolha_conta_assinatura"] = _assinatura_extrato
                 st.rerun()
         else:
             if not extrato_path:

@@ -1273,7 +1273,7 @@ def localizar_conta(contas: List[ContaBalancete], termo: str) -> Optional[ContaB
     return None
 
 
-_TERMOS_CONTA_BANCO = ["banco", "caixa", "conta corrente", " cc ", "aplica", "poupan"]
+_TERMOS_CONTA_BANCO = ["banco", "bco ", " bc ", "caixa", "conta corrente", " cc ", " ct ", "aplica", "poupan"]
 
 
 def contas_provaveis_banco(contas: List[ContaBalancete]) -> List[ContaBalancete]:
@@ -1281,7 +1281,12 @@ def contas_provaveis_banco(contas: List[ContaBalancete]) -> List[ContaBalancete]
     (banco/caixa/aplicacao) por palavra-chave no nome. E apenas uma sugestao
     para popular a lista de escolha - o usuario sempre confirma qual conta e
     a conta banco correta, o balancete e sempre a fonte de verdade."""
-    return [c for c in contas if any(t in f" {c.nome.lower()} " for t in _TERMOS_CONTA_BANCO)]
+    def _provavel(c: ContaBalancete) -> bool:
+        nome = f" {_sem_acento(c.nome.lower())} "
+        return any(t in nome for t in _TERMOS_CONTA_BANCO) or any(
+            re.search(rf"(?<![a-z0-9]){re.escape(b)}(?![a-z0-9])", nome) for b in _BANCOS_CONHECIDOS
+        )
+    return [c for c in contas if _provavel(c)]
 
 
 # ---------------------------------------------------------------------------
@@ -1326,25 +1331,91 @@ def extrair_identificador_banco(path: str) -> Optional[str]:
     else:
         texto = extrair_texto_arquivo(path)
 
-    busca = _sem_acento(f"{Path(path).stem} {texto}".lower())
+    # Pontua cada banco conhecido em vez de pegar o primeiro da lista que
+    # aparece em QUALQUER lugar do texto: o corpo do extrato cita outros
+    # bancos (contrapartes de PIX/TED, ex.: "PIX ... BANCO ITAU"), e a ordem
+    # da lista nao tem relacao nenhuma com qual banco emitiu o extrato. O
+    # que manda e o cabecalho (primeiros caracteres) e o nome do arquivo; a
+    # contagem no corpo so desempata.
+    nome_arquivo = _sem_acento(Path(path).stem.lower())
+    texto_norm = _sem_acento(texto.lower())
+    cabecalho = texto_norm[:1500]
+    melhor, melhor_pontos = None, 0
     for nome in _BANCOS_CONHECIDOS:
-        if nome in busca:
-            return nome
-    return None
+        padrao = re.compile(rf"(?<![a-z0-9]){re.escape(nome)}(?![a-z0-9])")
+        pontos = min(len(padrao.findall(texto_norm)), 20)
+        if padrao.search(cabecalho):
+            pontos += 100
+        if padrao.search(nome_arquivo):
+            pontos += 200
+        if pontos > melhor_pontos:
+            melhor, melhor_pontos = nome, pontos
+    return melhor
+
+
+_TERMOS_NAO_CONTA_CORRENTE = (
+    "aplica", "rendimento", "irrf", "juros", "tarifa", "despesa", "receita", "iof",
+    "resgate", "imposto", "caixa geral", "financeira", "investimento",
+)
+
+
+def _numeros_de_conta(texto: str) -> set:
+    """Numeros de conta/agencia citados no cabecalho do extrato, so digitos
+    sem zeros a esquerda (ex.: 'conta: 36267404-3' -> '362674043')."""
+    achados = set()
+    for m in re.finditer(
+        r"(?:conta|c/c|cc|cta|ct|ag[eê]ncia|ag)\b[^0-9\n]{0,15}(\d[\d.\-/]{3,})", texto[:3000], re.IGNORECASE
+    ):
+        digitos = re.sub(r"\D", "", m.group(1)).lstrip("0")
+        if len(digitos) >= 5:
+            achados.add(digitos)
+    return achados
+
+
+def _numeros_no_nome(nome: str) -> set:
+    return {
+        d for d in (re.sub(r"\D", "", t).lstrip("0") for t in re.findall(r"\d[\d.\-/]*\d", nome))
+        if len(d) >= 5
+    }
 
 
 def detectar_conta_banco(extrato_path: str, contas: List[ContaBalancete]) -> Optional[ContaBalancete]:
-    """Cruza o banco identificado no extrato com as contas de disponibilidades
-    do balancete. So devolve resultado quando ha exatamente UM match
-    inequivoco - em caso de duvida, devolve None e o usuario confirma
+    """Cruza o extrato com as contas do balancete. Ordem de confianca:
+    (1) numero da conta do extrato citado no nome de UMA unica conta do
+    balancete; (2) banco do extrato presente no nome de uma unica conta
+    (ignorando aplicacoes/rendimentos/impostos, que citam o banco mas nao
+    sao a conta corrente); (3) desempate entre varias do mesmo banco pelo
+    numero da conta. Em caso de duvida devolve None e o usuario confirma
     (nunca inventa qual conta e a correta)."""
     ident = extrair_identificador_banco(extrato_path)
+    texto = ""
+    try:
+        texto = extrair_texto_arquivo(extrato_path) if Path(extrato_path).suffix.lower() != ".ofx" else \
+            Path(extrato_path).read_text(encoding="latin-1", errors="replace")
+    except Exception:
+        pass
+    numeros_extrato = _numeros_de_conta(_sem_acento(texto))
+
+    if numeros_extrato:
+        por_numero = [c for c in contas if numeros_extrato & _numeros_no_nome(c.nome)]
+        if len(por_numero) == 1:
+            return por_numero[0]
+
     if not ident:
         return None
-    candidatas = contas_provaveis_banco(contas) or contas
-    achados = [c for c in candidatas if ident in _sem_acento(c.nome.lower())]
+    nome_ident = re.compile(rf"(?<![a-z0-9]){re.escape(ident)}(?![a-z0-9])")
+    do_banco = [c for c in contas if nome_ident.search(_sem_acento(c.nome.lower()))]
+    correntes = [
+        c for c in do_banco
+        if not any(t in _sem_acento(c.nome.lower()) for t in _TERMOS_NAO_CONTA_CORRENTE)
+    ]
+    achados = correntes
     if len(achados) == 1:
         return achados[0]
+    if len(achados) > 1 and numeros_extrato:
+        por_numero = [c for c in achados if numeros_extrato & _numeros_no_nome(c.nome)]
+        if len(por_numero) == 1:
+            return por_numero[0]
     return None
 
 
