@@ -81,6 +81,15 @@ class Movimento:
     categoria: Optional[str] = None
     origem_ocr: bool = False  # True quando lido via OCR (PDF sem texto embutido)
     alerta_valor: Optional[str] = None  # motivo pra revisar manualmente este valor (ex.: saldo nao bate)
+    sugestoes: list = field(default_factory=list)  # List[Sugestao], melhores contrapartidas achadas no balancete
+
+
+@dataclass
+class Sugestao:
+    codigo: str
+    nome: str
+    confianca: float  # 0-1; >= LIMIAR_SUGESTAO_AUTOMATICA entra sozinha, abaixo disso so aparece como dica
+    motivo: str
 
 
 @dataclass
@@ -205,6 +214,185 @@ def parse_ofx(path: str, origem: str = "extrato", encoding: str = "latin-1") -> 
     if not movimentos:
         raise ValueError(f"Nenhuma <STMTTRN> encontrada em {path} - confirme que e um OFX valido.")
     return movimentos
+
+
+# codigo COMPE do banco (<BANKID> do OFX) -> nome usado em _BANCOS_CONHECIDOS
+_BANCOS_POR_CODIGO = {
+    "001": "banco do brasil", "033": "santander", "041": "banrisul", "077": "inter",
+    "104": "caixa economica federal", "212": "original", "237": "bradesco",
+    "260": "nubank", "290": "pagbank", "323": "mercado pago", "336": "c6 bank",
+    "341": "itau", "380": "picpay", "422": "safra", "623": "banco pan", "748": "sicredi",
+    "756": "sicoob", "133": "cresol", "136": "unicred", "403": "cora", "197": "stone",
+    "655": "votorantim", "218": "bs2", "707": "daycoval", "274": "money plus",
+}
+
+
+def ler_metadados_ofx(path: str) -> Dict[str, object]:
+    """Cabecalho do OFX: instituicao, banco (COMPE), agencia/conta, periodo e
+    saldo final informado - usado para identificar o extrato sem depender do
+    nome do arquivo."""
+    raw = Path(path).read_text(encoding="latin-1", errors="replace")
+
+    def tag(nome: str) -> Optional[str]:
+        m = re.search(rf"<{nome}>([^<\r\n]+)", raw, re.IGNORECASE)
+        return m.group(1).strip() if m else None
+
+    def data(valor: Optional[str]) -> Optional[dt.date]:
+        try:
+            return dt.datetime.strptime(valor[:8], "%Y%m%d").date() if valor else None
+        except ValueError:
+            return None
+
+    saldo = tag("BALAMT")
+    try:
+        saldo_final = float(saldo) if saldo else None
+    except ValueError:
+        saldo_final = None
+    return {
+        "org": tag("ORG"), "banco_codigo": tag("BANKID"), "agencia": tag("BRANCHID"),
+        "conta": tag("ACCTID"), "tipo_conta": tag("ACCTTYPE"),
+        "inicio": data(tag("DTSTART")), "fim": data(tag("DTEND")),
+        "saldo_final": saldo_final, "data_saldo": data(tag("DTASOF")),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Planilha Excel (.xlsx) como extrato/fluxo de caixa ou razao/relatorio de ERP
+# ---------------------------------------------------------------------------
+
+def _norm_cab(texto: object) -> str:
+    import unicodedata
+    s = "".join(c for c in unicodedata.normalize("NFKD", str(texto or "")) if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", s.strip().lower())
+
+
+# ordem = prioridade (ex.: "data pagamento" vale mais que "data vencimento")
+_XLSX_COLS_DATA = ["data pagamento", "data baixa", "data liquidacao", "data movimento", "data lancamento",
+                   "data", "data vencimento", "vencimento", "dt", "date"]
+_XLSX_COLS_VALOR = ["valor pago", "valor parcela", "valor lancamento", "valor (r$)", "valor(r$)", "valor", "vl",
+                    "amount", "value"]
+_XLSX_COLS_DESC = ["historico", "descricao", "memo", "complemento", "detalhe", "favorecido", "fornecedor",
+                   "cliente", "beneficiario", "description"]
+_XLSX_COLS_TIPO = ["operacao", "tipo", "natureza", "tipo lancamento", "d/c", "deb/cred", "debito/credito"]
+_XLSX_COLS_EXTRA_DESC = ["suboperacao", "categoria", "centro de custo", "plano de contas", "conta contabil",
+                         "controle interno", "observacao", "nota fiscal - numero"]
+_XLSX_COLS_SITUACAO = ["situacao parcela", "situacao", "status"]
+
+_XLSX_SAIDA_RE = re.compile(r"pagar|despesa|saida|debito|pagamento|\bd\b|deb")
+_XLSX_ENTRADA_RE = re.compile(r"receber|receita|entrada|credito|recebimento|\bc\b|cred")
+
+
+def _celula_para_data(v: object) -> Optional[dt.date]:
+    if isinstance(v, dt.datetime):
+        return v.date()
+    if isinstance(v, dt.date):
+        return v
+    if isinstance(v, str) and v.strip():
+        try:
+            return _parse_data_br(v.strip()[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _celula_para_valor(v: object) -> Optional[float]:
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str) and v.strip():
+        try:
+            return _parse_valor_br(v)
+        except ValueError:
+            return None
+    return None
+
+
+def _achar_coluna(cabecalhos: List[str], candidatos: List[str]) -> Optional[int]:
+    for cand in candidatos:
+        if cand in cabecalhos:
+            return cabecalhos.index(cand)
+    return None
+
+
+def parse_xlsx_movimentos(
+    path: str,
+    origem: str,
+    col_data: Optional[str] = None,
+    col_valor: Optional[str] = None,
+    col_descricao: Optional[str] = None,
+    **_ignorado,
+) -> List[Movimento]:
+    """Le uma planilha (.xlsx) com deteccao automatica da linha de cabecalho e
+    das colunas de data/valor/descricao - serve tanto pra extrato exportado
+    em Excel quanto pra relatorio de lancamentos de ERP (ex.: Hinova, com
+    'Operacao' CONTAS A PAGAR/RECEBER definindo o sinal e 'Suboperacao'
+    ajudando a classificar). Linhas sem data ou valor validos (totais,
+    subtitulos) sao ignoradas; parcelas canceladas/em aberto tambem, pois
+    nao saem do banco."""
+    try:
+        import openpyxl  # type: ignore
+    except ImportError as exc:
+        raise ImportError("Leitura de .xlsx requer openpyxl.") from exc
+
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    melhor: Optional[Tuple[int, List[Movimento]]] = None
+    for ws in wb.worksheets:
+        linhas = list(ws.iter_rows(values_only=True))
+        for idx_cab, linha in enumerate(linhas[:40]):
+            cab = [_norm_cab(c) for c in linha]
+            i_data = cab.index(_norm_cab(col_data)) if col_data and _norm_cab(col_data) in cab else _achar_coluna(cab, _XLSX_COLS_DATA)
+            i_valor = cab.index(_norm_cab(col_valor)) if col_valor and _norm_cab(col_valor) in cab else _achar_coluna(cab, _XLSX_COLS_VALOR)
+            i_deb = _achar_coluna(cab, ["debito", "saida", "saidas"])
+            i_cred = _achar_coluna(cab, ["credito", "entrada", "entradas"])
+            if i_data is None or (i_valor is None and not (i_deb is not None and i_cred is not None)):
+                continue
+            i_desc = cab.index(_norm_cab(col_descricao)) if col_descricao and _norm_cab(col_descricao) in cab else _achar_coluna(cab, _XLSX_COLS_DESC)
+            i_tipo = _achar_coluna(cab, _XLSX_COLS_TIPO)
+            i_sit = _achar_coluna(cab, _XLSX_COLS_SITUACAO)
+            i_extras = [cab.index(c) for c in _XLSX_COLS_EXTRA_DESC if c in cab]
+
+            movs: List[Movimento] = []
+            for row in linhas[idx_cab + 1:]:
+                if i_data >= len(row):
+                    continue
+                data = _celula_para_data(row[i_data])
+                if data is None:
+                    continue
+                if i_valor is not None:
+                    valor = _celula_para_valor(row[i_valor]) if i_valor < len(row) else None
+                else:
+                    deb = _celula_para_valor(row[i_deb]) or 0.0
+                    cred = _celula_para_valor(row[i_cred]) or 0.0
+                    valor = cred - abs(deb) if (cred or deb) else None
+                if valor is None:
+                    continue
+                if i_sit is not None and i_sit < len(row) and row[i_sit]:
+                    if re.search(r"cancel|abert|pendent|vencer", _norm_cab(row[i_sit])):
+                        continue
+                if i_tipo is not None and i_tipo < len(row) and row[i_tipo] and i_valor is not None:
+                    tipo = _norm_cab(row[i_tipo])
+                    if _XLSX_SAIDA_RE.search(tipo) and not _XLSX_ENTRADA_RE.search(tipo):
+                        valor = -abs(valor)
+                    elif _XLSX_ENTRADA_RE.search(tipo) and not _XLSX_SAIDA_RE.search(tipo):
+                        valor = abs(valor)
+                partes = []
+                if i_desc is not None and i_desc < len(row) and row[i_desc]:
+                    partes.append(str(row[i_desc]).strip())
+                for ie in i_extras:
+                    if ie < len(row) and row[ie] and "processamento automatico" not in _norm_cab(row[ie]):
+                        partes.append(str(row[ie]).strip())
+                movs.append(Movimento(data=data, valor=valor, descricao=" | ".join(partes), origem=origem))
+            if movs and (melhor is None or len(movs) > melhor[0]):
+                melhor = (len(movs), movs)
+            break
+    wb.close()
+    if not melhor:
+        raise ValueError(
+            f"Nao identifiquei as colunas de data e valor em {path}. A planilha precisa ter um cabecalho com "
+            "algo como 'Data' (ou 'Data vencimento') e 'Valor' (ou 'Valor parcela')."
+        )
+    return melhor[1]
 
 
 _PDF_LINHA_DATA_VALOR_RE = re.compile(
@@ -962,6 +1150,10 @@ def parse_movimentos(path: str, origem: str, **kwargs) -> List[Movimento]:
         return parse_csv_movimentos(path, origem=origem, **kwargs)
     if ext == ".pdf":
         return parse_pdf_generic(path, origem=origem)
+    if ext in (".xlsx", ".xlsm"):
+        return parse_xlsx_movimentos(path, origem=origem, **kwargs)
+    if ext == ".xls":
+        raise ValueError("Planilha .xls (formato antigo) nao e suportada - salve como .xlsx e envie de novo.")
     raise ValueError(f"Extensao nao suportada: {ext} ({path})")
 
 
@@ -1299,6 +1491,7 @@ _BANCOS_CONHECIDOS = [
     "nubank", "inter", "sicoob", "sicredi", "safra", "original",
     "banco pan", "banrisul", "pagseguro", "pagbank", "mercado pago", "stone", "c6 bank",
     "btg pactual", "neon", "next", "modal", "will bank", "caixa",
+    "cresol", "unicred", "picpay", "cora", "bs2", "daycoval",
 ]
 
 
@@ -1325,8 +1518,11 @@ def extrair_identificador_banco(path: str) -> Optional[str]:
         if m:
             org = _sem_acento(m.group(1).strip().lower())
             for nome in _BANCOS_CONHECIDOS:
-                if nome in org:
+                if re.search(rf"(?<![a-z0-9]){re.escape(nome)}(?![a-z0-9])", org):
                     return nome
+        banco_id = (ler_metadados_ofx(path).get("banco_codigo") or "").zfill(3)
+        if banco_id in _BANCOS_POR_CODIGO:
+            return _BANCOS_POR_CODIGO[banco_id]
         texto = raw
     else:
         texto = extrair_texto_arquivo(path)
@@ -1355,7 +1551,7 @@ def extrair_identificador_banco(path: str) -> Optional[str]:
 
 _TERMOS_NAO_CONTA_CORRENTE = (
     "aplica", "rendimento", "irrf", "juros", "tarifa", "despesa", "receita", "iof",
-    "resgate", "imposto", "caixa geral", "financeira", "investimento",
+    "resgate", "imposto", "caixa geral", "financeira", "investimento", "capital", "cota",
 )
 
 
@@ -1366,6 +1562,8 @@ def _numeros_de_conta(texto: str) -> set:
     for m in re.finditer(
         r"(?:conta|c/c|cc|cta|ct|ag[eê]ncia|ag)\b[^0-9\n]{0,15}(\d[\d.\-/]{3,})", texto[:3000], re.IGNORECASE
     ):
+        if re.match(r"^\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}$", m.group(1)):
+            continue  # "CONTA CORRENTE 31/08/2026" - data de emissao, nao numero de conta
         digitos = re.sub(r"\D", "", m.group(1)).lstrip("0")
         if len(digitos) >= 5:
             achados.add(digitos)
@@ -1379,6 +1577,33 @@ def _numeros_no_nome(nome: str) -> set:
     }
 
 
+def _numeros_batem(numeros_extrato: set, nome_conta: str) -> bool:
+    """O numero da conta no OFX costuma vir completo (com prefixo/zeros:
+    '22010000000789895') enquanto o balancete traz so a conta com digito
+    ('78989-5') - confere igualdade ou sufixo, nos dois sentidos."""
+    for e in numeros_extrato:
+        for d in _numeros_no_nome(nome_conta):
+            if e == d or e.endswith(d) or d.endswith(e):
+                return True
+    return False
+
+
+def _numeros_conta_do_extrato(path: str) -> set:
+    ext = Path(path).suffix.lower()
+    try:
+        if ext == ".ofx":
+            achados = set()
+            conta = ler_metadados_ofx(path).get("conta")
+            if conta:
+                d = re.sub(r"\D", "", conta).lstrip("0")
+                if len(d) >= 5:
+                    achados.add(d)
+            return achados
+        return _numeros_de_conta(_sem_acento(extrair_texto_arquivo(path)))
+    except Exception:
+        return set()
+
+
 def detectar_conta_banco(extrato_path: str, contas: List[ContaBalancete]) -> Optional[ContaBalancete]:
     """Cruza o extrato com as contas do balancete. Ordem de confianca:
     (1) numero da conta do extrato citado no nome de UMA unica conta do
@@ -1388,16 +1613,10 @@ def detectar_conta_banco(extrato_path: str, contas: List[ContaBalancete]) -> Opt
     numero da conta. Em caso de duvida devolve None e o usuario confirma
     (nunca inventa qual conta e a correta)."""
     ident = extrair_identificador_banco(extrato_path)
-    texto = ""
-    try:
-        texto = extrair_texto_arquivo(extrato_path) if Path(extrato_path).suffix.lower() != ".ofx" else \
-            Path(extrato_path).read_text(encoding="latin-1", errors="replace")
-    except Exception:
-        pass
-    numeros_extrato = _numeros_de_conta(_sem_acento(texto))
+    numeros_extrato = _numeros_conta_do_extrato(extrato_path)
 
     if numeros_extrato:
-        por_numero = [c for c in contas if numeros_extrato & _numeros_no_nome(c.nome)]
+        por_numero = [c for c in contas if _numeros_batem(numeros_extrato, c.nome)]
         if len(por_numero) == 1:
             return por_numero[0]
 
@@ -1413,7 +1632,7 @@ def detectar_conta_banco(extrato_path: str, contas: List[ContaBalancete]) -> Opt
     if len(achados) == 1:
         return achados[0]
     if len(achados) > 1 and numeros_extrato:
-        por_numero = [c for c in achados if numeros_extrato & _numeros_no_nome(c.nome)]
+        por_numero = [c for c in achados if _numeros_batem(numeros_extrato, c.nome)]
         if len(por_numero) == 1:
             return por_numero[0]
     return None
@@ -1456,6 +1675,20 @@ def extrair_texto_arquivo(path: str) -> str:
             for page in pdf.pages:
                 partes.append(page.extract_text() or "")
         return "\n".join(partes)
+    if ext in (".xlsx", ".xlsm"):
+        try:
+            import openpyxl  # type: ignore
+            wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+            linhas = []
+            for ws in wb.worksheets:
+                for i, row in enumerate(ws.iter_rows(values_only=True)):
+                    if i >= 60:
+                        break
+                    linhas.append(" ".join(str(c) for c in row if c is not None))
+            wb.close()
+            return "\n".join(linhas)
+        except Exception:
+            return ""
     return Path(path).read_text(encoding="utf-8-sig", errors="replace")
 
 
@@ -1506,6 +1739,318 @@ def classificar(desc: str) -> Tuple[Optional[str], Optional[str]]:
         if regex.search(desc):
             return categoria, termo_busca
     return None, None
+
+
+# ---------------------------------------------------------------------------
+# Analise do balancete + sugestao de contrapartida. Le o balancete como um
+# plano de contas (analiticas x sinteticas, grupo pai, natureza) e cruza com
+# o historico do lancamento por CPF/CNPJ, nome e palavra-chave. So aplica
+# sozinha com alta confianca (e marca a origem); o resto vira dica na tela.
+# ---------------------------------------------------------------------------
+
+LIMIAR_SUGESTAO_AUTOMATICA = 0.8
+
+_STOP_TOKENS = {
+    "LTDA", "EIRELI", "EPP", "SA", "ME", "DE", "DA", "DO", "DAS", "DOS", "COM", "PARA", "POR", "EM",
+    "PIX", "TED", "DOC", "PAGAMENTO", "PAGTO", "RECEBIMENTO", "TRANSFERENCIA", "ENVIADO", "RECEBIDO",
+    "CREDITO", "DEBITO", "CONTA", "BANCO", "SICREDI", "SICOOB", "ITAU", "BRADESCO", "INTER", "SANTANDER",
+    "NUBANK", "CRED", "DEB", "CX", "CPF", "CNPJ", "REF", "NUMERO", "NOTA", "FISCAL",
+}
+
+# (regex no historico, rotulo, [padroes de nome de conta, por prioridade], sentido)
+_REGRAS_SUGESTAO = [
+    (re.compile(r"TARIFA|MANUTENCAO (DE )?(CONTA|CC)|PACOTE SERVI|CESTA|TAXA (DE )?(BOLETO|EXTRATO|TED|DOC)"),
+     "tarifa bancária", [r"TARIFA", r"DESPESAS? BANCARIA", r"DESPESAS FINANCEIRAS"], "saida"),
+    (re.compile(r"\bIOF\b"), "IOF", [r"\bIOF\b"], "saida"),
+    (re.compile(r"JUROS|MULTA|ENCARGO|MORA\b"), "juros/multa", [r"JUROS( PASSIVOS| DE MORA)?\b", r"MULTAS?\b"], "saida"),
+    (re.compile(r"RENDIMENTO|RENDA FIXA|RESGATE|CDB|RDB|\bLCI\b|\bLCA\b"),
+     "rendimento de aplicação", [r"RENDIMENTOS?", r"RECEITAS? FINANCEIRAS?"], "entrada"),
+    (re.compile(r"SIMPLES NACIONAL|\bDAS\b|PGDAS"), "Simples Nacional", [r"SIMPLES NACIONAL"], "saida"),
+    (re.compile(r"\bFGTS\b|GRF|GFIP"), "FGTS", [r"FGTS A RECOLHER", r"\bFGTS\b"], "saida"),
+    (re.compile(r"\bINSS\b|\bGPS\b|PREVIDENCI"), "INSS", [r"INSS A RECOLHER", r"\bINSS\b"], "saida"),
+    (re.compile(r"\bIRRF\b|DARF 0561"), "IRRF", [r"IRRF A RECOLHER", r"\bIRRF\b"], "saida"),
+    (re.compile(r"PRO.?LABORE"), "pró-labore", [r"PRO.?LABORE A PAGAR", r"PRO.?LABORE"], "saida"),
+    (re.compile(r"FOLHA|SALARIO|FERIAS|13.? SAL|RESCISAO|PAGTO FUNC"),
+     "folha de pagamento", [r"SALARIOS E ORDENADOS A PAGAR", r"SALARIOS"], "saida"),
+    (re.compile(r"HONORARIO|CONTABIL"), "honorários contábeis", [r"HONORARIOS CONTABEIS"], "saida"),
+    (re.compile(r"ENERGIA|ENEL|EQUATORIAL|CELG|CEMIG|CPFL|LIGHT\b"), "energia elétrica", [r"ENERGIA"], "saida"),
+    (re.compile(r"AGUA|SANEAGO|SABESP|COPASA|SANEAMENTO"), "água", [r"AGUA"], "saida"),
+    (re.compile(r"TELEFON|\bVIVO\b|\bCLARO\b|\bTIM\b|\bOI\b"), "telefone", [r"TELEFONE", r"TELECOMUNICA"], "saida"),
+    (re.compile(r"INTERNET|FIBRA|PROVEDOR|BANDA LARGA"), "internet", [r"INTERNET"], "saida"),
+    (re.compile(r"COMBUSTIVE|POSTO |GASOLINA|ETANOL|DIESEL|IPIRANGA|PETROBRAS|SHELL"),
+     "combustível", [r"COMBUSTIVE"], "saida"),
+    (re.compile(r"ALUGUEL|LOCACAO"), "aluguel", [r"ALUGUE"], "saida"),
+    (re.compile(r"SEGURO"), "seguros", [r"SEGUROS?\b"], "saida"),
+    (re.compile(r"CARTORIO"), "cartório", [r"CARTORI"], "saida"),
+    (re.compile(r"EMPRESTIMO|FINANCIAMENTO|CAPITAL DE GIRO|PARCELA.*(EMPREST|FINANC)"),
+     "empréstimo/financiamento", [r"EMPRESTIMOS?", r"FINANCIAMENTOS?"], None),
+]
+
+_DISPONIVEL_RE = re.compile(
+    r"DISPONIVEL|BANCOS? CONTA|APLICACO|\bCAIXA\b|\bBANCO\b|\bBCO\b|\bBC\b|SICOOB|SICREDI|ITAU|BRADESCO|SANTANDER|NUBANK|\bINTER\b"
+)
+
+
+@dataclass
+class _ContaIndexada:
+    conta: ContaBalancete
+    tokens: set
+    contexto: str
+    natureza: str
+    digitos: str
+
+
+@dataclass
+class IndiceBalancete:
+    analiticas: List[_ContaIndexada]
+    qtd_total: int
+    qtd_sinteticas: int
+
+
+def _tokens_nome(texto: str) -> set:
+    t = re.sub(r"[^A-Z0-9 ]", " ", _sem_acento(texto).upper())
+    return {
+        (w[:-1] if len(w) > 4 and w.endswith("S") else w)
+        for w in t.split() if len(w) >= 3 and not w.isdigit() and w not in _STOP_TOKENS
+    }
+
+
+def montar_indice_balancete(contas: List[ContaBalancete], conta_banco: Optional[ContaBalancete] = None) -> IndiceBalancete:
+    """Separa contas ANALITICAS (onde se lanca) das SINTETICAS/grupos (que so
+    totalizam - pela classificacao: quem e prefixo de outra e grupo), guarda
+    o caminho de grupos de cada uma e a natureza (receita/despesa), e tira
+    fora disponibilidades (banco/caixa/aplicacao), que nao sao contrapartida
+    de um lancamento do extrato."""
+    por_classif = {c.classificacao: c for c in contas if c.classificacao}
+    prefixos = set()
+    for classif in por_classif:
+        partes = classif.split(".")
+        for i in range(1, len(partes)):
+            prefixos.add(".".join(partes[:i]))
+
+    analiticas: List[_ContaIndexada] = []
+    sinteticas = 0
+    for c in contas:
+        if c.classificacao and c.classificacao in prefixos:
+            sinteticas += 1
+            continue
+        if conta_banco and c.codigo == conta_banco.codigo:
+            continue
+        nome_norm = _sem_acento(c.nome).upper()
+        if nome_norm.startswith(_sem_acento(NOME_ILEGIVEL_BALANCETE_PREFIXO).upper()):
+            continue
+        contexto = ""
+        if c.classificacao:
+            partes = c.classificacao.split(".")
+            contexto = " > ".join(
+                _sem_acento(por_classif[".".join(partes[:i])].nome).upper()
+                for i in range(1, len(partes)) if ".".join(partes[:i]) in por_classif
+            )
+        if _DISPONIVEL_RE.search(contexto) or _DISPONIVEL_RE.search(nome_norm):
+            continue
+        natureza = ""
+        if "(-)" not in c.nome:
+            tudo = f"{contexto} > {nome_norm}"
+            if re.search(r"RECEITA|VENDAS|FATURAMENTO", tudo):
+                natureza = "receita"
+            elif re.search(r"DESPESA|CUSTO", tudo):
+                natureza = "despesa"
+        analiticas.append(_ContaIndexada(
+            conta=c, tokens=_tokens_nome(c.nome), contexto=contexto, natureza=natureza,
+            digitos=re.sub(r"\D", "", c.nome),
+        ))
+    return IndiceBalancete(analiticas=analiticas, qtd_total=len(contas), qtd_sinteticas=sinteticas)
+
+
+def _documentos_no_texto(texto: str) -> set:
+    achados = set()
+    for m in re.finditer(r"\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}|\d{3}\.?\d{3}\.?\d{3}-?\d{2}", texto):
+        d = re.sub(r"\D", "", m.group(0))
+        if len(d) in (11, 14):
+            achados.add(d)
+    return achados
+
+
+def sugerir_contrapartidas(mov: Movimento, indice: IndiceBalancete, maximo: int = 3) -> List[Sugestao]:
+    """Melhores contas do balancete para a contrapartida deste lancamento,
+    da mais para a menos confiavel. Nunca inventa codigo: so devolve contas
+    que existem no balancete (analiticas, fora disponibilidades)."""
+    desc = _sem_acento(mov.descricao).upper()
+    saida = mov.valor < 0
+    compativeis = [
+        ic for ic in indice.analiticas
+        if not ((saida and ic.natureza == "receita") or (not saida and ic.natureza == "despesa"))
+    ]
+    achados: Dict[str, Sugestao] = {}
+
+    def registrar(ic: _ContaIndexada, conf: float, motivo: str) -> None:
+        atual = achados.get(ic.conta.codigo)
+        if atual is None or conf > atual.confianca:
+            achados[ic.conta.codigo] = Sugestao(ic.conta.codigo, ic.conta.nome, conf, motivo)
+
+    docs = _documentos_no_texto(mov.descricao)
+    if docs:
+        for ic in indice.analiticas:
+            if any(d in ic.digitos for d in docs):
+                registrar(ic, 1.0, "CPF/CNPJ do histórico consta no nome da conta")
+
+    tokens_desc = _tokens_nome(desc)
+    for ic in compativeis:
+        comuns = ic.tokens & tokens_desc
+        if len(ic.tokens) >= 2 and len(comuns) >= 2:
+            cobertura = len(comuns) / len(ic.tokens)
+            if cobertura >= 0.99:
+                registrar(ic, 0.9, f"nome da conta bate com o histórico ({', '.join(sorted(comuns))})")
+            elif cobertura >= 0.6:
+                registrar(ic, 0.7, f"nome da conta parecido com o histórico ({', '.join(sorted(comuns))})")
+        elif len(ic.tokens) == 1 and comuns and len(next(iter(ic.tokens))) >= 6:
+            registrar(ic, 0.6, f"palavra do histórico ({next(iter(comuns))}) é o nome da conta")
+
+    for regex, rotulo, padroes, sentido in _REGRAS_SUGESTAO:
+        if (sentido == "saida" and not saida) or (sentido == "entrada" and saida):
+            continue
+        if not regex.search(desc):
+            continue
+        for padrao in padroes:
+            rx = re.compile(padrao)
+            casadas = [ic for ic in compativeis if rx.search(_sem_acento(ic.conta.nome).upper())]
+            if casadas:
+                conf = 0.85 if len(casadas) == 1 else 0.6
+                for ic in casadas:
+                    registrar(ic, conf, f"{rotulo} (palavra-chave no histórico)")
+                break
+
+    ordenadas = sorted(achados.values(), key=lambda s: -s.confianca)
+    if len(ordenadas) > 1 and ordenadas[0].confianca == ordenadas[1].confianca >= LIMIAR_SUGESTAO_AUTOMATICA:
+        for s in ordenadas:
+            if s.confianca == ordenadas[0].confianca:
+                s.confianca = 0.7
+                s.motivo += " — mais de uma conta serve, confirme"
+        ordenadas.sort(key=lambda s: -s.confianca)
+    return ordenadas[:maximo]
+
+
+_RUIDO_HISTORICO = {
+    "TRANSF", "REALIZADA", "RECEBIDA", "EMITIDO", "RECEBIDO", "OUTRA", "FAV", "REM", "TRANSFERENCIA",
+    "LIQUIDACAO", "COBRANCA", "BOLETO", "PAGAMENTO", "RECEBIMENTO", "PIX", "TED", "DOC", "SICOOB",
+    "SICREDI", "ITAU", "BRADESCO", "INTER", "CRED", "DEB", "ENVIADO", "DEBITO", "CREDITO", "CONVENIOS",
+    "DEBITOS", "CREDITOS", "COMPRA", "CARTAO", "COBRANÇA", "DIVERSOS",
+}
+
+
+@dataclass
+class GrupoFavorecido:
+    chave: str
+    rotulo: str
+    movimentos: List[Movimento]
+
+    @property
+    def total(self) -> float:
+        return round(sum(m.valor for m in self.movimentos), 2)
+
+
+def agrupar_por_favorecido(movs: List[Movimento]) -> List[GrupoFavorecido]:
+    """Agrupa lancamentos pelo favorecido/pagador (CPF/CNPJ ou nome) pra
+    atribuir uma conta uma vez so a todos do mesmo favorecido - o historico
+    traz ruido (numero do documento, 'PIX EMITIDO OUTRA IF' etc.), entao a
+    chave usa o documento quando existe e senao as primeiras palavras do
+    nome depois de tirar o ruido. Ordena do favorecido mais frequente."""
+    grupos: Dict[str, GrupoFavorecido] = {}
+    for mov in movs:
+        texto = _sem_acento(mov.descricao).upper()
+        docs = _documentos_no_texto(mov.descricao)
+        mascarado = re.search(r"\*{3}\.(\d{3})\.(\d{3})-\*{2}", texto)
+        palavras = [
+            w for w in re.sub(r"[^A-Z ]", " ", texto).split()
+            if len(w) >= 3 and w not in _RUIDO_HISTORICO and w not in _STOP_TOKENS
+        ]
+        nome = " ".join(palavras[:4])
+        sufixo = "E" if mov.valor >= 0 else "S"
+        if docs:
+            chave = f"{sorted(docs)[0]}|{sufixo}"
+        elif mascarado:
+            chave = f"CPF***{mascarado.group(1)}{mascarado.group(2)}**|{sufixo}"
+        elif nome:
+            chave = f"{nome}|{sufixo}"
+        else:
+            chave = f"{texto[:30]}|{sufixo}"
+        if chave not in grupos:
+            rotulo = nome or mov.descricao[:40]
+            if mascarado and not nome:
+                rotulo = f"CPF ***.{mascarado.group(1)}.{mascarado.group(2)}-**"
+            grupos[chave] = GrupoFavorecido(chave=chave, rotulo=rotulo, movimentos=[])
+        grupos[chave].movimentos.append(mov)
+    return sorted(grupos.values(), key=lambda g: (-len(g.movimentos), g.rotulo))
+
+
+@dataclass
+class AnaliseExtrato:
+    formato: str
+    banco: Optional[str]
+    banco_codigo: Optional[str]
+    instituicao: Optional[str]
+    agencia: Optional[str]
+    conta: Optional[str]
+    periodo_inicio: Optional[dt.date]
+    periodo_fim: Optional[dt.date]
+    qtd: int
+    entradas: float
+    saidas: float
+    saldo_final_informado: Optional[float]
+
+
+def analisar_extrato(path: str, movimentos: Optional[List[Movimento]] = None) -> AnaliseExtrato:
+    """Perfil do extrato (banco, conta, periodo, totais) lido do proprio
+    arquivo - alimenta a conferencia na tela e a deteccao da conta banco."""
+    ext = Path(path).suffix.lower()
+    movs = movimentos if movimentos is not None else parse_movimentos(path, origem="extrato")
+    meta: Dict[str, object] = {}
+    if ext == ".ofx":
+        meta = ler_metadados_ofx(path)
+    numeros = sorted(_numeros_conta_do_extrato(path), key=len, reverse=True)
+    datas = [m.data for m in movs]
+    return AnaliseExtrato(
+        formato=ext.lstrip(".").upper(),
+        banco=extrair_identificador_banco(path),
+        banco_codigo=(meta.get("banco_codigo") or None),
+        instituicao=(meta.get("org") or None),
+        agencia=(meta.get("agencia") or None),
+        conta=(meta.get("conta") or (numeros[0] if numeros else None)),
+        periodo_inicio=(meta.get("inicio") or (min(datas) if datas else None)),
+        periodo_fim=(meta.get("fim") or (max(datas) if datas else None)),
+        qtd=len(movs),
+        entradas=round(sum(m.valor for m in movs if m.valor > 0), 2),
+        saidas=round(sum(m.valor for m in movs if m.valor < 0), 2),
+        saldo_final_informado=meta.get("saldo_final"),
+    )
+
+
+def diagnosticar_conta_banco(extrato_path: str, contas: List[ContaBalancete]) -> str:
+    """Explica em portugues POR QUE a conta banco nao foi identificada
+    sozinha (banco nao reconhecido, banco sem conta no balancete, ou varias
+    contas do mesmo banco) - em vez de so dizer que nao conseguiu."""
+    ident = extrair_identificador_banco(extrato_path)
+    if not ident:
+        return ("Não reconheci o banco emissor deste extrato (nenhum banco conhecido no cabeçalho "
+                "nem no nome do arquivo).")
+    nome_ident = re.compile(rf"(?<![a-z0-9]){re.escape(ident)}(?![a-z0-9])")
+    do_banco = [c for c in contas if nome_ident.search(_sem_acento(c.nome.lower()))]
+    correntes = [
+        c for c in do_banco
+        if not any(t in _sem_acento(c.nome.lower()) for t in _TERMOS_NAO_CONTA_CORRENTE)
+    ]
+    bancarias = [c for c in contas_provaveis_banco(contas)
+                 if not any(t in _sem_acento(c.nome.lower()) for t in _TERMOS_NAO_CONTA_CORRENTE)]
+    lista = "; ".join(f"{c.codigo} — {c.nome}" for c in bancarias[:6]) or "nenhuma encontrada"
+    if not correntes:
+        return (f"O extrato é do banco **{ident.title()}**, mas o balancete não tem nenhuma conta desse banco. "
+                f"Contas bancárias que o balancete tem: {lista}. Confira se o extrato é da empresa/banco certo "
+                "ou se a conta ainda não foi cadastrada no plano de contas.")
+    if len(correntes) > 1:
+        return (f"O extrato é do banco **{ident.title()}** e o balancete tem {len(correntes)} contas desse banco "
+                f"({'; '.join(f'{c.codigo} — {c.nome}' for c in correntes[:6])}) e nenhuma bate com o número da "
+                "conta do extrato — confirme qual é.")
+    return "Não foi possível cruzar o extrato com uma única conta do balancete — confirme qual é."
 
 
 # ---------------------------------------------------------------------------
@@ -1740,6 +2285,7 @@ def processar(
     col_data: Optional[str] = None,
     col_valor: Optional[str] = None,
     col_descricao: Optional[str] = None,
+    usar_sugestoes: bool = True,
 ) -> ResultadoProcessamento:
     """Le extrato/razao/balancete, concilia item a item e classifica as
     pendencias - sem gravar nada em disco ainda. Se `competencia` vier vazio/
@@ -1793,6 +2339,10 @@ def processar(
     print(f"      Casados: {len(pareados)} | Pendentes banco: {len(pendentes_banco)} | Pendentes razao: {len(pendentes_razao)}")
 
     print("[6/6] Classificando pendencias e sugerindo contrapartidas...")
+    indice = montar_indice_balancete(contas, conta_banco) if usar_sugestoes else None
+    if indice:
+        print(f"      Balancete analisado: {indice.qtd_total} contas ({len(indice.analiticas)} analiticas "
+              f"disponiveis para contrapartida, {indice.qtd_sinteticas} grupos).")
     for mov in pendentes_banco:
         categoria, termo_busca = classificar(mov.descricao)
         mov.categoria = categoria
@@ -1803,6 +2353,13 @@ def processar(
             else:
                 mov.conta_credito = conta_banco.codigo
         contrapartida = localizar_conta(contas, termo_busca) if termo_busca else None
+        if not contrapartida and indice:
+            mov.sugestoes = sugerir_contrapartidas(mov, indice)
+            if mov.sugestoes and mov.sugestoes[0].confianca >= LIMIAR_SUGESTAO_AUTOMATICA:
+                melhor = mov.sugestoes[0]
+                contrapartida = next((c for c in contas if c.codigo == melhor.codigo), None)
+                if contrapartida:
+                    mov.categoria = f"Sugerida: {melhor.motivo}"
         if contrapartida:
             if mov.valor >= 0:
                 mov.conta_credito = contrapartida.codigo
