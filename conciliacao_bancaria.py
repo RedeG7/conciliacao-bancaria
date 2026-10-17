@@ -2031,6 +2031,9 @@ def diagnosticar_conta_banco(extrato_path: str, contas: List[ContaBalancete]) ->
     contas do mesmo banco) - em vez de so dizer que nao conseguiu."""
     ident = extrair_identificador_banco(extrato_path)
     if not ident:
+        if Path(extrato_path).suffix.lower() in (".xlsx", ".xlsm", ".csv"):
+            return ("Este arquivo é uma planilha/relatório sem identificação de banco — escolha abaixo a "
+                    "conta banco a que esses lançamentos se referem.")
         return ("Não reconheci o banco emissor deste extrato (nenhum banco conhecido no cabeçalho "
                 "nem no nome do arquivo).")
     nome_ident = re.compile(rf"(?<![a-z0-9]){re.escape(ident)}(?![a-z0-9])")

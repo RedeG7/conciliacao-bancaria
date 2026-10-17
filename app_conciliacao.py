@@ -2420,6 +2420,38 @@ def _tela_logs_acesso() -> None:
     st.dataframe(tabela, use_container_width=True, hide_index=True)
 
 
+_LIMITE_LINHAS_TABELA_TELA = 300
+
+
+def _espelho_para_tela(texto: str, limite: int = _LIMITE_LINHAS_TABELA_TELA) -> str:
+    """O espelho completo vai inteiro para o download, mas desenhar milhares
+    de linhas de tabela markdown de uma vez trava o navegador (planilhas de
+    ERP chegam a 3-4 mil lançamentos) - na tela cada tabela mostra só as
+    primeiras `limite` linhas e avisa quantas ficaram de fora."""
+    saida: list = []
+    linhas = texto.splitlines()
+    i = 0
+    while i < len(linhas):
+        if linhas[i].startswith("|"):
+            j = i
+            while j < len(linhas) and linhas[j].startswith("|"):
+                j += 1
+            tabela = linhas[i:j]
+            corpo = tabela[2:]
+            if len(corpo) > limite:
+                saida.extend(tabela[:2 + limite])
+                saida.append("")
+                saida.append(f"_… mais {len(corpo) - limite} linha(s) nesta tabela não são exibidas aqui "
+                             "(tela leve) — o espelho completo está no download abaixo._")
+            else:
+                saida.extend(tabela)
+            i = j
+        else:
+            saida.append(linhas[i])
+            i += 1
+    return "\n".join(saida)
+
+
 _renderizar_cookie_pendente()
 
 if "usuario_logado" not in st.session_state:
@@ -3051,13 +3083,16 @@ if pronto:
             st.caption("Aplicadas sozinhas por terem alta confiança (CPF/CNPJ ou nome da conta no histórico, "
                        "ou palavra-chave com uma única conta possível). Para trocar alguma, desligue a "
                        "sugestão automática em Avançado e trate pelo agrupamento/filtro abaixo.")
+            if len(_sugeridas_auto) > 300:
+                st.caption(f"Mostrando as primeiras 300 de {len(_sugeridas_auto)} (lista completa no espelho "
+                           "e na memória .csv para download).")
             st.dataframe(
                 [{
                     "Data": f"{m.data:%d/%m/%Y}", "Valor": cb.fmt_money(m.valor), "Histórico": m.descricao[:80],
                     "Conta": f"{(m.conta_debito if m.valor < 0 else m.conta_credito)} — "
                              f"{_nome_por_codigo.get(m.conta_debito if m.valor < 0 else m.conta_credito, '')}",
                     "Motivo": (m.categoria or "").replace("Sugerida: ", ""),
-                } for m in _sugeridas_auto],
+                } for m in _sugeridas_auto[:300]],
                 use_container_width=True, hide_index=True,
             )
 
@@ -3286,7 +3321,11 @@ if pronto:
     st.success(f"Conciliação concluída automaticamente — competência: {resultado.competencia}.")
 
     with st.expander("Log de execução"):
-        st.code("\n".join(log + log_saidas))
+        _linhas_log = [l for bloco in (log + log_saidas) for l in str(bloco).splitlines()]
+        if len(_linhas_log) > 150:
+            st.caption(f"Log com {len(_linhas_log)} linhas — mostrando as primeiras 150.")
+            _linhas_log = _linhas_log[:150]
+        st.code("\n".join(_linhas_log))
 
     espelho_path = info["espelho_path"]
     memoria_path = info["memoria_path"]
@@ -3303,7 +3342,7 @@ if pronto:
                f"(de {len(resultado.pendentes_banco)} pendência(s) do extrato).")
 
     st.subheader("Espelho de conciliação")
-    st.markdown(espelho_texto)
+    st.markdown(_espelho_para_tela(espelho_texto))
 
     st.subheader("Downloads")
     dl1, dl2, dl3, dl4 = st.columns(4)
