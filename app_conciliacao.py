@@ -2617,7 +2617,7 @@ def _identificar_arquivos_na_pasta(pasta: Path) -> dict:
     Retorna dict {categoria: [candidatos]} - nao decide sozinho quando ha
     mais de um candidato, deixa o usuario escolher na interface."""
     candidatos = {k: [] for k in _PADROES}
-    exts_validas = {".ofx", ".csv", ".pdf"}
+    exts_validas = {".ofx", ".csv", ".pdf", ".xlsx"}
     for f in pasta.iterdir():
         if not f.is_file() or f.suffix.lower() not in exts_validas:
             continue
@@ -2710,6 +2710,13 @@ with st.sidebar:
             "Dias de tolerância no match (cheques)", value=0, min_value=0, max_value=15,
             key=f"input_dias_tolerancia_{_reset_seq}",
         )
+        usar_sugestoes = st.checkbox(
+            "Sugerir contrapartidas automaticamente pelo balancete", value=True,
+            help="Analisa o balancete (contas analíticas) e cruza com o histórico do extrato por CPF/CNPJ, "
+                 "nome e palavras-chave. Só aplica sozinho quando a confiança é alta e marca a origem no "
+                 "espelho; o restante aparece como dica.",
+            key=f"input_usar_sugestoes_{_reset_seq}",
+        )
         cod_historico = st.text_input(
             "Código de histórico padrão Domínio", value="",
             help="Confirme contra a tabela de históricos do escritório antes de importar.",
@@ -2747,11 +2754,11 @@ if modo == "Upload de arquivos":
     c1, c2, c3 = st.columns(3)
     with c1:
         up_extrato = st.file_uploader(
-            "Extrato / fluxo de caixa", type=["ofx", "csv", "pdf"], key=f"up_extrato_{_reset_seq}",
+            "Extrato / fluxo de caixa", type=["ofx", "csv", "pdf", "xlsx"], key=f"up_extrato_{_reset_seq}",
         )
     with c2:
         up_razao = st.file_uploader(
-            "Razão contábil da conta (opcional)", type=["csv", "pdf"], key=f"up_razao_{_reset_seq}",
+            "Razão contábil da conta (opcional)", type=["csv", "pdf", "xlsx"], key=f"up_razao_{_reset_seq}",
         )
     with c3:
         up_balancete = st.file_uploader(
@@ -2788,7 +2795,7 @@ else:
 
             def _seletor(col, categoria, label):
                 opcoes = candidatos[categoria] or list(pasta.glob("*"))
-                opcoes_validas = [f for f in opcoes if f.is_file() and f.suffix.lower() in (".ofx", ".csv", ".pdf")]
+                opcoes_validas = [f for f in opcoes if f.is_file() and f.suffix.lower() in (".ofx", ".csv", ".pdf", ".xlsx")]
                 nomes = ["(selecione)"] + [f.name for f in opcoes_validas]
                 with col:
                     escolha = st.selectbox(label, nomes, key=f"sel_{categoria}_{_reset_seq}")
@@ -2819,7 +2826,46 @@ def _detectar_conta_banco_cached(extrato_path: str, _extrato_mtime: float,
     return cb.detectar_conta_banco(extrato_path, contas)
 
 
+@st.cache_data(show_spinner=False)
+def _analisar_extrato_cached(extrato_path: str, _extrato_mtime: float):
+    return cb.analisar_extrato(extrato_path)
+
+
+@st.cache_data(show_spinner=False)
+def _diagnostico_conta_cached(extrato_path: str, _extrato_mtime: float,
+                              balancete_path: str, _balancete_mtime: float):
+    contas = _parse_balancete_cached(balancete_path, _balancete_mtime)
+    return cb.diagnosticar_conta_banco(extrato_path, contas)
+
+
+def _mostrar_analise_extrato(caminho: str) -> None:
+    try:
+        a = _analisar_extrato_cached(caminho, Path(caminho).stat().st_mtime)
+    except Exception as exc:
+        st.warning(f"Não consegui ler o extrato para analisar: {exc}")
+        return
+    banco = (a.instituicao or (a.banco or "").title() or "não identificado")
+    with st.expander(f"🔎 Análise do extrato — {banco} · {a.qtd} lançamento(s)", expanded=False):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Banco", banco, help=f"Formato do arquivo: {a.formato}"
+                  + (f" · código do banco {a.banco_codigo}" if a.banco_codigo else ""))
+        c2.metric("Conta", a.conta or "—", help="Número da conta lido do próprio extrato "
+                  "(usado para casar com o nome da conta no balancete).")
+        periodo = (f"{a.periodo_inicio:%d/%m/%Y} a {a.periodo_fim:%d/%m/%Y}"
+                   if a.periodo_inicio and a.periodo_fim else "—")
+        c3.metric("Período", periodo)
+        c4.metric("Lançamentos", a.qtd)
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Entradas", cb.fmt_money(a.entradas))
+        d2.metric("Saídas", cb.fmt_money(a.saidas))
+        d3.metric("Saldo informado no arquivo",
+                  cb.fmt_money(a.saldo_final_informado) if a.saldo_final_informado is not None else "—")
+
+
 conta_contabil: Optional[str] = None
+
+if extrato_path:
+    _mostrar_analise_extrato(extrato_path)
 
 if balancete_path:
     try:
@@ -2851,12 +2897,18 @@ if balancete_path:
                 balancete_path, Path(balancete_path).stat().st_mtime,
             )
 
+        _assinatura_extrato = Path(extrato_path).stat().st_size if extrato_path else None
+        if (st.session_state.get("forcar_escolha_conta")
+                and st.session_state.get("forcar_escolha_conta_assinatura") != _assinatura_extrato):
+            st.session_state["forcar_escolha_conta"] = False
+
         if conta_auto and not st.session_state.get("forcar_escolha_conta"):
             conta_contabil = conta_auto.nome
             st.success(f"Conta banco identificada automaticamente a partir do extrato: "
                        f"{conta_auto.codigo} — {conta_auto.nome}")
             if st.button("Não é essa conta — escolher manualmente"):
                 st.session_state["forcar_escolha_conta"] = True
+                st.session_state["forcar_escolha_conta_assinatura"] = _assinatura_extrato
                 st.rerun()
         else:
             if not extrato_path:
@@ -2865,6 +2917,13 @@ if balancete_path:
             else:
                 st.warning("Não consegui identificar a conta banco automaticamente a partir do extrato — "
                             "confirme qual é, abaixo (o balancete continua sendo a fonte de verdade).")
+                try:
+                    st.info(_diagnostico_conta_cached(
+                        extrato_path, Path(extrato_path).stat().st_mtime,
+                        balancete_path, Path(balancete_path).stat().st_mtime,
+                    ))
+                except Exception:
+                    pass
             provaveis = cb.contas_provaveis_banco(contas_balancete)
             mostrar_todas = st.checkbox(
                 "Mostrar todas as contas do balancete (em vez de só as prováveis de banco/caixa)",
@@ -2906,7 +2965,7 @@ if pronto:
     def _processar_cached(
         extrato_path, razao_path, balancete_path, conta_contabil, competencia,
         saldo_inicial_razao, saldo_inicial_extrato, dias_tolerancia,
-        _extrato_mtime, _razao_mtime, _balancete_mtime,
+        _extrato_mtime, _razao_mtime, _balancete_mtime, usar_sugestoes=True,
     ):
         log = []
         _print_original = print
@@ -2924,6 +2983,7 @@ if pronto:
                 saldo_inicial_razao=saldo_inicial_razao,
                 saldo_inicial_extrato=saldo_inicial_extrato,
                 dias_tolerancia=dias_tolerancia,
+                usar_sugestoes=usar_sugestoes,
             )
         finally:
             builtins.print = _print_original
@@ -2941,6 +3001,7 @@ if pronto:
                 extrato_path, razao_path, balancete_path, conta_contabil, competencia,
                 saldo_inicial_razao, saldo_inicial_extrato, int(dias_tolerancia),
                 _mtime(extrato_path), _mtime(razao_path), _mtime(balancete_path),
+                bool(usar_sugestoes),
             )
         except Exception as exc:
             st.error(f"Erro ao processar: {exc}")
@@ -2981,6 +3042,25 @@ if pronto:
     # vez de ficarem de fora. O balancete continua sendo a fonte: so
     # aparecem contas que realmente existem nele.
     # -----------------------------------------------------------------
+    _nome_por_codigo = {c.codigo: c.nome for c in resultado.contas}
+    _sugeridas_auto = [m for m in resultado.pendentes_banco if (m.categoria or "").startswith("Sugerida")]
+    if _sugeridas_auto:
+        with st.expander(
+            f"💡 {len(_sugeridas_auto)} contrapartida(s) sugerida(s) automaticamente pelo balancete — revise"
+        ):
+            st.caption("Aplicadas sozinhas por terem alta confiança (CPF/CNPJ ou nome da conta no histórico, "
+                       "ou palavra-chave com uma única conta possível). Para trocar alguma, desligue a "
+                       "sugestão automática em Avançado e trate pelo agrupamento/filtro abaixo.")
+            st.dataframe(
+                [{
+                    "Data": f"{m.data:%d/%m/%Y}", "Valor": cb.fmt_money(m.valor), "Histórico": m.descricao[:80],
+                    "Conta": f"{(m.conta_debito if m.valor < 0 else m.conta_credito)} — "
+                             f"{_nome_por_codigo.get(m.conta_debito if m.valor < 0 else m.conta_credito, '')}",
+                    "Motivo": (m.categoria or "").replace("Sugerida: ", ""),
+                } for m in _sugeridas_auto],
+                use_container_width=True, hide_index=True,
+            )
+
     pendentes_sem_conta = [m for m in resultado.pendentes_banco if m.status == "conta_nao_identificada"]
     qtd_saida = sum(1 for m in pendentes_sem_conta if m.valor < 0)
     qtd_entrada = sum(1 for m in pendentes_sem_conta if m.valor >= 0)
@@ -3026,6 +3106,47 @@ if pronto:
         # da pra filtrar por descricao (ex.: nome de um fornecedor) e
         # aplicar uma conta so aquele grupo filtrado, ou linha por linha.
         # -------------------------------------------------------------
+        pendentes_restantes = [m for m in resultado.pendentes_banco if m.status == "conta_nao_identificada"]
+        if pendentes_restantes:
+            _grupos_fav = cb.agrupar_por_favorecido(pendentes_restantes)
+            with st.expander(
+                f"👥 Tratar por favorecido — {len(_grupos_fav)} grupo(s) para {len(pendentes_restantes)} pendência(s)"
+            ):
+                st.caption("Agrupa os lançamentos do mesmo CPF/CNPJ ou nome. Escolha a conta uma vez e ela vale "
+                           "para todos do grupo. Os mais frequentes aparecem primeiro; as dicas (💡) vêm da "
+                           "análise do balancete.")
+                _FAV_POR_PAGINA = 15
+                _total_pag_fav = max(1, -(-len(_grupos_fav) // _FAV_POR_PAGINA))
+                _pag_fav = 1
+                if _total_pag_fav > 1:
+                    _pag_fav = st.number_input("Página de grupos", min_value=1, max_value=_total_pag_fav,
+                                               step=1, key="pagina_favorecidos")
+                for _g in _grupos_fav[(_pag_fav - 1) * _FAV_POR_PAGINA:_pag_fav * _FAV_POR_PAGINA]:
+                    _dica = next((m.sugestoes[0] for m in _g.movimentos if m.sugestoes), None)
+                    _opcoes_g = list(rotulos_contas)
+                    if _dica:
+                        _rot_dica = f"{_dica.codigo} — {_dica.nome}"
+                        if _rot_dica in _opcoes_g:
+                            _opcoes_g.remove(_rot_dica)
+                            _opcoes_g.insert(1, f"💡 {_rot_dica}")
+                    fg1, fg2, fg3 = st.columns([3, 2, 4])
+                    with fg1:
+                        st.write(f"**{_g.rotulo[:45]}**")
+                        st.caption(f"{len(_g.movimentos)} lançamento(s) · {cb.fmt_money(_g.total)}"
+                                   + (f" · {_dica.motivo}" if _dica else ""))
+                    with fg3:
+                        _esc_g = st.selectbox("Conta", _opcoes_g, key=f"sel_fav_{hash(_g.chave)}",
+                                              label_visibility="collapsed")
+                    if _esc_g != "(não atribuir)":
+                        _cod_g = _esc_g.replace("💡 ", "").split(" — ")[0]
+                        for _m in _g.movimentos:
+                            _pend_manuais[_chave_estavel_mov(_idx_por_mov[id(_m)], _m)] = _cod_g
+                        cb.aplicar_contrapartida_padrao(
+                            _g.movimentos, resultado.conta_banco,
+                            conta_saida_codigo=_cod_g, conta_entrada_codigo=_cod_g,
+                        )
+                        st.rerun()
+
         pendentes_restantes = [m for m in resultado.pendentes_banco if m.status == "conta_nao_identificada"]
         if pendentes_restantes:
             with st.expander(
