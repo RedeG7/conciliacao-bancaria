@@ -29,3 +29,11 @@
 honorarioscontrol.com.br, www.honorarioscontrol.com.br {
 	reverse_proxy honorarios-app:5000
 }
+
+# TechSupportCRM - Suporte RedeG7 / helpdesk (repo RedeG7/TechSupportCRM, em
+# /opt/techsupport). Mesmo modelo do Honorarios: o container entra na rede
+# deste compose com o alias "techsupport-app" (deploy/compose.proxy-hub.yml
+# daquele repo). Fora do ar, so este site responde 502.
+{$DOMINIO_SUPORTE:suporte.redeg7.com} {
+	reverse_proxy techsupport-app:5000
+}
