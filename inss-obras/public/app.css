@@ -91,6 +91,7 @@ table { border-collapse: collapse; width: 100%; } .lista th, .lista td { text-al
 .abas { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
 .abas a:not(.botao) { padding: 8px 14px; border-radius: 99px; border: 1px solid var(--borda); text-decoration: none; color: var(--texto); }
 .abas a.ativo { background: var(--verde); border-color: var(--verde); color: #fff; } .abas a span { opacity: .75; margin-left: 4px; } .abas .botao { margin-left: auto; }
+.faixa-status { background: var(--alerta-fundo); color: var(--alerta); padding: 8px 20px; font-weight: 600; border-bottom: 1px solid var(--borda); }
 .abas-form { display: flex; flex-wrap: wrap; gap: 4px; margin: 12px 0; border-bottom: 1px solid var(--borda); }
 .abas-form button { background: none; border: 0; border-bottom: 3px solid transparent; padding: 8px 12px; font: inherit; color: var(--suave); cursor: pointer; }
 .abas-form button.ativo { color: var(--texto); border-bottom-color: var(--verde); font-weight: 600; }

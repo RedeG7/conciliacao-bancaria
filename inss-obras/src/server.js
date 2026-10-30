@@ -6,11 +6,11 @@
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
-const { db, tx, nowIso, paramReader, ensureOffice } = require('./db');
+const { db, tx, nowIso, paramReader, ensureOffice, setting } = require('./db');
 const sso = require('./sso');
 const calc = require('./calc');
 const { TABELAS, UFS, VALIDAR } = require('./params');
-const { avisosCertificados, situacaoProcuracao } = require('./dctf');
+const { avisosCertificados, situacaoProcuracao, lembretesDctf } = require('./dctf');
 const { KINDS, porSlug, herdarDePredial, camposPredial, lerPredial, resultadoPredial } = require('./kinds');
 const V = require('./views');
 const { html, raw, brl, n2, dataBr, dataHoraBr, layout, page, contadores, tabela, select, campo } = V;
@@ -234,7 +234,7 @@ app.get('/dash', h((req, res) => {
   const ultimaVau = P.list('vau').map(v => v.vigencia).sort().pop();
   const d = new Date(), esperada = new Date(d.getFullYear(), d.getMonth() - 1, 1).toISOString().slice(0, 7);
   if (ultimaVau && ultimaVau < esperada) pendencias.push(`VAU desatualizada: a última importada é de ${ultimaVau}. Consulte a tabela do mês no SERO (e-CAC) e importe em Cadastros > Parâmetros > VAU.`);
-  pendencias.push(...avisosCertificados(req.office));
+  pendencias.push(...avisosCertificados(req.office), ...lembretesDctf(req.office));
   const ultimas = db.prepare(`SELECT s.*, c.nome AS cliente FROM simulations s LEFT JOIN clients c ON c.id = s.client_id
     WHERE s.office = ? AND s.ativo = 1 ORDER BY s.id DESC LIMIT 8`).all(req.office);
   res.send(layout(req, 'Dashboard', html`
@@ -589,6 +589,7 @@ app.get('/cadastros/escritorio', h((req, res) => {
       ${campo('WhatsApp do escritório (com DDD)', html`<input name="whatsapp" value="${o.whatsapp || ''}" placeholder="62999999999">`)}
       ${campo('E-mail', html`<input name="email" type="email" value="${o.email || ''}">`)}
       ${campo('URL do logotipo (https://...)', html`<input name="logo_url" value="${o.logo_url || ''}">`)}
+      ${campo('Ambiente do eSocial (transmissão)', select('esocial_ambiente', [['producao_restrita', 'Produção restrita (homologação/testes)'], ['producao', 'Produção']], o.esocial_ambiente))}
       ${campo('Mensagem no topo do simulador público', html`<textarea name="mensagem" rows="2">${o.mensagem || ''}</textarea>`, 'largo')}
     </div><div class="acoes"><button class="botao">Salvar</button></div></fieldset>${pode ? '' : html`<p class="desc">Somente administradores do escritório alteram estes dados.</p>`}</form>`,
   { descricao: 'Marca do escritório no simulador público e na proposta.', migalha: 'Cadastros' }));
@@ -597,8 +598,8 @@ app.post('/cadastros/escritorio', h((req, res) => {
   exigirAdmin(req);
   const b = req.body;
   const logo = /^https:\/\//.test(b.logo_url || '') ? b.logo_url : '';
-  db.prepare('UPDATE offices SET display_name=?, whatsapp=?, email=?, logo_url=?, mensagem=? WHERE id=?')
-    .run(b.display_name || '', b.whatsapp || '', b.email || '', logo, b.mensagem || '', req.office);
+  db.prepare('UPDATE offices SET display_name=?, whatsapp=?, email=?, logo_url=?, mensagem=?, esocial_ambiente=? WHERE id=?')
+    .run(b.display_name || '', b.whatsapp || '', b.email || '', logo, b.mensagem || '', b.esocial_ambiente === 'producao' ? 'producao' : 'producao_restrita', req.office);
   flash(res, 'Dados do escritório salvos.');
   res.redirect('/cadastros/escritorio');
 }));
@@ -612,10 +613,22 @@ app.post('/cadastros/escritorio/novo-link', h((req, res) => {
 // ---------------------------------------------------------------- parâmetros
 app.get('/cadastros/parametros', h((req, res) => {
   const cont = Object.fromEntries(db.prepare('SELECT tabela, COUNT(*) AS n, SUM(obs = ?) AS pend FROM params GROUP BY tabela').all(VALIDAR).map(r => [r.tabela, r]));
-  res.send(layout(req, 'Parâmetros de cálculo', html`<div class="grade-cards">${Object.entries(TABELAS).map(([k, t]) => html`
+  const aviso = setting('aviso_topo');
+  res.send(layout(req, 'Parâmetros de cálculo', html`${req.user.is_global ? html`<form method="post" action="/cadastros/aviso-topo" class="card">
+    ${campo('Faixa de aviso no topo de todas as telas (ex.: "eSocial instável - envios podem demorar"). Vazio = sem faixa.', html`<input name="aviso" value="${aviso}" maxlength="200">`)}
+    <div class="acoes"><button class="botao sec">Salvar aviso</button></div></form>` : ''}<div class="grade-cards">${Object.entries(TABELAS).map(([k, t]) => html`
     <a class="card link-card" href="/cadastros/parametros/${k}"><b>${t.titulo}</b><small>${t.ajuda}</small>
       <span>${cont[k]?.n || 0} registro(s)${cont[k]?.pend ? html` · <em class="alerta-txt">${cont[k].pend} a validar</em>` : ''}</span></a>`)}</div>`,
   { descricao: 'Tabelas usadas pelos simuladores. Nenhum percentual fica no código: altere aqui. Somente o super administrador do Hub edita.', migalha: 'Cadastros' }));
+}));
+
+app.post('/cadastros/aviso-topo', h((req, res) => {
+  exigirGlobal(req);
+  db.prepare(`INSERT INTO settings (chave, valor, updated_at, updated_by) VALUES ('aviso_topo', ?, ?, ?)
+    ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
+    .run(String(req.body.aviso || '').trim().slice(0, 200), nowIso(), req.user.name);
+  flash(res, 'Aviso do topo salvo.');
+  res.redirect('/cadastros/parametros');
 }));
 
 app.get('/cadastros/parametros/:tabela', h((req, res, next) => {

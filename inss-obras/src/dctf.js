@@ -72,6 +72,26 @@ function avisosCertificados(office) {
   });
 }
 
+// "Ativar lembretes": para cada envio com lembrete ligado (e não finalizado
+// nem cancelado), avisa se a competência do mês anterior - a que vence no
+// dia de vencimento deste mês - ainda não foi enviada nem marcada como
+// paralisada. Aparece no Dashboard.
+function lembretesDctf(office, hoje = new Date()) {
+  const dia = paramReader().get('dctf', 'Dia de vencimento') || 20;
+  const comp = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() - 1, 15)).toISOString().slice(0, 7);
+  const venc = folha.vencimento(comp, dia);
+  const hojeIso = hoje.toISOString().slice(0, 10);
+  return db.prepare(`SELECT d.*, c.nome AS cliente, w.data_inicio, w.data_fim FROM dctf_webs d JOIN clients c ON c.id = d.client_id LEFT JOIN works w ON w.id = d.work_id
+    WHERE d.office = ? AND d.ativo = 1 AND d.lembretes = 1 AND d.status IN ('em_andamento','mensal')`).all(office)
+    .filter(d => {
+      const ini = (d.construction_init_date || d.data_inicio || '').slice(0, 7), fim = (d.construction_end_date || d.data_fim || '').slice(0, 7);
+      if ((ini && comp < ini) || (fim && comp > fim)) return false;
+      const m = db.prepare('SELECT status, is_paralyzed FROM payroll_months WHERE dctf_web_id = ? AND competencia = ?').get(d.id, comp);
+      return !m || (!m.is_paralyzed && !['enviado', 'fechado', 'fechado_externo'].includes(m.status));
+    })
+    .map(d => `Envio DCTFWeb #${d.id} (${d.cliente}): competência ${comp.slice(5)}/${comp.slice(0, 4)} ${hojeIso > venc ? `VENCIDA em ${dataBr(venc)}` : `vence em ${dataBr(venc)}`} e ainda não foi enviada.`);
+}
+
 // ---------------------------------------------------------------- guia de envio
 // Os 8 passos da spec, detectados pelos dados já cadastrados (não é checklist).
 function passosGuia(office, c) {
@@ -490,7 +510,9 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
         ${x.sp.cert ? html`<div class="cert-mini"><small>Certificado do procurador</small><b>${x.sp.cert.titular}</b>${selo(cert.diasPara(x.sp.cert.validade))}</div>` : ''}
         <button class="botao" form="formDctf">Salvar</button>
         <button class="botao sec" form="formDctf" name="marcar" value="1" title="Marca os meses em rascunho para envio">Salvar e marcar para envio</button>
+        <form method="post" action="/dctf-web/${d.id}/lembretes"><button class="botao sec">${d.lembretes ? '🔔 Desativar lembretes' : '🔕 Ativar lembretes'}</button></form>
         <a class="botao sec" href="/dctf-web/visualizar/${d.id}">Relatório</a>
+        <small class="desc">eSocial: ${req.officeRow.esocial_ambiente === 'producao' ? 'Produção' : 'Produção restrita (testes)'}</small>
         <a class="botao sec" href="/dctf-web">Voltar</a>
         ${d.status !== 'cancelado' ? html`<form method="post" action="/dctf-web/${d.id}/cancelar" data-pedir="Motivo do cancelamento:"><input type="hidden" name="cancel_reason"><button class="botao sec perigo">Cancelar envio</button></form>` : ''}
         <p class="desc pequeno">A transmissão automática ao eSocial ainda não está ligada: transmita no eSocial/e-CAC e registre os recibos aqui.</p>
@@ -602,6 +624,12 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
       const n = db.prepare("UPDATE payroll_months SET status = 'marcado' WHERE dctf_web_id = ? AND status = 'rascunho' AND is_paralyzed = 0").run(d.id).changes;
       flash(res, `Envio salvo. ${n} mês(es) marcado(s) para envio.`);
     } else flash(res, 'Envio salvo.');
+    res.redirect(`/dctf-web/editar/${d.id}`);
+  }));
+  app.post('/dctf-web/:id/lembretes', h((req, res) => {
+    const d = carregarDctf(req);
+    db.prepare('UPDATE dctf_webs SET lembretes = ? WHERE id = ?').run(d.lembretes ? 0 : 1, d.id);
+    flash(res, d.lembretes ? 'Lembretes desativados.' : 'Lembretes ativados: o Dashboard avisa quando a competência do mês ainda não foi enviada.');
     res.redirect(`/dctf-web/editar/${d.id}`);
   }));
   app.post('/dctf-web/:id/cancelar', h((req, res) => {
@@ -797,3 +825,4 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
 module.exports.avisosCertificados = avisosCertificados;
 module.exports.situacaoProcuracao = situacaoProcuracao;
 module.exports.passosGuia = passosGuia;
+module.exports.lembretesDctf = lembretesDctf;

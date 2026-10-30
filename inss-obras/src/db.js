@@ -136,6 +136,13 @@ CREATE TABLE IF NOT EXISTS send_guides (
   ativo INTEGER NOT NULL DEFAULT 1, UNIQUE (office, client_id));
 `);
 
+// "Ativar lembretes" do envio, ambiente do eSocial por escritório (usado pela
+// transmissão, próxima etapa) e configurações gerais (faixa de aviso no topo)
+addColumns('dctf_webs', ['lembretes INTEGER NOT NULL DEFAULT 0']);
+addColumns('offices', ["esocial_ambiente TEXT NOT NULL DEFAULT 'producao_restrita'"]);
+db.exec('CREATE TABLE IF NOT EXISTS settings (chave TEXT PRIMARY KEY, valor TEXT, updated_at TEXT, updated_by TEXT)');
+const setting = chave => db.prepare('SELECT valor FROM settings WHERE chave = ?').get(chave)?.valor || '';
+
 const nowIso = () => new Date().toISOString();
 
 // valores iniciais das tabelas de parâmetros (só quando a tabela está vazia)
@@ -191,4 +198,4 @@ function ensureOffice(id, name) {
   return db.prepare('SELECT * FROM offices WHERE id = ?').get(id);
 }
 
-module.exports = { db, tx, nowIso, paramReader, ensureOffice, DATA_DIR };
+module.exports = { db, tx, nowIso, paramReader, ensureOffice, setting, DATA_DIR };
