@@ -111,35 +111,42 @@ function cabecalhoPublico(o) {
     <div><b>${o.display_name || o.name}</b><small>Simulação de INSS de obra</small></div></header>`;
 }
 
-app.get('/simulador/obras-prediais/:token', h((req, res) => {
-  const o = db.prepare('SELECT * FROM offices WHERE public_token = ?').get(req.params.token);
-  if (!o) return telaErro(res, 404, 'Link de simulação não encontrado.');
-  const erro = req.query.erro ? html`<div class="aviso erro">${req.query.erro}</div>` : '';
-  res.send(page(`Simulador - ${o.display_name || o.name}`, html`<div class="publico">${cabecalhoPublico(o)}
-    <form method="post" class="card">
-      ${o.mensagem ? html`<p class="desc">${o.mensagem}</p>` : ''}${erro}
+// formulário público; num erro volta preenchido com o que a pessoa digitou
+// (sem redirect, para não perder os dados nem acumular ?erro= no endereço)
+function telaPublica(res, o, dados = {}, erro = '') {
+  res.status(erro ? 422 : 200).send(page(`Simulador - ${o.display_name || o.name}`, html`<div class="publico">${cabecalhoPublico(o)}
+    <form method="post" action="/simulador/obras-prediais/${o.public_token}" class="card">
+      ${o.mensagem ? html`<p class="desc">${o.mensagem}</p>` : ''}${erro ? html`<div class="aviso erro">${erro}</div>` : ''}
       <h3>Seus dados</h3>
-      <div class="grade">${campo('Nome *', html`<input name="nome" required>`)}${campo('E-mail *', html`<input name="email" type="email" required>`)}
-        ${campo('Celular / WhatsApp *', html`<input name="telefone" required inputmode="tel">`)}</div>
-      <h3>Dados da obra</h3>${camposPredial({}, paramReader())}
+      <div class="grade">${campo('Nome *', html`<input name="nome" value="${dados.nome || ''}" required>`)}
+        ${campo('E-mail *', html`<input name="email" type="email" value="${dados.email || ''}" required>`)}
+        ${campo('Celular / WhatsApp *', html`<input name="telefone" value="${dados.telefone || ''}" required inputmode="tel">`)}</div>
+      <h3>Dados da obra</h3>${camposPredial(dados, paramReader())}
       <input name="site" class="oculto" tabindex="-1" autocomplete="off" aria-hidden="true">
       <div class="acoes"><button class="botao">Calcular</button></div>
     </form><p class="rodape">Estimativa com base na aferição indireta (IN RFB nº 2.021/2021). Não substitui a aferição oficial no SERO.</p></div>`));
+}
+
+app.get('/simulador/obras-prediais/:token', h((req, res) => {
+  const o = db.prepare('SELECT * FROM offices WHERE public_token = ?').get(req.params.token);
+  if (!o) return telaErro(res, 404, 'Link de simulação não encontrado.');
+  telaPublica(res, o);
 }));
 
 app.post('/simulador/obras-prediais/:token', h((req, res) => {
   const o = db.prepare('SELECT * FROM offices WHERE public_token = ?').get(req.params.token);
   if (!o) return telaErro(res, 404, 'Link de simulação não encontrado.');
   const b = req.body;
-  if (b.site) return res.redirect(req.originalUrl); // robô (campo oculto preenchido)
+  if (b.site) return res.redirect(req.path); // robô (campo oculto preenchido)
   if (excedeuLimite(req.ip)) return telaErro(res, 429, 'Muitas simulações seguidas. Tente de novo mais tarde.');
   const nome = String(b.nome || '').trim(), email = String(b.email || '').trim(), telefone = String(b.telefone || '').trim();
-  const volta = msg => res.redirect(`${req.originalUrl}?erro=${encodeURIComponent(msg)}`);
-  if (!nome || !email || !telefone) return volta('Preencha nome, e-mail e celular.');
   const input = lerPredial(b);
+  const volta = msg => telaPublica(res, o, { ...input, nome, email, telefone }, msg);
+  if (!nome || !email || !telefone) return volta('Preencha nome, e-mail e celular.');
   let r;
   try { r = calc.predial(input, paramReader()); } catch (e) {
-    if (e instanceof calc.CalcError) return volta(e.message);
+    // ao visitante não interessa onde se cadastra o parâmetro que falta
+    if (e instanceof calc.CalcError) return volta(e.message.replace(/\. (Importe|Cadastre) .*$/, '. A simulação ainda não está disponível para esses dados - fale com o escritório.'));
     throw e;
   }
   const uuid = crypto.randomUUID();
