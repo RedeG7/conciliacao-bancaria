@@ -35,6 +35,7 @@ h1 { font-size: 1.5rem; margin: .2rem 0; } h3 { margin: 1.4rem 0 .6rem; font-siz
   :root[data-menu="recolhido"] .marca { flex-direction: column; gap: 8px; }
   :root[data-menu="recolhido"] .marca > div, :root[data-menu="recolhido"] .busca-menu, :root[data-menu="recolhido"] .grupo a .rot { display: none; }
   :root[data-menu="recolhido"] .marca .recolher { margin: 0; transform: rotate(180deg); }
+  :root[data-menu="recolhido"] .logo { cursor: pointer; }
   :root[data-menu="recolhido"] .grupo summary { font-size: 0; padding: 6px 0 2px; border-top: 1px solid #ffffff1f; margin-top: 4px; pointer-events: none; }
   :root[data-menu="recolhido"] .grupo summary::after { content: none; }
   :root[data-menu="recolhido"] .grupo a { justify-content: center; font-size: 1.15rem; padding: 8px 0; }
@@ -46,7 +47,7 @@ h1 { font-size: 1.5rem; margin: .2rem 0; } h3 { margin: 1.4rem 0 .6rem; font-siz
 .escritorio { flex: 1; font-weight: 600; } .acoes-topo { display: flex; align-items: center; gap: 8px; }
 .usuario { color: var(--suave); font-size: .9rem; }
 .icone { background: none; border: 1px solid var(--borda); border-radius: 8px; padding: 4px 9px; cursor: pointer; color: inherit; }
-#abrirMenu { display: none; }
+
 main { padding: 20px; max-width: 1280px; }
 .migalha, .desc { color: var(--suave); } .desc { margin: .2rem 0 1rem; }
 .card { background: var(--card); border: 1px solid var(--borda); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
