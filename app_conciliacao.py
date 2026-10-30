@@ -1146,6 +1146,11 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
     )
     competencia_escolhida = f"{_data_competencia.month:02d}/{_data_competencia.year}"
 
+    st.caption("Colunas esperadas: " + " · ".join(modulo_info["colunas_planilha"]))
+    st.download_button(
+        "📥 Baixar planilha modelo (.xlsx)", _planilha_modelo(modulo_info),
+        file_name=f"modelo_empresas_{modulo_id}.xlsx", key=f"modelo_manual_{modulo_id}",
+    )
     up_planilha = st.file_uploader(
         "Planilha de empresas (.xlsx)", type=["xlsx"], key=f"up_planilha_manual_{modulo_id}",
     )
@@ -1789,6 +1794,11 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "Hub de RPAs", icon
 
     st.subheader("Nova execução")
     _eh_nfgo = modulo_id == "sefazgo_nfe"
+    st.caption("Colunas esperadas: " + " · ".join(modulo_info["colunas_planilha"]))
+    st.download_button(
+        "📥 Baixar planilha modelo (.xlsx)", _planilha_modelo(modulo_info),
+        file_name=f"modelo_empresas_{modulo_id}.xlsx", key=f"modelo_{modulo_id}",
+    )
     if not cred:
         st.info("Cadastre a credencial do procurador acima antes de enviar uma planilha.")
     else:
@@ -1808,11 +1818,6 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "Hub de RPAs", icon
                      "ENTRADA e SAIDA, com ENTRADA_MMAAAA.zip, SAIDA_MMAAAA.zip e o print de cada consulta. "
                      "Os mesmos arquivos também ficam no \"Baixar tudo (.zip)\" abaixo.",
             )
-        st.caption("Colunas esperadas: " + " · ".join(modulo_info["colunas_planilha"]))
-        st.download_button(
-            "📥 Baixar planilha modelo (.xlsx)", _planilha_modelo(modulo_info),
-            file_name=f"modelo_empresas_{modulo_id}.xlsx", key=f"modelo_{modulo_id}",
-        )
         up_planilha = st.file_uploader(
             "Planilha de empresas (.xlsx)", type=["xlsx"], key=f"up_planilha_{modulo_id}",
         )
