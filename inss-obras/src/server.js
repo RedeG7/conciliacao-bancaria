@@ -10,7 +10,7 @@ const { db, tx, nowIso, paramReader, ensureOffice } = require('./db');
 const sso = require('./sso');
 const calc = require('./calc');
 const { TABELAS, UFS, VALIDAR } = require('./params');
-const { avisosCertificados } = require('./dctf');
+const { avisosCertificados, situacaoProcuracao } = require('./dctf');
 const { KINDS, porSlug, herdarDePredial, camposPredial, lerPredial, resultadoPredial } = require('./kinds');
 const V = require('./views');
 const { html, raw, brl, n2, dataBr, dataHoraBr, layout, page, contadores, tabela, select, campo } = V;
@@ -454,34 +454,81 @@ app.post('/propostas/:id/desativar', h((req, res) => {
 }));
 
 // ---------------------------------------------------------------- clientes
-function formCliente(c, acao) {
-  return html`<form method="post" action="${acao}" class="card"><div class="grade">
+// Cliente = dono da obra. Para o envio eSocial/DCTFWeb ele é o empregador
+// (S-1000) e dá procuração eletrônica ao procurador do escritório, cujo
+// certificado A1 (DCTF Web > Certificados) transmite em nome dele.
+const CAMPOS_CLIENTE = ['tipo', 'nome', 'fantasia', 'documento', 'email', 'telefone', 'origem', 'obs', 'profissao', 'nacionalidade', 'registro', 'contato',
+  'telefone_fixo', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'uf', 'complemento', 'possui_procuracao', 'procuracao_data_assinatura', 'procuracao_data_fim',
+  'certificate_id', 's1000_inicio', 's1000_fim', 'class_trib', 'ind_opt_reg_eletron', 'ind_desoneracao', 'pis_pasep', 's1000_recibo'];
+const CLASS_TRIB = [['21', '21 - Empregador doméstico ou empregador PF'], ['22', '22 - Segurado especial'], ['60', '60 - Missão diplomática'], ['70', '70 - Organismo internacional']];
+
+function formCliente(req, c, acao, completo = false) {
+  const inp = (n, attrs = '') => html`<input name="${n}" value="${c[n] ?? ''}" ${raw(attrs)}>`;
+  const certs = db.prepare('SELECT id, titular, documento, validade FROM certificates WHERE office = ? AND ativo = 1 ORDER BY titular').all(req.office);
+  const sp = c.id ? situacaoProcuracao(c) : null;
+  return html`<form method="post" action="${acao}" class="card">
+    <h3>Dados do cliente</h3><div class="grade">
     ${campo('Tipo', select('tipo', [['PF', 'Pessoa Física'], ['PJ', 'Pessoa Jurídica']], c.tipo))}
-    ${campo('Nome / razão social *', html`<input name="nome" value="${c.nome || ''}" required>`)}
-    ${campo('Nome fantasia', html`<input name="fantasia" value="${c.fantasia || ''}">`)}
-    ${campo('CPF / CNPJ', html`<input name="documento" value="${c.documento || ''}">`)}
-    ${campo('E-mail', html`<input name="email" type="email" value="${c.email || ''}">`)}
-    ${campo('Celular / telefone', html`<input name="telefone" value="${c.telefone || ''}">`)}
-    ${campo('Origem', html`<input name="origem" value="${c.origem || ''}" placeholder="Indicação, site, Instagram...">`)}
+    ${campo('Nome / razão social *', inp('nome', 'required'))}
+    ${campo('Nome fantasia', inp('fantasia'))}
+    ${campo('CPF / CNPJ', inp('documento', 'inputmode="numeric"'))}
+    ${campo('E-mail', inp('email', 'type="email"'))}
+    ${campo('Celular', inp('telefone'))}
+    ${campo('Origem', inp('origem', 'placeholder="Indicação, site, Instagram..."'))}
+    ${completo ? html`${campo('Telefone fixo', inp('telefone_fixo'))}${campo('Profissão', inp('profissao'))}${campo('Nacionalidade', inp('nacionalidade'))}
+      ${campo('Registro (RG)', inp('registro'))}${campo('Contato', inp('contato'))}` : ''}
     ${campo('Observações', html`<textarea name="obs" rows="2">${c.obs || ''}</textarea>`, 'largo')}
-  </div><div class="acoes"><button class="botao">Salvar</button></div></form>`;
+    </div>
+    ${completo ? html`<h3>Endereço</h3><div class="grade">${campo('CEP', inp('cep'))}${campo('Rua', inp('rua'))}${campo('Número', inp('numero'))}${campo('Complemento', inp('complemento'))}
+      ${campo('Bairro', inp('bairro'))}${campo('Cidade', inp('cidade'))}${campo('UF', select('uf', ['', ...UFS], c.uf))}</div>
+    <h3>Procuração eletrônica e certificado do procurador</h3>
+    <p class="desc">O cliente outorga procuração eletrônica no e-CAC ao procurador do escritório (permissões do eSocial e da DCTFWeb); o envio usa o certificado A1 do procurador. Sem procuração vigente o envio ao eSocial fica bloqueado.</p>
+    ${sp ? html`<div class="aviso ${sp.ok ? 'ok' : 'alerta'}">${sp.ok ? 'Procuração vigente e certificado do procurador válido.' : `Falta: ${[!sp.proc && 'procuração informada e vigente', !sp.certOk && 'certificado do procurador válido'].filter(Boolean).join(' e ')}.`}</div>` : ''}
+    <div class="grade">
+      ${campo('Possui procuração eletrônica?', select('possui_procuracao', [['0', 'Não'], ['1', 'Sim']], c.possui_procuracao ? '1' : '0'))}
+      ${campo('Data de assinatura', inp('procuracao_data_assinatura', 'type="date"'))}
+      ${campo('Data de fim', inp('procuracao_data_fim', 'type="date"'))}
+      ${campo('Certificado do procurador', select('certificate_id', [['', certs.length ? 'Selecione' : '- importe em DCTF Web > Certificados -'], ...certs.map(ce => [ce.id, `${ce.titular} (${ce.documento}, vence ${dataBr(ce.validade)})`])], c.certificate_id))}
+    </div>
+    <h3>Dados do empregador (S-1000)</h3><div class="grade">
+      ${campo('Início de validade (mês/ano)', inp('s1000_inicio', 'type="month"'))}${campo('Término de validade', inp('s1000_fim', 'type="month"'))}
+      ${campo('Classificação tributária', select('class_trib', CLASS_TRIB, c.class_trib || '21'))}
+      ${campo('Registro eletrônico de empregados', select('ind_opt_reg_eletron', [['0', '0 - Não optou'], ['1', '1 - Optou']], c.ind_opt_reg_eletron || '0'))}
+      ${campo('Indicativo de desoneração da folha', select('ind_desoneracao', [['0', '0 - Não aplicável'], ['1', '1 - Empresa Lei 12.546/2011']], c.ind_desoneracao || '0'))}
+      ${campo('Tributação PIS/PASEP', select('pis_pasep', [['0', 'Não'], ['1', 'Sim']], c.pis_pasep ? '1' : '0'))}
+      ${campo('Recibo do S-1000 (após cadastrar o empregador no eSocial)', inp('s1000_recibo'))}
+    </div><p class="desc">Confira CPF e nome com o cadastro da Receita; se estiverem errados, o cliente precisa atualizar numa unidade conveniada antes do envio.</p>` : ''}
+    <div class="acoes"><button class="botao">Salvar</button>${c.id && !completo ? html`<a class="botao sec" href="/clientes/${c.id}?guia=1">Completar dados do eSocial</a>` : ''}</div></form>`;
 }
-const lerCliente = b => [b.tipo === 'PJ' ? 'PJ' : 'PF', String(b.nome || '').trim(), b.fantasia || '', b.documento || '', b.email || '', b.telefone || '', b.origem || '', b.obs || ''];
+function lerCliente(req, b, atual = {}) {
+  const v = { ...atual };
+  for (const k of CAMPOS_CLIENTE) if (b[k] !== undefined) v[k] = String(b[k]).trim();
+  v.tipo = v.tipo === 'PJ' ? 'PJ' : 'PF';
+  v.nome = v.nome || '';
+  v.possui_procuracao = v.possui_procuracao === '1' || v.possui_procuracao === 1 ? 1 : 0;
+  v.pis_pasep = v.pis_pasep === '1' || v.pis_pasep === 1 ? 1 : 0;
+  v.uf = UFS.includes(v.uf) ? v.uf : '';
+  // só certificados do próprio escritório
+  v.certificate_id = v.certificate_id && db.prepare('SELECT id FROM certificates WHERE id = ? AND office = ? AND ativo = 1').get(Number(v.certificate_id), req.office) ? Number(v.certificate_id) : null;
+  return v;
+}
 
 app.get('/acompanhamento-de-obras/clientes', h((req, res) => {
   const rows = db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM simulations s WHERE s.client_id = c.id AND s.ativo = 1) AS sims
     FROM clients c WHERE c.office = ? AND c.ativo = 1 ORDER BY c.nome`).all(req.office);
   res.send(layout(req, 'Clientes', html`${contadores(contagens('clients', req.office, 'AND ativo = 1'))}
-    <details class="card"><summary class="botao">+ Novo cliente</summary>${formCliente({}, '/acompanhamento-de-obras/clientes')}</details>
+    <details class="card"><summary class="botao">+ Novo cliente</summary>${formCliente(req, {}, '/acompanhamento-de-obras/clientes')}</details>
     ${tabela(['Razão social / nome', 'Nome fantasia', 'Documento', 'Celular/telefone', 'E-mail', 'Simulações', 'Ações'], rows.map(c => [c.nome, c.fantasia, c.documento, c.telefone, c.email, c.sims,
-      html`<span class="acoes-linha"><a href="/simuladores/obras-prediais/novo?cliente=${c.id}">Simular obra</a><a href="/acompanhamento-de-obras/obras?cliente=${c.id}">Obras</a><a href="/clientes/${c.id}">Editar</a>
+      html`<span class="acoes-linha"><a href="/simuladores/obras-prediais/novo?cliente=${c.id}">Simular obra</a><a href="/acompanhamento-de-obras/obras?cliente=${c.id}">Cadastrar obra</a>
+      <a href="/guia-de-envio/${c.id}">Guia de envio</a><a href="/clientes/${c.id}">Editar</a>
       <form method="post" action="/clientes/${c.id}/desativar" data-confirmar="Desativar este cliente?"><button class="link">Desativar</button></form></span>`]))}`,
   { descricao: 'Donos de obra (PF/PJ) atendidos pelo escritório.', migalha: 'Acompanhamento de obras' }));
 }));
 app.post('/acompanhamento-de-obras/clientes', h((req, res) => {
-  const v = lerCliente(req.body);
-  if (!v[1]) { flash(res, 'Informe o nome do cliente.', 'erro'); return res.redirect('/acompanhamento-de-obras/clientes'); }
-  db.prepare('INSERT INTO clients (office, tipo, nome, fantasia, documento, email, telefone, origem, obs, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(req.office, ...v, nowIso());
+  const v = lerCliente(req, req.body);
+  if (!v.nome) { flash(res, 'Informe o nome do cliente.', 'erro'); return res.redirect('/acompanhamento-de-obras/clientes'); }
+  const cols = CAMPOS_CLIENTE.filter(k => v[k] !== undefined);
+  db.prepare(`INSERT INTO clients (office, ${cols.join(', ')}, created_at) VALUES (?, ${cols.map(() => '?').join(', ')}, ?)`).run(req.office, ...cols.map(k => v[k]), nowIso());
   flash(res, 'Cliente cadastrado.');
   res.redirect('/acompanhamento-de-obras/clientes');
 }));
@@ -492,18 +539,23 @@ function carregarCliente(req) {
 }
 app.get('/clientes/:id', h((req, res) => {
   const c = carregarCliente(req);
+  const completo = !!req.query.guia;
   const sims = db.prepare('SELECT * FROM simulations WHERE client_id = ? AND ativo = 1 ORDER BY id DESC').all(c.id);
-  res.send(layout(req, c.nome, html`${formCliente(c, `/clientes/${c.id}`)}<h3>Simulações</h3>
+  res.send(layout(req, c.nome, html`${completo ? html`<div class="acoes"><a class="botao sec" href="/guia-de-envio/${c.id}">← Voltar ao guia de envio</a></div>` : ''}
+    ${formCliente(req, c, `/clientes/${c.id}${completo ? '?guia=1' : ''}`, completo)}<h3>Simulações</h3>
     ${tabela(['#', 'Tipo', 'Identificação', 'Realizado em', 'Status'], sims.map(s => [html`<a href="/simulacoes/${s.id}">${s.id}</a>`, KINDS[s.kind].titulo, s.identifier, dataHoraBr(s.created_at), s.status]))}`,
   { migalha: 'Acompanhamento de obras / Clientes' }));
 }));
 app.post('/clientes/:id', h((req, res) => {
   const c = carregarCliente(req);
-  const v = lerCliente(req.body);
-  if (!v[1]) { flash(res, 'Informe o nome do cliente.', 'erro'); return res.redirect(`/clientes/${c.id}`); }
-  db.prepare('UPDATE clients SET tipo=?, nome=?, fantasia=?, documento=?, email=?, telefone=?, origem=?, obs=? WHERE id=?').run(...v, c.id);
+  const v = lerCliente(req, req.body, c);
+  if (!v.nome) { flash(res, 'Informe o nome do cliente.', 'erro'); return res.redirect(req.originalUrl); }
+  if (v.possui_procuracao && v.procuracao_data_fim && v.procuracao_data_assinatura && v.procuracao_data_fim < v.procuracao_data_assinatura) {
+    flash(res, 'A data de fim da procuração é anterior à de assinatura.', 'erro'); return res.redirect(req.originalUrl);
+  }
+  db.prepare(`UPDATE clients SET ${CAMPOS_CLIENTE.map(k => `${k} = ?`).join(', ')} WHERE id = ?`).run(...CAMPOS_CLIENTE.map(k => v[k] ?? null), c.id);
   flash(res, 'Cliente salvo.');
-  res.redirect('/acompanhamento-de-obras/clientes');
+  res.redirect(req.query.guia ? `/guia-de-envio/${c.id}` : '/acompanhamento-de-obras/clientes');
 }));
 app.post('/clientes/:id/desativar', h((req, res) => {
   const c = carregarCliente(req);

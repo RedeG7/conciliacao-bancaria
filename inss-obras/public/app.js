@@ -25,7 +25,9 @@
     const add = e.target.closest('.adicionar-linha');
     if (add) {
       const modelo = document.getElementById(add.dataset.alvo);
-      add.previousElementSibling.previousElementSibling.appendChild(modelo.content.cloneNode(true));
+      let alvo = modelo.previousElementSibling;
+      if (alvo && !alvo.classList.contains('repetidor')) alvo = alvo.querySelector('.repetidor');
+      alvo.appendChild(modelo.content.cloneNode(true));
     }
     const rem = e.target.closest('.remover-linha');
     if (rem) rem.closest('.linha-rep').remove();
@@ -37,9 +39,35 @@
     }
   });
   document.addEventListener('submit', e => {
-    const msg = e.target.dataset.confirmar;
-    if (msg && !confirm(msg)) e.preventDefault();
+    const botao = e.submitter;
+    const msg = (botao && botao.dataset.confirmar) || e.target.dataset.confirmar;
+    if (msg && !confirm(msg)) return e.preventDefault();
+    // data-pedir: pergunta um texto (ex.: motivo do cancelamento) e manda no 1º campo oculto
+    const pedir = e.target.dataset.pedir;
+    if (pedir) {
+      const v = prompt(pedir);
+      if (v === null) return e.preventDefault();
+      e.target.querySelector('input[type=hidden]').value = v;
+    }
   });
+
+  // abas dentro da tela (data-aba -> data-painel); o #aba fica no endereço
+  const abrirAba = k => {
+    const bt = document.querySelector(`.abas-form [data-aba="${k}"]`);
+    if (!bt) return;
+    $$('.abas-form [data-aba]').forEach(b => b.classList.toggle('ativo', b === bt));
+    $$('[data-painel]').forEach(p => { p.hidden = p.dataset.painel !== k; });
+  };
+  document.addEventListener('click', e => {
+    const bt = e.target.closest('.abas-form [data-aba]');
+    if (bt) { abrirAba(bt.dataset.aba); history.replaceState(null, '', '#' + bt.dataset.aba); }
+  });
+  if (location.hash) abrirAba(location.hash.slice(1));
+  // campo obrigatório escondido numa aba: mostra a aba antes do aviso do navegador
+  document.addEventListener('invalid', e => {
+    const p = e.target.closest('[data-painel]');
+    if (p && p.hidden) abrirAba(p.dataset.painel);
+  }, true);
 
   $$('.ler-arquivo').forEach(inp => inp.addEventListener('change', () => {
     const f = inp.files[0];
