@@ -34,6 +34,9 @@ services:
       # Honorarios Control (repo RedeG7/honorariocontrol, em /opt/honorarios)
       # - o card dele na home passa por /api/sso/honorarios (api.py)
       - DOMINIO_HONORARIOS=${DOMINIO_HONORARIOS:-honorarioscontrol.com.br}
+      # Simulador INSS Obras (pasta inss-obras/) - o card dele na home passa
+      # por /api/sso/inssobras (api.py)
+      - DOMINIO_INSSOBRAS=${DOMINIO_INSSOBRAS:-inssobras.redeg7.com}
     depends_on:
       db:
         condition: service_healthy
@@ -66,6 +69,10 @@ services:
       # e gerado no .env pelo deploy do repo honorariocontrol (mesmo VPS)
       - DOMINIO_HONORARIOS=${DOMINIO_HONORARIOS:-honorarioscontrol.com.br}
       - HONORARIOS_SSO_SECRET=${HONORARIOS_SSO_SECRET:-}
+      # login unico no Simulador INSS Obras (/api/sso/inssobras) - o segredo
+      # e gerado sozinho no .env pelo deploy (deploy.yml)
+      - DOMINIO_INSSOBRAS=${DOMINIO_INSSOBRAS:-inssobras.redeg7.com}
+      - INSSOBRAS_SSO_SECRET=${INSSOBRAS_SSO_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -138,6 +145,29 @@ services:
     expose:
       - "3000"
 
+  # Simulador INSS Obras (pasta inss-obras/): app Node separado, com banco
+  # proprio em SQLite (inssobras.db) no volume inssobras_data - dados
+  # separados por escritorio do Hub, login so pelo card do Hub (SSO).
+  # Profile "inssobras": o deploy liga sozinho quando a imagem ja pode ser
+  # baixada do GHCR (mesma logica do Marketing, ver deploy.yml).
+  inssobras:
+    image: ghcr.io/redeg7/inss-obras:latest
+    profiles: ["inssobras"]
+    container_name: inss-obras
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - DATA_DIR=/data
+      - COOKIE_SECURE=1
+      - TRUST_PROXY=1
+      - PUBLIC_URL=https://${DOMINIO_INSSOBRAS:-inssobras.redeg7.com}
+      - SSO_SECRET=${INSSOBRAS_SSO_SECRET:-}
+      - HUB_URL=https://${DOMINIO}
+    volumes:
+      - inssobras_data:/data
+    expose:
+      - "3000"
+
   caddy:
     image: caddy:2-alpine
     container_name: conciliacao-caddy
@@ -150,6 +180,8 @@ services:
       # subdominio do CRM de Marketing (padrao mkt.redeg7.com; pode
       # ser trocado no .env) - precisa do registro DNS A apontando pro VPS
       - DOMINIO_MARKETING=${DOMINIO_MARKETING:-mkt.redeg7.com}
+      # subdominio do Simulador INSS Obras (registro DNS A apontando pro VPS)
+      - DOMINIO_INSSOBRAS=${DOMINIO_INSSOBRAS:-inssobras.redeg7.com}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -163,3 +195,4 @@ volumes:
   caddy_data:
   caddy_config:
   marketing_data:
+  inssobras_data:

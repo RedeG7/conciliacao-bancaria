@@ -1,0 +1,17 @@
+{
+  "name": "inss-obras",
+  "version": "1.0.0",
+  "description": "Simulador INSS Obras (RedeG7) - simulação e regularização de INSS de obras de construção civil",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.22.3"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "private": true
+}

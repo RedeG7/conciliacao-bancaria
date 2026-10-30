@@ -2004,6 +2004,18 @@ _APPS_HOME = [
         # (api.py), na conta com o mesmo usuario/e-mail do Hub.
         "url": "/api/sso/honorarios" if os.environ.get("DOMINIO_HONORARIOS") else None,
     },
+    {
+        "id": "inssobras",
+        "icone": "🏗️",
+        "titulo": "Simulador INSS Obras",
+        "descricao": "Simulação de INSS de obras, link público de captação, propostas. Abre em outra aba, já logado.",
+        "departamento": "Fiscal",
+        "tela": None,
+        # app separado (pasta inss-obras/, servico "inssobras" do
+        # docker-compose), no subdominio DOMINIO_INSSOBRAS - entra ja logado
+        # via /api/sso/inssobras (api.py).
+        "url": "/api/sso/inssobras" if os.environ.get("DOMINIO_INSSOBRAS") else None,
+    },
 ]
 
 
@@ -2400,7 +2412,7 @@ def _tela_logs_acesso() -> None:
     """Ultimos acessos (login no Hub e entrada no Marketing pelo card).
     super_admin_global ve todos os escritorios; admin de escritorio so o
     proprio."""
-    _cabecalho_app("📜", "Logs de Acesso", "Entradas no Hub e no Marketing & Comercial.")
+    _cabecalho_app("📜", "Logs de Acesso", "Entradas no Hub e nos apps que abrem em outra aba (Marketing, Honorários, INSS Obras).")
     global_ = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
     linhas = auth.listar_acessos(None if global_ else st.session_state.get("escritorio_id"))
     if not linhas:
