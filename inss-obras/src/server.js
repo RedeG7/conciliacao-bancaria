@@ -10,6 +10,7 @@ const { db, tx, nowIso, paramReader, ensureOffice } = require('./db');
 const sso = require('./sso');
 const calc = require('./calc');
 const { TABELAS, UFS, VALIDAR } = require('./params');
+const { avisosCertificados } = require('./dctf');
 const { KINDS, porSlug, herdarDePredial, camposPredial, lerPredial, resultadoPredial } = require('./kinds');
 const V = require('./views');
 const { html, raw, brl, n2, dataBr, dataHoraBr, layout, page, contadores, tabela, select, campo } = V;
@@ -229,10 +230,15 @@ app.get('/dash', h((req, res) => {
   if (!P.list('selic').length) pendencias.push('Tabela Selic vazia: o parcelamento só calcula com a Selic informada na tela.');
   const naoValidados = db.prepare('SELECT COUNT(*) AS n FROM params WHERE obs = ?').get(VALIDAR).n;
   if (naoValidados) pendencias.push(`${naoValidados} parâmetro(s) ainda com o valor inicial: confira com o time fiscal em Cadastros > Parâmetros.`);
+  // a VAU muda todo mês: avisa quando a do mês anterior (a última publicada) ainda não entrou
+  const ultimaVau = P.list('vau').map(v => v.vigencia).sort().pop();
+  const d = new Date(), esperada = new Date(d.getFullYear(), d.getMonth() - 1, 1).toISOString().slice(0, 7);
+  if (ultimaVau && ultimaVau < esperada) pendencias.push(`VAU desatualizada: a última importada é de ${ultimaVau}. Consulte a tabela do mês no SERO (e-CAC) e importe em Cadastros > Parâmetros > VAU.`);
+  pendencias.push(...avisosCertificados(req.office));
   const ultimas = db.prepare(`SELECT s.*, c.nome AS cliente FROM simulations s LEFT JOIN clients c ON c.id = s.client_id
     WHERE s.office = ? AND s.ativo = 1 ORDER BY s.id DESC LIMIT 8`).all(req.office);
   res.send(layout(req, 'Dashboard', html`
-    ${pendencias.length ? html`<div class="aviso alerta"><b>Antes de usar:</b><ul>${pendencias.map(p => html`<li>${p}</li>`)}</ul></div>` : ''}
+    ${pendencias.length ? html`<div class="aviso alerta"><b>Atenção:</b><ul>${pendencias.map(p => html`<li>${p}</li>`)}</ul></div>` : ''}
     <div class="card"><h3>Link público do seu simulador</h3><p class="desc">Divulgue no site, Instagram ou WhatsApp: quem simular vira lead aqui.</p>
       <div class="copiar"><input readonly value="${link}" id="linkPublico"><button class="botao" data-copiar="linkPublico">Copiar</button><a class="botao sec" href="${link}" target="_blank">Abrir</a></div></div>
     <h3>Simulações</h3>${contadores(sims, 'Simulações')}
@@ -246,6 +252,9 @@ app.get('/dash', h((req, res) => {
 
 // ---------------------------------------------------------------- simulações
 const clientesDo = office => db.prepare('SELECT id, nome, documento FROM clients WHERE office = ? AND ativo = 1 ORDER BY nome').all(office);
+
+// DCTF Web: obras (CNO), certificados digitais, envios e guia de envio
+require('./dctf')(app, { h, flash, contagens, exigirAdmin, clientesDo });
 
 function carregarSim(req) {
   const s = db.prepare('SELECT * FROM simulations WHERE id = ? AND office = ? AND ativo = 1').get(Number(req.params.id), req.office);
@@ -465,7 +474,7 @@ app.get('/acompanhamento-de-obras/clientes', h((req, res) => {
   res.send(layout(req, 'Clientes', html`${contadores(contagens('clients', req.office, 'AND ativo = 1'))}
     <details class="card"><summary class="botao">+ Novo cliente</summary>${formCliente({}, '/acompanhamento-de-obras/clientes')}</details>
     ${tabela(['Razão social / nome', 'Nome fantasia', 'Documento', 'Celular/telefone', 'E-mail', 'Simulações', 'Ações'], rows.map(c => [c.nome, c.fantasia, c.documento, c.telefone, c.email, c.sims,
-      html`<span class="acoes-linha"><a href="/simuladores/obras-prediais/novo?cliente=${c.id}">Simular obra</a><a href="/clientes/${c.id}">Editar</a>
+      html`<span class="acoes-linha"><a href="/simuladores/obras-prediais/novo?cliente=${c.id}">Simular obra</a><a href="/acompanhamento-de-obras/obras?cliente=${c.id}">Obras</a><a href="/clientes/${c.id}">Editar</a>
       <form method="post" action="/clientes/${c.id}/desativar" data-confirmar="Desativar este cliente?"><button class="link">Desativar</button></form></span>`]))}`,
   { descricao: 'Donos de obra (PF/PJ) atendidos pelo escritório.', migalha: 'Acompanhamento de obras' }));
 }));

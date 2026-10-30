@@ -161,6 +161,13 @@ jobs:
               sed -i '/^INSSOBRAS_SSO_SECRET=/d' .env
               printf '\nINSSOBRAS_SSO_SECRET=%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
             fi
+            # chave de cifra dos certificados A1 do Simulador INSS Obras:
+            # gerada uma vez e NUNCA trocada (os certificados ja gravados
+            # deixariam de abrir)
+            if ! grep -q '^INSSOBRAS_CERT_KEY=.' .env; then
+              sed -i '/^INSSOBRAS_CERT_KEY=/d' .env
+              printf '\nINSSOBRAS_CERT_KEY=%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
+            fi
             # segredo do login unico Hub -> CRM de Marketing (api.py e
             # marketing/src/sso.js): gerado uma vez e guardado no .env
             if ! grep -q '^MARKETING_SSO_SECRET=.' .env; then

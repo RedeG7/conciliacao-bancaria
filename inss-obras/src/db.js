@@ -47,6 +47,25 @@ CREATE TABLE IF NOT EXISTS proposals (
   client_id INTEGER, honorarios REAL NOT NULL DEFAULT 0, entrada REAL NOT NULL DEFAULT 0, parcelas INTEGER NOT NULL DEFAULT 1,
   validade TEXT, condicoes TEXT, status TEXT NOT NULL DEFAULT 'Enviada', created_by TEXT, created_at TEXT NOT NULL,
   ativo INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS works (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, office TEXT NOT NULL, client_id INTEGER NOT NULL REFERENCES clients(id),
+  cno TEXT, endereco TEXT, municipio TEXT, uf TEXT, area REAL, data_inicio TEXT, data_fim TEXT,
+  status TEXT NOT NULL DEFAULT 'Em andamento', obs TEXT, ativo INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS works_office ON works(office, ativo);
+-- certificado A1: arquivo e senha cifrados (src/certificados.js), nunca em claro
+CREATE TABLE IF NOT EXISTS certificates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, office TEXT NOT NULL, client_id INTEGER REFERENCES clients(id),
+  titular TEXT, documento TEXT, emissor TEXT, validade TEXT NOT NULL, arquivo_nome TEXT,
+  pfx_enc TEXT NOT NULL, senha_enc TEXT NOT NULL, created_by TEXT, created_at TEXT NOT NULL, ativo INTEGER NOT NULL DEFAULT 1);
+CREATE INDEX IF NOT EXISTS certificates_office ON certificates(office, ativo);
+-- envio DCTFWeb de uma competência da obra, com o passo a passo (guia de envio)
+CREATE TABLE IF NOT EXISTS dctf_envios (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, office TEXT NOT NULL, client_id INTEGER NOT NULL REFERENCES clients(id),
+  work_id INTEGER REFERENCES works(id), certificate_id INTEGER REFERENCES certificates(id), competencia TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Em andamento', esocial_status TEXT NOT NULL DEFAULT 'Não iniciado', passos_json TEXT NOT NULL DEFAULT '[]',
+  pausado_em TEXT, pausado_por TEXT, ultimo_envio TEXT, valor_darf REAL, vencimento TEXT, recibo TEXT, obs TEXT,
+  created_by TEXT, created_at TEXT NOT NULL, ativo INTEGER NOT NULL DEFAULT 1);
+CREATE INDEX IF NOT EXISTS dctf_envios_office ON dctf_envios(office, ativo, competencia);
 CREATE TABLE IF NOT EXISTS params (
   id INTEGER PRIMARY KEY AUTOINCREMENT, tabela TEXT NOT NULL, uf TEXT NOT NULL DEFAULT '', chave TEXT NOT NULL,
   vigencia TEXT NOT NULL DEFAULT '', valor REAL NOT NULL, obs TEXT, updated_at TEXT NOT NULL, updated_by TEXT);

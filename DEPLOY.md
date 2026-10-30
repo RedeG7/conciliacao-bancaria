@@ -367,5 +367,10 @@ Ativar (uma vez só):
    Cadastros › Escritório, onde também define nome, logo e WhatsApp): quem
    simula por ele vira lead do escritório.
 
+**Certificados digitais (DCTF Web):** o arquivo A1 e a senha dos clientes
+ficam cifrados (AES-256-GCM) com `INSSOBRAS_CERT_KEY`, gerada sozinha no
+`.env` pelo deploy. **Guarde uma cópia dessa linha do `.env` fora do VPS**:
+sem ela os certificados gravados não abrem mais e precisam ser reenviados.
+
 Liberar/bloquear por escritório ou usuário: id `inssobras` em Gerenciar
 Escritórios/Usuários do Hub (mesma regra dos outros apps).

@@ -26,7 +26,12 @@ especificação `SPEC_SIMULADOR_INSS_OBRAS` (fase 1, ver "Escopo" abaixo).
 | Propostas (honorários, impressão/PDF pelo navegador) | `/acompanhamento-de-obras/propostas` | ✅ |
 | Clientes, Leads (WhatsApp com mensagem pronta) | `/acompanhamento-de-obras/clientes`, `/ferramentas-extras/leads` | ✅ |
 | Tabelas de parâmetros (VAU e Selic com importação CSV) | `/cadastros/parametros` | ✅ |
-| Contratos, recibos/RPA, autônomos, certificados, guia DCTFWeb, CRM kanban, financeiro, drive, TODO | - | próximas fases |
+| Obras com CNO | `/acompanhamento-de-obras/obras` | ✅ |
+| Certificados digitais A1 (arquivo e senha cifrados, aviso de vencimento) | `/cadastros/certificados` | ✅ |
+| Envios DCTFWeb por competência (passo a passo, próxima competência) | `/dctf-web` | ✅ controle manual |
+| Guia de envio (em andamento / pausados / concluídos) | `/guia-de-envio` | ✅ |
+| Transmissão automática (e-CAC/eSocial), busca automática da VAU | - | próxima fase (após mapear o portal) |
+| Contratos, recibos/RPA, autônomos, CRM kanban, financeiro, drive, TODO | - | próximas fases |
 
 ## Regras de cálculo
 

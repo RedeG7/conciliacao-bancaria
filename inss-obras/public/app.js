@@ -49,6 +49,18 @@
     r.readAsText(f, 'utf-8');
   }));
 
+  // certificado: o arquivo vai em base64 num campo oculto do formulário
+  $$('.ler-arquivo-b64').forEach(inp => inp.addEventListener('change', () => {
+    const f = inp.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      document.getElementById(inp.dataset.alvo).value = String(r.result).split(',')[1] || '';
+      document.getElementById(inp.dataset.nome).value = f.name;
+    };
+    r.readAsDataURL(f);
+  }));
+
   // tabelas: busca e paginação no navegador
   $$('.tabela-topo').forEach(topo => {
     const card = topo.parentElement;

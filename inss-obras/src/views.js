@@ -26,6 +26,12 @@ const MENU = [
     ['/simuladores/decadencia', 'Decadência', '⏳'],
     ['/simuladores/parcelamento', 'Parcelamento e-CAC', '💳'],
   ]],
+  ['DCTF Web', [
+    ['/guia-de-envio', 'Guia de envio', '🧭'],
+    ['/dctf-web', 'Envios', '📤'],
+    ['/cadastros/certificados', 'Certificados digitais', '🔐'],
+    ['/acompanhamento-de-obras/obras', 'Obras (CNO)', '🏗️'],
+  ]],
   ['Acompanhamento de obras', [
     ['/acompanhamento-de-obras/clientes', 'Clientes', '👤'],
     ['/acompanhamento-de-obras/propostas', 'Propostas', '📄'],
