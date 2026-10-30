@@ -342,3 +342,30 @@ Backup dos dados do CRM (os 3 arquivos SQLite):
 docker run --rm -v conciliacao-bancaria_marketing_data:/data -v $(pwd):/b alpine \
   tar czf /b/marketing-$(date +%Y%m%d).tgz -C /data .
 ```
+
+## Simulador INSS Obras (inssobras.redeg7.com)
+
+App separado (Node.js, pasta `inss-obras/`, ver `inss-obras/README.md`):
+serviço `inssobras` do `docker-compose.yml`, imagem
+`ghcr.io/redeg7/inss-obras:latest` (buildada pelo mesmo workflow), banco
+SQLite próprio no volume `inssobras_data`. Na home do Hub aparece o card
+"🏗️ Simulador INSS Obras" (departamento Fiscal), que abre o simulador numa aba
+nova **já logado** (`/api/sso/inssobras` em `api.py`), no escritório do usuário.
+
+Ativar (uma vez só):
+
+1. No DNS do `redeg7.com`, crie um registro **A** `inssobras` apontando pro
+   mesmo IP do Hub (o Caddy emite o HTTPS sozinho).
+2. Nada a fazer no `.env`: o deploy acrescenta `inssobras` em
+   `COMPOSE_PROFILES` assim que a imagem puder ser baixada e gera o
+   `INSSOBRAS_SSO_SECRET`. (Outro endereço: `DOMINIO_INSSOBRAS=...` no `.env`.)
+3. Depois do primeiro deploy, entre pelo card como **super administrador**,
+   vá em Cadastros › Parâmetros: importe a tabela **VAU** (sem ela o simulador
+   de obra predial não calcula), a **Selic** e confira com o time fiscal os
+   percentuais marcados "validar com o fiscal".
+4. Cada escritório pega o **link público** do simulador no Dashboard (ou em
+   Cadastros › Escritório, onde também define nome, logo e WhatsApp): quem
+   simula por ele vira lead do escritório.
+
+Liberar/bloquear por escritório ou usuário: id `inssobras` em Gerenciar
+Escritórios/Usuários do Hub (mesma regra dos outros apps).

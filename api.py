@@ -464,3 +464,25 @@ def sso_honorarios(sessao_token: Optional[str] = Cookie(None)):
         return HTMLResponse("Seu usuário não tem acesso ao Honorários Control.", status_code=403)
     auth.registrar_acesso(dados["usuario"], dados.get("escritorio_id"), "Honorários Control")
     return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Login unico no Simulador INSS Obras (inssobras.redeg7.com, pasta inss-obras/)
+# ---------------------------------------------------------------------------
+# Mesmo bilhete do Marketing, com segredo proprio (INSSOBRAS_SSO_SECRET). O
+# simulador separa os dados por escritorio (campo "office" do bilhete) e
+# confere o bilhete em inss-obras/src/sso.js.
+
+@app.get("/api/sso/inssobras")
+def sso_inssobras(sessao_token: Optional[str] = Cookie(None)):
+    dominio = os.environ.get("DOMINIO_INSSOBRAS", "")
+    segredo = os.environ.get("INSSOBRAS_SSO_SECRET", "")
+    if not dominio or not segredo:
+        return HTMLResponse("Acesso ao Simulador INSS Obras ainda não configurado no servidor.", status_code=503)
+    dados = auth.validar_sessao(sessao_token or "")
+    if not dados:
+        return RedirectResponse("/", status_code=302)
+    if not _app_permitido(dados, "inssobras"):
+        return HTMLResponse("Seu usuário não tem acesso ao Simulador INSS Obras.", status_code=403)
+    auth.registrar_acesso(dados["usuario"], dados.get("escritorio_id"), "Simulador INSS Obras")
+    return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)

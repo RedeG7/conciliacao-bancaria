@@ -29,3 +29,9 @@
 honorarioscontrol.com.br, www.honorarioscontrol.com.br {
 	reverse_proxy honorarios-app:5000
 }
+
+# Simulador INSS Obras (servico "inssobras" do docker-compose, pasta
+# inss-obras/). Precisa do registro DNS A "inssobras" apontando pro VPS.
+{$DOMINIO_INSSOBRAS:inssobras.redeg7.com} {
+	reverse_proxy inssobras:3000
+}

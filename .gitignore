@@ -18,3 +18,5 @@ attended_worker/build_nfgo/
 nfgo_attended_config.json
 marketing/node_modules/
 marketing/data/
+inss-obras/node_modules/
+inss-obras/data/
