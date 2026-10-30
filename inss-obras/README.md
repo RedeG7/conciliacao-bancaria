@@ -40,7 +40,12 @@ especificação `SPEC_SIMULADOR_INSS_OBRAS` (fase 1, ver "Escopo" abaixo).
 
 Ficam em `src/calc.js` (funções puras, testadas em `test/calc.test.js`) e
 **não têm nenhum percentual no código**: tudo vem das tabelas de
-Cadastros > Parâmetros (`src/params.js`). Os valores iniciais vêm marcados
+Cadastros > Parâmetros (`src/params.js`).
+O **padrão da plataforma** é mantido pelo super administrador do Hub; o
+**administrador de cada escritório** pode ajustar qualquer valor, e o ajuste
+vale só para o escritório dele ("Voltar ao padrão" desfaz). O cálculo usa o
+ajuste do escritório quando existe (`linhasEfetivas`/`paramReader(office)`
+em `src/db.js`). Os valores iniciais vêm marcados
 "Valor inicial - validar com o fiscal (IN RFB 2.021/2021)" e o Dashboard
 avisa enquanto houver algum sem conferir. VAU e Selic começam vazias:
 - **Selic**: vem sozinha da API pública do Banco Central (série 4390, Selic

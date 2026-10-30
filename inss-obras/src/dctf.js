@@ -77,7 +77,7 @@ function avisosCertificados(office) {
 // dia de vencimento deste mês - ainda não foi enviada nem marcada como
 // paralisada. Aparece no Dashboard.
 function lembretesDctf(office, hoje = new Date()) {
-  const dia = paramReader().get('dctf', 'Dia de vencimento') || 20;
+  const dia = paramReader(office).get('dctf', 'Dia de vencimento') || 20;
   const comp = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() - 1, 15)).toISOString().slice(0, 7);
   const venc = folha.vencimento(comp, dia);
   const hojeIso = hoje.toISOString().slice(0, 10);
@@ -404,7 +404,7 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
 
   // dados derivados do envio: obra, aferição, fator de ajuste e quadro de cálculo
   function contexto(req, d) {
-    const P = paramReader();
+    const P = paramReader(req.office);
     const cli = db.prepare('SELECT * FROM clients WHERE id = ?').get(d.client_id);
     const obra = d.work_id && db.prepare('SELECT * FROM works WHERE id = ?').get(d.work_id);
     const afer = obra?.calculator_id && db.prepare('SELECT * FROM simulations WHERE id = ?').get(obra.calculator_id);
@@ -615,7 +615,7 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
     const b = req.body;
     const w = db.prepare('SELECT id FROM works WHERE id = ? AND office = ? AND client_id = ?').get(Number(b.work_id), req.office, d.client_id);
     const es = db.prepare("SELECT id FROM simulations WHERE id = ? AND office = ? AND client_id = ? AND kind = 'esocial'").get(Number(b.esocial_id), req.office, d.client_id);
-    const min = DATA_MIN_OBRA(paramReader());
+    const min = DATA_MIN_OBRA(paramReader(req.office));
     if (b.construction_init_date && b.construction_init_date < min) { flash(res, `A data de início da obra não pode ser antes de ${dataBr(min)}.`, 'erro'); return res.redirect(`/dctf-web/editar/${d.id}#aba2`); }
     const fech = Object.fromEntries(PERGUNTAS_1299.map((_, i) => [`question${i + 1}`, b[`question${i + 1}`] === '1' ? 1 : 0]));
     fech.transmissao_imediata = b.transmissao_imediata === '1' ? 1 : 0;

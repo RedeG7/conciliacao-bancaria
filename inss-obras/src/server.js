@@ -6,7 +6,7 @@
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
-const { db, tx, nowIso, paramReader, ensureOffice, setting } = require('./db');
+const { db, tx, nowIso, paramReader, linhasEfetivas, gravarParam, ensureOffice, setting } = require('./db');
 const sso = require('./sso');
 const calc = require('./calc');
 const integracoes = require('./integracoes');
@@ -85,7 +85,7 @@ app.get('/sso', h((req, res) => {
 // só para desenvolvimento local / testes (DEV_LOGIN=1): entra como super admin
 app.get('/dev-login', h((req, res) => {
   if (process.env.DEV_LOGIN !== '1') return res.status(404).end();
-  entrar(res, { sub: req.query.u || 'dev', name: 'Desenvolvedor', admin: true, global: !req.query.office, office: req.query.office || 'escritorio-dev', office_name: 'Escritório Dev',
+  entrar(res, { sub: req.query.u || 'dev', name: 'Desenvolvedor', admin: req.query.admin !== '0', global: !req.query.office, office: req.query.office || 'escritorio-dev', office_name: 'Escritório Dev',
     offices: [{ id: 'escritorio-dev', name: 'Escritório Dev' }, { id: 'outro', name: 'Outro Escritório' }] });
 }));
 
@@ -123,7 +123,7 @@ function telaPublica(res, o, dados = {}, erro = '') {
       <div class="grade">${campo('Nome *', html`<input name="nome" value="${dados.nome || ''}" required>`)}
         ${campo('E-mail *', html`<input name="email" type="email" value="${dados.email || ''}" required>`)}
         ${campo('Celular / WhatsApp *', html`<input name="telefone" value="${dados.telefone || ''}" required inputmode="tel">`)}</div>
-      <h3>Dados da obra</h3>${camposPredial(dados, paramReader())}
+      <h3>Dados da obra</h3>${camposPredial(dados, paramReader(o.id))}
       <input name="site" class="oculto" tabindex="-1" autocomplete="off" aria-hidden="true">
       <div class="acoes"><button class="botao">Calcular</button></div>
     </form><p class="rodape">Estimativa com base na aferição indireta (IN RFB nº 2.021/2021). Não substitui a aferição oficial no SERO.</p></div>`));
@@ -146,7 +146,7 @@ app.post('/simulador/obras-prediais/:token', h((req, res) => {
   const volta = msg => telaPublica(res, o, { ...input, nome, email, telefone }, msg);
   if (!nome || !email || !telefone) return volta('Preencha nome, e-mail e celular.');
   let r;
-  try { r = calc.predial(input, paramReader()); } catch (e) {
+  try { r = calc.predial(input, paramReader(o.id)); } catch (e) {
     // ao visitante não interessa onde se cadastra o parâmetro que falta
     if (e instanceof calc.CalcError) return volta(e.message.replace(/\. (Importe|Cadastre) .*$/, '. A simulação ainda não está disponível para esses dados - fale com o escritório.'));
     throw e;
@@ -221,7 +221,7 @@ function contagens(tabelaSql, office, extra = '', args = []) {
 }
 
 app.get('/dash', h((req, res) => {
-  const P = paramReader();
+  const P = paramReader(req.office);
   const sims = contagens('simulations', req.office, 'AND ativo = 1');
   const leads = contagens('leads', req.office);
   const props = contagens('proposals', req.office, 'AND ativo = 1');
@@ -229,7 +229,7 @@ app.get('/dash', h((req, res) => {
   const pendencias = [];
   if (!P.list('vau').length) pendencias.push('Tabela VAU vazia: importe em Cadastros > Parâmetros > VAU (sem ela o simulador de obra predial não calcula).');
   if (!P.list('selic').length) pendencias.push('Tabela Selic vazia: o parcelamento só calcula com a Selic informada na tela.');
-  const naoValidados = db.prepare('SELECT COUNT(*) AS n FROM params WHERE obs = ?').get(VALIDAR).n;
+  const naoValidados = linhasEfetivas(req.office).filter(r => r.obs === VALIDAR).length;
   if (naoValidados) pendencias.push(`${naoValidados} parâmetro(s) ainda com o valor inicial: confira com o time fiscal em Cadastros > Parâmetros.`);
   // a VAU muda todo mês: avisa quando a do mês anterior (a última publicada) ainda não entrou
   const ultimaVau = P.list('vau').map(v => v.vigencia).sort().pop();
@@ -280,7 +280,7 @@ app.get('/simuladores/:slug', h((req, res, next) => {
 }));
 
 function telaForm(req, res, k, dados, { acao, erro, titulo }) {
-  const P = paramReader();
+  const P = paramReader(req.office);
   res.send(layout(req, titulo, html`<form method="post" action="${acao}" class="card">
     ${erro ? html`<div class="aviso erro">${erro}</div>` : ''}
     <div class="grade">
@@ -310,7 +310,7 @@ function salvarSim(req, res, k, existente) {
   const input = k.ler(b);
   const dadosForm = { ...input, identifier: b.identifier, client_id: b.client_id, base_simulation_id: b.base_simulation_id };
   let r;
-  try { r = k.calcular(input, paramReader()); } catch (e) {
+  try { r = k.calcular(input, paramReader(req.office)); } catch (e) {
     if (e instanceof calc.CalcError) {
       return telaForm(req, res, k, dadosForm, { acao: req.originalUrl, erro: e.message, titulo: existente ? `Editar simulação #${existente.id}` : `Nova simulação - ${k.titulo}` });
     }
@@ -613,15 +613,31 @@ app.post('/cadastros/escritorio/novo-link', h((req, res) => {
 }));
 
 // ---------------------------------------------------------------- parâmetros
+// Padrão da plataforma (office '') = super administrador do Hub; ajuste do
+// escritório (office = id) = administrador do escritório, vale só para ele.
+// O super admin edita o padrão e, escolhendo "este escritório", os ajustes do
+// escritório aberto.
+const escopoParam = req => (req.user.is_global && (req.query.escopo || req.body?.escopo) !== 'escritorio' ? '' : req.office);
+const exigirEditorParam = req => {
+  if (!req.user.is_global && !req.user.is_admin) throw Object.assign(new Error('Somente administradores alteram os parâmetros de cálculo.'), { status: 403 });
+};
+const qsEscopo = esc => (esc ? '?escopo=escritorio' : '');
+
 app.get('/cadastros/parametros', h((req, res) => {
-  const cont = Object.fromEntries(db.prepare('SELECT tabela, COUNT(*) AS n, SUM(obs = ?) AS pend FROM params GROUP BY tabela').all(VALIDAR).map(r => [r.tabela, r]));
+  const efetivas = linhasEfetivas(req.office);
+  const cont = {};
+  for (const r of efetivas) {
+    const c = (cont[r.tabela] ||= { n: 0, pend: 0, ajustes: 0 });
+    c.n++; if (r.obs === VALIDAR) c.pend++; if (r.origem === 'escritorio') c.ajustes++;
+  }
   const aviso = setting('aviso_topo');
+  const pode = req.user.is_global || req.user.is_admin;
   res.send(layout(req, 'Parâmetros de cálculo', html`${req.user.is_global ? html`<form method="post" action="/cadastros/aviso-topo" class="card">
     ${campo('Faixa de aviso no topo de todas as telas (ex.: "eSocial instável - envios podem demorar"). Vazio = sem faixa.', html`<input name="aviso" value="${aviso}" maxlength="200">`)}
     <div class="acoes"><button class="botao sec">Salvar aviso</button></div></form>` : ''}<div class="grade-cards">${Object.entries(TABELAS).map(([k, t]) => html`
     <a class="card link-card" href="/cadastros/parametros/${k}"><b>${t.titulo}</b><small>${t.ajuda}</small>
-      <span>${cont[k]?.n || 0} registro(s)${cont[k]?.pend ? html` · <em class="alerta-txt">${cont[k].pend} a validar</em>` : ''}</span></a>`)}</div>`,
-  { descricao: 'Tabelas usadas pelos simuladores. Nenhum percentual fica no código: altere aqui. Somente o super administrador do Hub edita.', migalha: 'Cadastros' }));
+      <span>${cont[k]?.n || 0} registro(s)${cont[k]?.ajustes ? html` · <em class="ajuste-txt">${cont[k].ajustes} ajuste(s) do escritório</em>` : ''}${cont[k]?.pend ? html` · <em class="alerta-txt">${cont[k].pend} a validar</em>` : ''}</span></a>`)}</div>`,
+  { descricao: `Tabelas usadas pelos simuladores (nenhum percentual fica no código). ${pode ? 'O administrador do escritório pode ajustar qualquer valor: o ajuste vale só para o escritório; o restante segue o padrão da plataforma, mantido pelo super administrador do Hub.' : 'Somente administradores alteram.'}`, migalha: 'Cadastros' }));
 }));
 
 app.post('/cadastros/aviso-topo', h((req, res) => {
@@ -636,78 +652,96 @@ app.post('/cadastros/aviso-topo', h((req, res) => {
 app.get('/cadastros/parametros/:tabela', h((req, res, next) => {
   const t = TABELAS[req.params.tabela];
   if (!t) return next();
-  const rows = db.prepare('SELECT * FROM params WHERE tabela = ? ORDER BY uf, chave, vigencia DESC').all(req.params.tabela);
-  const pode = !!req.user.is_global;
+  const tab = req.params.tabela;
+  const esc = escopoParam(req);
+  const pode = !!(req.user.is_global || req.user.is_admin);
+  // padrão: só as linhas da plataforma; escritório: o que vale para ele (padrão + ajustes)
+  const rows = (esc ? linhasEfetivas(esc) : db.prepare("SELECT *, 'padrao' AS origem FROM params WHERE office = ''").all())
+    .filter(r => r.tabela === tab).sort((a, b) => `${a.uf}|${a.chave}|${b.vigencia}`.localeCompare(`${b.uf}|${b.chave}|${a.vigencia}`));
+  const temPadrao = r => !!db.prepare("SELECT 1 FROM params WHERE office = '' AND tabela = ? AND uf = ? AND chave = ? AND vigencia = ?").get(tab, r.uf, r.chave, r.vigencia);
   const usa = c => t.colunas.includes(c);
   const chaveInput = (v = '') => (t.opcoesChave ? select('chave', [...(t.aceitaCuringa ? ['*'] : []), ...t.opcoesChave], v) : html`<input name="chave" value="${v}" required>`);
   const ufInput = (v = '') => select('uf', [...(t.aceitaCuringa ? ['*'] : []), ...UFS], v);
-  const cab = [...(usa('uf') ? ['UF'] : []), t.rotuloChave, ...(usa('vigencia') ? ['Vigência'] : []), `Valor (${t.unidade})`, 'Observação', 'Atualizado'];
+  const hidEsc = esc ? html`<input type="hidden" name="escopo" value="escritorio">` : '';
+  const cab = [...(usa('uf') ? ['UF'] : []), t.rotuloChave, ...(usa('vigencia') ? ['Vigência'] : []), `Valor (${t.unidade})`, 'Origem', 'Observação', 'Atualizado'];
   const linhas = rows.map(r => {
-    const cel = [...(usa('uf') ? [r.uf] : []), r.chave, ...(usa('vigencia') ? [r.vigencia] : []), n2(r.valor), r.obs === VALIDAR ? html`<em class="alerta-txt">${r.obs}</em>` : r.obs, `${dataBr(r.updated_at)} ${r.updated_by || ''}`];
+    const ajuste = r.origem === 'escritorio';
+    const cel = [...(usa('uf') ? [r.uf] : []), r.chave, ...(usa('vigencia') ? [r.vigencia] : []), n2(r.valor),
+      ajuste ? html`<span class="selo ajuste">Ajuste do escritório</span>` : html`<span class="selo padrao">Padrão</span>`,
+      r.obs === VALIDAR ? html`<em class="alerta-txt">${r.obs}</em>` : r.obs, `${dataBr(r.updated_at)} ${r.updated_by || ''}`];
     if (pode) {
-      cel.push(html`<span class="acoes-linha"><form method="post" action="/cadastros/parametros/${req.params.tabela}/salvar" class="inline">
+      const editar = !esc || ajuste; // no escritório, linha do padrão vira ajuste ao salvar
+      cel.push(html`<span class="acoes-linha"><form method="post" action="/cadastros/parametros/${tab}/salvar" class="inline">${hidEsc}
         <input type="hidden" name="id" value="${r.id}"><input name="valor" value="${r.valor}" inputmode="decimal" class="curto" aria-label="Novo valor">
-        <input name="obs" placeholder="Fonte / observação" class="medio" aria-label="Observação"><button class="link">Salvar</button></form>
-        <form method="post" action="/cadastros/parametros/${req.params.tabela}/excluir" data-confirmar="Excluir este registro?"><input type="hidden" name="id" value="${r.id}"><button class="link">Excluir</button></form></span>`);
+        <input name="obs" placeholder="Observação" class="curto" aria-label="Observação"><button class="link" title="${editar ? '' : 'Cria um ajuste que vale só para este escritório'}">${editar ? 'Salvar' : 'Ajustar'}</button></form>
+        ${editar ? html`<form method="post" action="/cadastros/parametros/${tab}/excluir" data-confirmar="${ajuste && temPadrao(r) ? 'Voltar ao valor padrão da plataforma?' : 'Excluir este registro?'}">${hidEsc}<input type="hidden" name="id" value="${r.id}">
+          <button class="link">${ajuste && temPadrao(r) ? 'Voltar ao padrão' : 'Excluir'}</button></form>` : ''}</span>`);
     }
     return cel;
   });
-  res.send(layout(req, t.titulo, html`
+  const seletor = req.user.is_global ? html`<div class="abas"><a href="/cadastros/parametros/${tab}" class="${esc ? '' : 'ativo'}">Padrão da plataforma (todos os escritórios)</a>
+    <a href="/cadastros/parametros/${tab}?escopo=escritorio" class="${esc ? 'ativo' : ''}">Só este escritório (${req.officeRow.name})</a></div>`
+    : pode ? html`<div class="aviso">Seus ajustes valem só para o escritório ${req.officeRow.name}. As linhas "Padrão" seguem o valor da plataforma até você ajustar.</div>` : '';
+  res.send(layout(req, t.titulo, html`${seletor}
     ${pode ? html`<details class="card"><summary class="botao">+ Novo registro</summary>
-      <form method="post" action="/cadastros/parametros/${req.params.tabela}/salvar"><div class="grade">
+      <form method="post" action="/cadastros/parametros/${tab}/salvar">${hidEsc}<div class="grade">
         ${usa('uf') ? campo('UF', ufInput()) : ''}${campo(t.rotuloChave, chaveInput())}
         ${usa('vigencia') ? campo('Vigência', html`<input name="vigencia" type="month" required>`) : ''}
         ${campo(`Valor (${t.unidade})`, html`<input name="valor" inputmode="decimal" required>`)}
         ${campo('Fonte / observação', html`<input name="obs" placeholder="Ex.: IN RFB 2.021/2021, art. ...">`)}
       </div><div class="acoes"><button class="botao">Salvar</button></div></form></details>
-    ${req.params.tabela === 'selic' ? html`<form method="post" action="/cadastros/parametros/selic/banco-central" class="card acoes">
-      <button class="botao">↻ Atualizar pelo Banco Central</button><span class="desc">Selic acumulada no mês (série 4390 do Banco Central, a mesma usada pela Receita). Também atualiza sozinha todo dia.</span></form>` : ''}
-    ${req.params.tabela === 'vau' ? html`<details class="card" open><summary class="botao">Colar tabela do SERO</summary>
-      <form method="post" action="/cadastros/parametros/vau/colar"><p class="desc">No e-CAC, abra o SERO > Consultar Tabela VAU, escolha a UF e o mês, selecione a tabela, copie (Ctrl+C) e cole aqui (Ctrl+V). O sistema reconhece cada destinação e o valor.</p>
+    ${tab === 'selic' ? html`<form method="post" action="/cadastros/parametros/selic/banco-central" class="card acoes">
+      <button class="botao">↻ Atualizar pelo Banco Central</button><span class="desc">Selic acumulada no mês (série 4390 do Banco Central, a mesma usada pela Receita), no padrão da plataforma. Também atualiza sozinha todo dia.</span></form>` : ''}
+    ${tab === 'vau' ? html`<details class="card" open><summary class="botao">Colar tabela do SERO</summary>
+      <form method="post" action="/cadastros/parametros/vau/colar">${hidEsc}<p class="desc">No e-CAC, abra o SERO > Consultar Tabela VAU, escolha a UF e o mês, selecione a tabela, copie (Ctrl+C) e cole aqui (Ctrl+V). O sistema reconhece cada destinação e o valor.</p>
         <div class="grade">${campo('UF *', select('uf', ['', ...UFS], req.query.uf || '', 'required'))}
           ${campo('Mês de referência *', html`<input type="month" name="vigencia" value="${req.query.vigencia || new Date().toISOString().slice(0, 7)}" required>`)}</div>
         <textarea name="texto" rows="8" placeholder="Residência unifamiliar     R$ 2.345,67&#10;Residência multifamiliar   R$ 2.123,45&#10;..." required></textarea>
-        <div class="acoes"><button class="botao">Importar VAU colada</button></div></form></details>` : ''}
+        <div class="acoes"><button class="botao">Importar VAU colada</button><a class="botao sec" href="https://cav.receita.fazenda.gov.br/ecac/Aplicacao.aspx?id=10031&origem=pesquisa" target="_blank" rel="noopener">Abrir SERO no e-CAC</a></div></form></details>` : ''}
     ${t.importavel ? html`<details class="card"><summary class="botao sec">Importar CSV</summary>
-      <form method="post" action="/cadastros/parametros/${req.params.tabela}/importar"><p class="desc">${t.ajuda}. Separador ; ou , - linhas repetidas são atualizadas.</p>
-        <input type="file" accept=".csv,.txt" class="ler-arquivo" data-alvo="csv${req.params.tabela}" aria-label="Arquivo CSV">
-        <textarea name="csv" id="csv${req.params.tabela}" rows="8" placeholder="${req.params.tabela === 'vau' ? 'GO;Residência unifamiliar;2026-10;1234,56' : '2026-09;0,95'}"></textarea>
-        <div class="acoes"><button class="botao">Importar</button></div></form></details>` : ''}` : html`<div class="aviso">Somente o super administrador do Hub altera os parâmetros.</div>`}
+      <form method="post" action="/cadastros/parametros/${tab}/importar">${hidEsc}<p class="desc">${t.ajuda}. Separador ; ou , - linhas repetidas são atualizadas.</p>
+        <input type="file" accept=".csv,.txt" class="ler-arquivo" data-alvo="csv${tab}" aria-label="Arquivo CSV">
+        <textarea name="csv" id="csv${tab}" rows="8" placeholder="${tab === 'vau' ? 'GO;Residência unifamiliar;2026-10;1234,56' : '2026-09;0,95'}"></textarea>
+        <div class="acoes"><button class="botao">Importar</button></div></form></details>` : ''}` : html`<div class="aviso">Somente administradores alteram os parâmetros.</div>`}
     ${tabela(pode ? [...cab, 'Ações'] : cab, linhas)}`, { descricao: t.ajuda, migalha: 'Cadastros / Parâmetros' }));
 }));
-
-function gravarParam(tabela, { uf = '', chave, vigencia = '', valor, obs }, usuario) {
-  db.prepare(`INSERT INTO params (tabela, uf, chave, vigencia, valor, obs, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?)
-    ON CONFLICT(tabela, uf, chave, vigencia) DO UPDATE SET valor = excluded.valor, obs = excluded.obs, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
-    .run(tabela, uf, chave, vigencia, valor, obs || '', nowIso(), usuario);
-}
 
 app.post('/cadastros/parametros/:tabela/salvar', h((req, res, next) => {
   const t = TABELAS[req.params.tabela];
   if (!t) return next();
-  exigirGlobal(req);
-  const b = req.body;
+  exigirEditorParam(req);
+  const esc = escopoParam(req), tab = req.params.tabela, b = req.body;
+  const volta = `/cadastros/parametros/${tab}${qsEscopo(esc)}`;
   const valor = calc.num(b.valor);
   if (b.id) {
-    db.prepare('UPDATE params SET valor = ?, obs = ?, updated_at = ?, updated_by = ? WHERE id = ? AND tabela = ?')
-      .run(valor, b.obs || '', nowIso(), req.user.name, Number(b.id), req.params.tabela);
+    const r = db.prepare('SELECT * FROM params WHERE id = ? AND tabela = ?').get(Number(b.id), tab);
+    if (!r || (r.office && r.office !== esc)) throw Object.assign(new Error('Parâmetro não encontrado.'), { status: 404 });
+    if (r.office === esc) {
+      // observação em branco mantém a anterior
+      db.prepare('UPDATE params SET valor = ?, obs = ?, updated_at = ?, updated_by = ? WHERE id = ?').run(valor, b.obs || r.obs || '', nowIso(), req.user.name, r.id);
+    } else {
+      // linha do padrão salva no escritório: vira ajuste só dele
+      gravarParam(tab, { office: esc, uf: r.uf, chave: r.chave, vigencia: r.vigencia, valor, obs: b.obs || 'Ajuste do escritório' }, req.user.name);
+    }
   } else {
-    if (!String(b.chave || '').trim()) { flash(res, `Informe ${t.rotuloChave}.`, 'erro'); return res.redirect(req.originalUrl.replace(/\/salvar$/, '')); }
-    gravarParam(req.params.tabela, { uf: t.colunas.includes('uf') ? b.uf || '' : '', chave: String(b.chave).trim(), vigencia: t.colunas.includes('vigencia') ? b.vigencia || '' : '', valor, obs: b.obs }, req.user.name);
+    if (!String(b.chave || '').trim()) { flash(res, `Informe ${t.rotuloChave}.`, 'erro'); return res.redirect(volta); }
+    gravarParam(tab, { office: esc, uf: t.colunas.includes('uf') ? b.uf || '' : '', chave: String(b.chave).trim(), vigencia: t.colunas.includes('vigencia') ? b.vigencia || '' : '', valor, obs: b.obs }, req.user.name);
   }
-  flash(res, 'Parâmetro salvo.');
-  res.redirect(`/cadastros/parametros/${req.params.tabela}`);
+  flash(res, esc ? 'Parâmetro salvo para este escritório.' : 'Parâmetro padrão salvo (vale para todos os escritórios sem ajuste próprio).');
+  res.redirect(volta);
 }));
 
 app.post('/cadastros/parametros/:tabela/excluir', h((req, res) => {
-  exigirGlobal(req);
-  db.prepare('DELETE FROM params WHERE id = ? AND tabela = ?').run(Number(req.body.id), req.params.tabela);
-  flash(res, 'Registro excluído.');
-  res.redirect(`/cadastros/parametros/${req.params.tabela}`);
+  exigirEditorParam(req);
+  const esc = escopoParam(req);
+  const r = db.prepare('DELETE FROM params WHERE id = ? AND tabela = ? AND office = ?').run(Number(req.body.id), req.params.tabela, esc);
+  if (!r.changes) throw Object.assign(new Error('Parâmetro não encontrado.'), { status: 404 });
+  flash(res, esc ? 'Ajuste removido: vale o padrão da plataforma.' : 'Registro excluído.');
+  res.redirect(`/cadastros/parametros/${req.params.tabela}${qsEscopo(esc)}`);
 }));
 
 // CSV da VAU (uf;destinação;vigência;valor) e da Selic (mês;percentual)
-function importarCsv(tabela, texto, usuario) {
+function importarCsv(tabela, texto, usuario, office = '') {
   const t = TABELAS[tabela];
   const erros = [];
   let ok = 0;
@@ -721,12 +755,12 @@ function importarCsv(tabela, texto, usuario) {
         const v = calc.num(valor), vm = mes(vig);
         const destOk = t.opcoesChave.find(d => d.toLowerCase() === String(dest).toLowerCase());
         if (!UFS.includes(String(uf).toUpperCase()) || !destOk || !vm || !(v > 0)) { if (i || UFS.includes(String(uf).toUpperCase())) erros.push(`linha ${i + 1}: ${l}`); return; }
-        gravarParam('vau', { uf: uf.toUpperCase(), chave: destOk, vigencia: vm, valor: v, obs: 'Importado (CSV)' }, usuario);
+        gravarParam('vau', { office, uf: uf.toUpperCase(), chave: destOk, vigencia: vm, valor: v, obs: 'Importado (CSV)' }, usuario);
       } else {
         const [m, valor] = c;
         const vm = mes(m), v = calc.num(valor);
         if (!vm || valor === undefined || valor === '') { if (i || vm) erros.push(`linha ${i + 1}: ${l}`); return; }
-        gravarParam('selic', { chave: vm, valor: v, obs: 'Importado (CSV)' }, usuario);
+        gravarParam('selic', { office, chave: vm, valor: v, obs: 'Importado (CSV)' }, usuario);
       }
       ok++;
     });
@@ -734,8 +768,9 @@ function importarCsv(tabela, texto, usuario) {
   return { ok, erros };
 }
 
+// Selic do Banco Central é oficial e igual para todos: atualiza o padrão
 app.post('/cadastros/parametros/selic/banco-central', h(async (req, res) => {
-  exigirGlobal(req);
+  exigirEditorParam(req);
   try {
     const r = await integracoes.atualizarSelic({ usuario: req.user.name });
     flash(res, `Selic atualizada pelo Banco Central: ${r.gravados} mês(es), o último é ${r.ultimo || '-'}.`);
@@ -745,25 +780,27 @@ app.post('/cadastros/parametros/selic/banco-central', h(async (req, res) => {
   res.redirect('/cadastros/parametros/selic');
 }));
 app.post('/cadastros/parametros/vau/colar', h((req, res) => {
-  exigirGlobal(req);
+  exigirEditorParam(req);
+  const esc = escopoParam(req);
   const uf = UFS.includes(req.body.uf) ? req.body.uf : '';
   const vigencia = /^\d{4}-\d{2}$/.test(req.body.vigencia || '') ? req.body.vigencia : '';
-  const volta = `/cadastros/parametros/vau?uf=${uf}&vigencia=${vigencia}`;
+  const volta = `/cadastros/parametros/vau?${esc ? 'escopo=escritorio&' : ''}uf=${uf}&vigencia=${vigencia}`;
   if (!uf || !vigencia) { flash(res, 'Escolha a UF e o mês de referência.', 'erro'); return res.redirect(volta); }
-  const itens = integracoes.importarVauColada({ uf, vigencia, texto: req.body.texto }, req.user.name);
+  const itens = integracoes.importarVauColada({ uf, vigencia, texto: req.body.texto, office: esc }, req.user.name);
   if (!itens.length) { flash(res, 'Nenhuma destinação com valor foi reconhecida no texto colado. Confira se copiou a tabela inteira.', 'erro'); return res.redirect(volta); }
   const faltam = TABELAS.vau.opcoesChave.filter(d => !itens.some(i => i.destinacao === d));
-  flash(res, `VAU ${uf} ${vigencia}: ${itens.map(i => `${i.destinacao} ${brl(i.valor)}`).join('; ')}.${faltam.length ? ` Não encontradas: ${faltam.join(', ')}.` : ''}`, faltam.length ? 'alerta' : 'ok');
+  flash(res, `VAU ${uf} ${vigencia}${esc ? ' (só deste escritório)' : ''}: ${itens.map(i => `${i.destinacao} ${brl(i.valor)}`).join('; ')}.${faltam.length ? ` Não encontradas: ${faltam.join(', ')}.` : ''}`, faltam.length ? 'alerta' : 'ok');
   res.redirect(volta);
 }));
 
 app.post('/cadastros/parametros/:tabela/importar', h((req, res, next) => {
   const t = TABELAS[req.params.tabela];
   if (!t || !t.importavel) return next();
-  exigirGlobal(req);
-  const { ok, erros } = importarCsv(req.params.tabela, req.body.csv, req.user.name);
-  flash(res, `${ok} linha(s) importada(s).${erros.length ? ` Ignoradas ${erros.length}: ${erros.slice(0, 5).join(' | ')}` : ''}`, erros.length ? 'alerta' : 'ok');
-  res.redirect(`/cadastros/parametros/${req.params.tabela}`);
+  exigirEditorParam(req);
+  const esc = escopoParam(req);
+  const { ok, erros } = importarCsv(req.params.tabela, req.body.csv, req.user.name, esc);
+  flash(res, `${ok} linha(s) importada(s)${esc ? ' só para este escritório' : ''}.${erros.length ? ` Ignoradas ${erros.length}: ${erros.slice(0, 5).join(' | ')}` : ''}`, erros.length ? 'alerta' : 'ok');
+  res.redirect(`/cadastros/parametros/${req.params.tabela}${qsEscopo(esc)}`);
 }));
 
 // ---------------------------------------------------------------- erros

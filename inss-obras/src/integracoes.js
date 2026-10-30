@@ -9,18 +9,14 @@
 // VAU: não tem API pública (só aparece no SERO, com login no e-CAC). Aqui fica
 // o leitor do texto copiado da tela "Consultar Tabela VAU" do SERO: reconhece
 // a destinação e o valor de cada linha.
-const { db, nowIso } = require('./db');
+const { db, gravarParam } = require('./db');
 const { DESTINACOES } = require('./params');
 
 const SELIC_URL = 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.4390/dados';
 const SELIC_DESDE = '01/01/2016';
 const OBS_BCB = 'Banco Central (SGS 4390)';
 
-function gravar(tabela, { uf = '', chave, vigencia = '', valor, obs }, usuario) {
-  db.prepare(`INSERT INTO params (tabela, uf, chave, vigencia, valor, obs, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?)
-    ON CONFLICT(tabela, uf, chave, vigencia) DO UPDATE SET valor = excluded.valor, obs = excluded.obs, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
-    .run(tabela, uf, chave, vigencia, valor, obs || '', nowIso(), usuario);
-}
+const gravar = (tabela, linha, usuario) => gravarParam(tabela, linha, usuario);
 
 // Busca a série e grava os meses já encerrados (o mês corrente ainda não tem a
 // taxa fechada). Devolve { gravados, ultimo }.
@@ -81,9 +77,10 @@ function lerVauColada(texto) {
   return DESTINACOES.filter(d => achados.has(d)).map(d => ({ destinacao: d, valor: achados.get(d) }));
 }
 
-function importarVauColada({ uf, vigencia, texto }, usuario) {
+// office '' = padrão da plataforma; id do escritório = ajuste só dele
+function importarVauColada({ uf, vigencia, texto, office = '' }, usuario) {
   const itens = lerVauColada(texto);
-  for (const i of itens) gravar('vau', { uf, chave: i.destinacao, vigencia, valor: i.valor, obs: 'Colado do SERO' }, usuario);
+  for (const i of itens) gravar('vau', { office, uf, chave: i.destinacao, vigencia, valor: i.valor, obs: 'Colado do SERO' }, usuario);
   return itens;
 }
 
