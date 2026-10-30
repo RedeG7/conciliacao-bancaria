@@ -101,7 +101,7 @@ function contadores(c, rotulo = 'Cadastrados') {
     const v = varr(a, b);
     return html`<div class="card contador"><small>${rotulo} ${t}</small><b>${a}</b><span class="${v >= 0 ? 'sobe' : 'desce'}">${v >= 0 ? '▲' : '▼'} ${Math.abs(v)}% vs. ${ant}</span></div>`;
   };
-  return html`<div class="cards3">${card('hoje', c.hoje, c.ontem, 'ontem')}${card('esse mês', c.mes, c.mesAnt, 'mês anterior')}${card('no ano', c.ano, c.anoAnt, 'ano anterior')}</div>`;
+  return html`<div class="cards3 contadores">${card('hoje', c.hoje, c.ontem, 'ontem')}${card('esse mês', c.mes, c.mesAnt, 'mês anterior')}${card('no ano', c.ano, c.anoAnt, 'ano anterior')}</div>`;
 }
 
 // tabela com busca e paginação no navegador (public/app.js)
@@ -109,8 +109,8 @@ function tabela(cabecalhos, linhas, vazio = 'Nenhum registro.') {
   return html`<div class="card"><div class="tabela-topo">
     <label>Mostrar <select class="por-pagina"><option>10</option><option selected>25</option><option>50</option><option>100</option></select></label>
     <input class="busca-tabela" placeholder="Buscar..." aria-label="Buscar na tabela"></div>
-    <div class="rolagem"><table class="lista"><thead><tr>${cabecalhos.map(c => html`<th>${c}</th>`)}</tr></thead>
-    <tbody>${linhas.length ? linhas.map(l => html`<tr>${l.map(c => html`<td>${c}</td>`)}</tr>`) : html`<tr class="vazio"><td colspan="${cabecalhos.length}">${vazio}</td></tr>`}</tbody></table></div>
+    <div class="rolagem"><table class="lista cartoes"><thead><tr>${cabecalhos.map(c => html`<th>${c}</th>`)}</tr></thead>
+    <tbody>${linhas.length ? linhas.map(l => html`<tr>${l.map((c, i) => html`<td data-label="${cabecalhos[i]}">${c}</td>`)}</tr>`) : html`<tr class="vazio"><td colspan="${cabecalhos.length}">${vazio}</td></tr>`}</tbody></table></div>
     <div class="paginacao"></div></div>`;
 }
 
