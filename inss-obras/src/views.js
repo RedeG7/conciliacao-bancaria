@@ -53,13 +53,14 @@ function layout(req, titulo, corpo, { descricao = '', migalha = '' } = {}) {
   const atual = req.path;
   const offices = u.is_global ? JSON.parse(u.offices || '[]') : [];
   const menu = MENU.map(([grupo, itens]) => html`
-    <details class="grupo" open><summary>${grupo}</summary>
-      ${itens.map(([href, rot, ic]) => html`<a href="${href}" class="${atual === href || atual.startsWith(href + '/') ? 'ativo' : ''}" data-busca="${rot.toLowerCase()}"><span>${ic}</span>${rot}</a>`)}
+    <details class="grupo" open data-grupo="${grupo}"><summary>${grupo}</summary>
+      ${itens.map(([href, rot, ic]) => html`<a href="${href}" class="${atual === href || atual.startsWith(href + '/') ? 'ativo' : ''}" data-busca="${rot.toLowerCase()}" title="${rot}"><span>${ic}</span><span class="rot">${rot}</span></a>`)}
     </details>`);
   return page(titulo, html`
 <div class="app">
   <aside class="lateral" id="lateral">
-    <div class="marca"><span class="logo">🏗️</span><div><b>Simulador INSS Obras</b><small>RedeG7</small></div></div>
+    <div class="marca"><span class="logo">🏗️</span><div><b>Simulador INSS Obras</b><small>RedeG7</small></div>
+      <button class="recolher" id="recolherMenu" aria-label="Recolher menu" title="Recolher / expandir menu">«</button></div>
     <input class="busca-menu" id="buscaMenu" placeholder="Buscar tela..." aria-label="Buscar tela">
     <nav>${menu}</nav>
   </aside>
@@ -90,7 +91,7 @@ function layout(req, titulo, corpo, { descricao = '', migalha = '' } = {}) {
 function page(titulo, corpo, extraHead = '') {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(titulo)} · Simulador INSS Obras</title><link rel="stylesheet" href="/static/app.css">${extraHead}
-<script>try{var t=localStorage.getItem('tema');if(t)document.documentElement.dataset.theme=t}catch(e){}</script></head>
+<script>try{var t=localStorage.getItem('tema');if(t)document.documentElement.dataset.theme=t;var m=localStorage.getItem('menu');if(m)document.documentElement.dataset.menu=m}catch(e){}</script></head>
 <body>${corpo}<script src="/static/app.js"></script></body></html>`;
 }
 

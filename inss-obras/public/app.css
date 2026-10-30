@@ -25,6 +25,20 @@ h1 { font-size: 1.5rem; margin: .2rem 0; } h3 { margin: 1.4rem 0 .6rem; font-siz
 .marca small { display: block; opacity: .7; } .logo { font-size: 1.6rem; }
 .busca-menu { width: 100%; margin-bottom: 10px; background: #ffffff14; color: inherit; border-color: #ffffff22; }
 .grupo summary { cursor: pointer; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; opacity: .7; padding: 8px 6px 4px; }
+.grupo summary::after { content: '▾'; float: right; font-size: .8rem; } .grupo:not([open]) summary::after { content: '▸'; }
+.lateral { transition: width .15s, padding .15s; }
+.marca .recolher { margin-left: auto; flex: none; width: 30px; height: 30px; border: 0; border-radius: 8px; background: #ffffff14; color: inherit; font-size: 1.05rem; cursor: pointer; }
+.marca .recolher:hover { background: #ffffff26; }
+/* menu recolhido (só no computador): fica só com os ícones */
+@media (min-width: 861px) {
+  :root[data-menu="recolhido"] .lateral { width: 68px; padding: 16px 8px; overflow-x: hidden; }
+  :root[data-menu="recolhido"] .marca { flex-direction: column; gap: 8px; }
+  :root[data-menu="recolhido"] .marca > div, :root[data-menu="recolhido"] .busca-menu, :root[data-menu="recolhido"] .grupo a .rot { display: none; }
+  :root[data-menu="recolhido"] .marca .recolher { margin: 0; transform: rotate(180deg); }
+  :root[data-menu="recolhido"] .grupo summary { font-size: 0; padding: 6px 0 2px; border-top: 1px solid #ffffff1f; margin-top: 4px; pointer-events: none; }
+  :root[data-menu="recolhido"] .grupo summary::after { content: none; }
+  :root[data-menu="recolhido"] .grupo a { justify-content: center; font-size: 1.15rem; padding: 8px 0; }
+}
 .grupo a { display: flex; gap: 8px; padding: 7px 8px; border-radius: 8px; color: inherit; text-decoration: none; }
 .grupo a:hover { background: #ffffff12; } .grupo a.ativo { background: var(--verde); color: #fff; }
 .principal { flex: 1; min-width: 0; }
@@ -155,7 +169,7 @@ ol.guia { list-style: none; padding: 0; margin: 0; }
 @media (max-width: 860px) {
   .passo-guia { flex-direction: column; align-items: flex-start; }
   .lateral { position: fixed; left: -280px; z-index: 20; transition: left .2s; } .lateral.aberto { left: 0; }
-  #abrirMenu { display: inline-block; } .usuario { display: none; }
+  #abrirMenu { display: inline-block; } .usuario { display: none; } .marca .recolher { display: none; }
   .cards3 { grid-template-columns: 1fr; } main { padding: 16px; } .topo { padding: 10px 16px; }
   .copiar { flex-wrap: wrap; }
 }

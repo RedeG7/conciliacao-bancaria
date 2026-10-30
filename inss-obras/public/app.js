@@ -15,6 +15,25 @@
   });
   $('#telaCheia')?.addEventListener('click', () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.()));
   $('#abrirMenu')?.addEventListener('click', () => $('#lateral').classList.toggle('aberto'));
+  // menu lateral: recolher (fica só com os ícones) e grupos fechados; lembra as escolhas
+  const recolhido = () => document.documentElement.dataset.menu === 'recolhido';
+  let fechados = [];
+  try { fechados = JSON.parse(localStorage.getItem('grupos-fechados') || '[]'); } catch (e) { /* sem storage */ }
+  const grupos = $$('.lateral details.grupo');
+  // recolhido mostra todos os ícones; expandido volta os grupos que a pessoa fechou
+  // (o grupo da tela atual fica sempre aberto)
+  const aplicarGrupos = () => grupos.forEach(d => { d.open = recolhido() || !fechados.includes(d.dataset.grupo) || !!d.querySelector('a.ativo'); });
+  aplicarGrupos();
+  grupos.forEach(d => d.addEventListener('toggle', () => {
+    if (recolhido()) return;
+    fechados = fechados.filter(g => g !== d.dataset.grupo).concat(d.open ? [] : [d.dataset.grupo]);
+    salvar('grupos-fechados', JSON.stringify(fechados));
+  }));
+  $('#recolherMenu')?.addEventListener('click', () => {
+    if (recolhido()) delete document.documentElement.dataset.menu; else document.documentElement.dataset.menu = 'recolhido';
+    salvar('menu', recolhido() ? 'recolhido' : '');
+    aplicarGrupos();
+  });
 
   $('#buscaMenu')?.addEventListener('input', e => {
     const q = e.target.value.trim().toLowerCase();
