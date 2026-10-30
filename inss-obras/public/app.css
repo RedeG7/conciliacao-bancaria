@@ -81,6 +81,16 @@ table { border-collapse: collapse; width: 100%; } .lista th, .lista td { text-al
 .documento header { display: flex; gap: 16px; align-items: center; border-bottom: 2px solid var(--verde); padding-bottom: 12px; margin-bottom: 12px; }
 .documento header h2 { margin: 0; } .documento .dir { margin-left: auto; text-align: right; } .logo-doc { max-height: 60px; }
 .assinaturas { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 60px; text-align: center; } .assinaturas div { border-top: 1px solid var(--texto); padding-top: 6px; }
+.selo.alerta { background: var(--alerta-fundo); color: var(--alerta); } .selo.vencido { background: var(--erro-fundo); color: var(--erro); }
+.cert { display: flex; flex-direction: column; gap: 6px; margin: 0; } .cert form { margin: 0; }
+.barra { height: 10px; background: var(--borda); border-radius: 99px; overflow: hidden; margin: 6px 0 12px; }
+.barra span { display: block; height: 100%; background: var(--verde); } .barra.pequena { height: 6px; margin: 0 0 4px; width: 120px; }
+.passos { display: flex; flex-direction: column; gap: 6px; }
+.passo { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--borda); border-radius: 10px; cursor: pointer; }
+.passo input { width: auto; } .passo.feito { background: var(--ok-fundo); }
+.abas { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.abas a:not(.botao) { padding: 8px 14px; border-radius: 99px; border: 1px solid var(--borda); text-decoration: none; color: var(--texto); }
+.abas a.ativo { background: var(--verde); border-color: var(--verde); color: #fff; } .abas a span { opacity: .75; margin-left: 4px; } .abas .botao { margin-left: auto; }
 @media (max-width: 860px) {
   .lateral { position: fixed; left: -280px; z-index: 20; transition: left .2s; } .lateral.aberto { left: 0; }
   #abrirMenu { display: inline-block; } .usuario { display: none; }

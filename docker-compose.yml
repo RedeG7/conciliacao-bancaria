@@ -162,6 +162,9 @@ services:
       - TRUST_PROXY=1
       - PUBLIC_URL=https://${DOMINIO_INSSOBRAS:-inssobras.redeg7.com}
       - SSO_SECRET=${INSSOBRAS_SSO_SECRET:-}
+      # cifra dos certificados A1 dos clientes (DCTF Web) - gerada uma vez
+      # pelo deploy; perder a chave obriga a reenviar os certificados
+      - CERT_ENC_KEY=${INSSOBRAS_CERT_KEY:-}
       - HUB_URL=https://${DOMINIO}
     volumes:
       - inssobras_data:/data
