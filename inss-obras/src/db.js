@@ -72,6 +72,70 @@ CREATE TABLE IF NOT EXISTS params (
 CREATE UNIQUE INDEX IF NOT EXISTS params_chave ON params(tabela, uf, chave, vigencia);
 `);
 
+// colunas novas em tabelas que já existem em produção (ALTER só se faltar)
+function addColumns(tabela, defs) {
+  const tem = new Set(db.prepare(`PRAGMA table_info(${tabela})`).all().map(c => c.name));
+  for (const d of defs) if (!tem.has(d.split(' ')[0])) db.exec(`ALTER TABLE ${tabela} ADD COLUMN ${d}`);
+}
+
+// Módulo DCTF Web (SPEC_MODULO_DCTFWEB): cliente como empregador eSocial
+// (S-1000) com procuração eletrônica para o procurador do escritório, cujo
+// certificado A1 (tabela certificates) transmite em nome do cliente.
+addColumns('clients', ['profissao TEXT', 'nacionalidade TEXT', 'registro TEXT', 'contato TEXT', 'telefone_fixo TEXT',
+  'cep TEXT', 'rua TEXT', 'numero TEXT', 'bairro TEXT', 'cidade TEXT', 'uf TEXT', 'complemento TEXT',
+  'possui_procuracao INTEGER NOT NULL DEFAULT 0', 'procuracao_data_assinatura TEXT', 'procuracao_data_fim TEXT',
+  'certificate_id INTEGER', 's1000_inicio TEXT', 's1000_fim TEXT', "class_trib TEXT DEFAULT '21'",
+  "ind_opt_reg_eletron TEXT DEFAULT '0'", "ind_desoneracao TEXT DEFAULT '0'", 'pis_pasep INTEGER NOT NULL DEFAULT 0', 's1000_recibo TEXT']);
+// obra (S-1005)
+addColumns('works', ['calculator_id INTEGER', 'custom_name TEXT', "registration_type TEXT DEFAULT 'CNO'", 'real_estate_registration TEXT',
+  "cnae TEXT DEFAULT '4120400'", 'has_construction_permit INTEGER NOT NULL DEFAULT 0', 'date_construction_permit TEXT',
+  'has_habitese INTEGER NOT NULL DEFAULT 0', 'date_habitese TEXT', 'cep TEXT', 'numero TEXT', 'bairro TEXT', 'complemento TEXT',
+  "stoppages_json TEXT NOT NULL DEFAULT '[]'"]);
+db.exec(`
+-- autônomos (S-2300, TSVE sem vínculo) - vinculados ao cliente dono da obra
+CREATE TABLE IF NOT EXISTS masons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, office TEXT NOT NULL, client_id INTEGER NOT NULL REFERENCES clients(id),
+  name TEXT NOT NULL, document TEXT, birthday TEXT, phone TEXT, email TEXT,
+  sex TEXT, skin TEXT, marital TEXT, scholarity TEXT, birth_country TEXT DEFAULT '105', country_nationality TEXT DEFAULT '105',
+  category TEXT DEFAULT '701', cbo TEXT DEFAULT '710205', residence_time TEXT, entry_condition TEXT,
+  address_zip_code TEXT, address TEXT, address_number TEXT, address_complement TEXT, address_district TEXT, address_city TEXT, address_municipality TEXT,
+  ativo INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS masons_office ON masons(office, client_id, ativo);
+-- trabalhadores da obra, com o período de cada um
+CREATE TABLE IF NOT EXISTS work_masons (
+  work_id INTEGER NOT NULL REFERENCES works(id), mason_id INTEGER NOT NULL REFERENCES masons(id),
+  start_date TEXT, end_date TEXT, PRIMARY KEY (work_id, mason_id));
+-- envio DCTFWeb de uma obra (todas as competências ficam em payroll_months)
+CREATE TABLE IF NOT EXISTS dctf_webs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, office TEXT NOT NULL, client_id INTEGER NOT NULL REFERENCES clients(id),
+  work_id INTEGER REFERENCES works(id), esocial_id INTEGER REFERENCES simulations(id),
+  construction_init_date TEXT, construction_end_date TEXT, status TEXT NOT NULL DEFAULT 'em_andamento',
+  send1005 INTEGER NOT NULL DEFAULT 1, send1010 TEXT NOT NULL DEFAULT 'inclusao', send1020 TEXT NOT NULL DEFAULT 'inclusao',
+  rubric_code TEXT, rubric_description TEXT, rubric_validity TEXT, irrf TEXT DEFAULT '11',
+  tax_allocation_code TEXT, tax_allocation_validity TEXT,
+  has_s1005 INTEGER NOT NULL DEFAULT 0, has_s1010 INTEGER NOT NULL DEFAULT 0, has_s1020 INTEGER NOT NULL DEFAULT 0, has_s2300 INTEGER NOT NULL DEFAULT 0,
+  fechamento_json TEXT NOT NULL DEFAULT '{}', cancel_reason TEXT, canceled_at TEXT, last_sent_at TEXT, last_competencia TEXT,
+  created_by TEXT, created_at TEXT NOT NULL, ativo INTEGER NOT NULL DEFAULT 1);
+CREATE INDEX IF NOT EXISTS dctf_webs_office ON dctf_webs(office, ativo);
+CREATE TABLE IF NOT EXISTS payroll_months (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, dctf_web_id INTEGER NOT NULL REFERENCES dctf_webs(id), competencia TEXT NOT NULL,
+  is_paralyzed INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'rascunho', nr_rec_1299 TEXT,
+  UNIQUE (dctf_web_id, competencia));
+CREATE TABLE IF NOT EXISTS payroll_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, payroll_month_id INTEGER NOT NULL REFERENCES payroll_months(id) ON DELETE CASCADE,
+  mason_id INTEGER REFERENCES masons(id), id_dm_dev TEXT, calc_base REAL NOT NULL DEFAULT 0, payment_date TEXT,
+  nr_rec_1200 TEXT, nr_rec_1210 TEXT);
+-- XML enviado / retorno de cada evento (preenchido quando a transmissão ao eSocial existir)
+CREATE TABLE IF NOT EXISTS esocial_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, office TEXT NOT NULL, client_id INTEGER, dctf_web_id INTEGER, event TEXT NOT NULL,
+  payload_xml TEXT, response_xml TEXT, receipt TEXT, status TEXT, created_at TEXT NOT NULL);
+-- acompanhamento do guia de envio por cliente (o progresso é calculado pelos dados)
+CREATE TABLE IF NOT EXISTS send_guides (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, office TEXT NOT NULL, client_id INTEGER NOT NULL REFERENCES clients(id),
+  status TEXT NOT NULL DEFAULT 'active', started_at TEXT NOT NULL, paused_at TEXT, completed_at TEXT, user TEXT,
+  ativo INTEGER NOT NULL DEFAULT 1, UNIQUE (office, client_id));
+`);
+
 const nowIso = () => new Date().toISOString();
 
 // valores iniciais das tabelas de parâmetros (só quando a tabela está vazia)

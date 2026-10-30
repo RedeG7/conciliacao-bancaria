@@ -30,6 +30,7 @@ const MENU = [
     ['/guia-de-envio', 'Guia de envio', '🧭'],
     ['/dctf-web', 'Envios', '📤'],
     ['/cadastros/certificados', 'Certificados digitais', '🔐'],
+    ['/acompanhamento-de-obras/autonomos', 'Autônomos', '👷'],
     ['/acompanhamento-de-obras/obras', 'Obras (CNO)', '🏗️'],
   ]],
   ['Acompanhamento de obras', [

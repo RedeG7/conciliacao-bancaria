@@ -26,12 +26,15 @@ especificação `SPEC_SIMULADOR_INSS_OBRAS` (fase 1, ver "Escopo" abaixo).
 | Propostas (honorários, impressão/PDF pelo navegador) | `/acompanhamento-de-obras/propostas` | ✅ |
 | Clientes, Leads (WhatsApp com mensagem pronta) | `/acompanhamento-de-obras/clientes`, `/ferramentas-extras/leads` | ✅ |
 | Tabelas de parâmetros (VAU e Selic com importação CSV) | `/cadastros/parametros` | ✅ |
-| Obras com CNO | `/acompanhamento-de-obras/obras` | ✅ |
-| Certificados digitais A1 (arquivo e senha cifrados, aviso de vencimento) | `/cadastros/certificados` | ✅ |
-| Envios DCTFWeb por competência (passo a passo, próxima competência) | `/dctf-web` | ✅ controle manual |
-| Guia de envio (em andamento / pausados / concluídos) | `/guia-de-envio` | ✅ |
-| Transmissão automática (e-CAC/eSocial), busca automática da VAU | - | próxima fase (após mapear o portal) |
-| Contratos, recibos/RPA, autônomos, CRM kanban, financeiro, drive, TODO | - | próximas fases |
+| Certificados digitais A1 **do procurador do escritório** (cifrados, aviso de vencimento) | `/cadastros/certificados` | ✅ |
+| Cliente como empregador (S-1000): procuração eletrônica, certificado do procurador, endereço | `/clientes/{id}?guia=1` | ✅ |
+| Autônomos (S-2300), 3 abas, duplicar para outro cliente | `/acompanhamento-de-obras/autonomos` | ✅ |
+| Obra (S-1005): CNO, aferição, alvará/habite-se, trabalhadores com datas, paralisações | `/acompanhamento-de-obras/obras` | ✅ |
+| Envio DCTFWeb em 6 abas (obra, rubrica S-1010, lotação S-1020, folha S-1200/S-1210, fechamento S-1299) + quadro de cálculo | `/dctf-web` | ✅ recibos registrados à mão |
+| Relatório por evento e recibo dos autônomos (imprimir/PDF) | `/dctf-web/visualizar/{id}` | ✅ |
+| Guia de envio com os 8 passos detectados pelos dados | `/guia-de-envio` | ✅ |
+| Transmissão ao eSocial (XML assinado, lotes, protocolo, logs, S-3000/S-1298) | - | próxima etapa (após o fiscal validar a seção 8 da spec) |
+| Contratos, recibos/RPA, fornecedores, CRM kanban, financeiro, drive, TODO | - | próximas fases |
 
 ## Regras de cálculo
 
@@ -41,6 +44,13 @@ Cadastros > Parâmetros (`src/params.js`). Os valores iniciais vêm marcados
 "Valor inicial - validar com o fiscal (IN RFB 2.021/2021)" e o Dashboard
 avisa enquanto houver algum sem conferir. VAU e Selic começam vazias: importe
 o CSV publicado (VAU: `uf;destinação;AAAA-MM;valor` · Selic: `AAAA-MM;percentual`).
+
+Quadro de cálculo da folha (`src/folha.js`): CPP sobre a remuneração da
+competência; competência vencida (dia 20 do mês seguinte) leva multa de mora
+(0,33%/dia até 20%), Selic acumulada + 1% e MAED (2%/mês até 20%, mínimo
+fixo). Valor "calculado" do mês = remuneração mínima do fator de ajuste
+(ou a RMT) dividida pelos meses da obra sem paralisação. Tudo em
+Cadastros > Parâmetros > DCTFWeb, para o fiscal validar (spec, seção 8).
 
 Obra predial: COD = área × % da categoria × VAU(UF, destinação) − redução de
 concreto usinado; RMT = COD × % de mão de obra do tipo de obra; áreas

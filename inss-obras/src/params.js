@@ -93,6 +93,15 @@ const TABELAS = {
     ajuda: 'Parcelamento ordinário: parcelas corrigidas pela Selic acumulada + juros no mês do pagamento.',
     seed: [['Máximo de parcelas', 60], ['Juros no mês do pagamento (%)', 1], ['Parcela mínima PF (R$)', 200], ['Parcela mínima PJ (R$)', 500]],
   },
+  dctf: {
+    titulo: 'DCTFWeb - encargos da folha da obra', unidade: '', colunas: ['chave'], rotuloChave: 'Parâmetro',
+    opcoesChave: ['CPP (%)', 'Dia de vencimento', 'Multa de mora ao dia (%)', 'Multa de mora máxima (%)', 'Juros no mês do pagamento (%)',
+      'MAED ao mês (%)', 'MAED máxima (%)', 'MAED mínima (R$)', 'Início da obrigatoriedade (AAAAMM)'],
+    ajuda: 'Quadro de cálculo do envio DCTFWeb: CPP sobre a remuneração; competência vencida leva multa de mora, Selic acumulada e MAED.',
+    seed: [['CPP (%)', 20], ['Dia de vencimento', 20], ['Multa de mora ao dia (%)', 0.33], ['Multa de mora máxima (%)', 20],
+      ['Juros no mês do pagamento (%)', 1], ['MAED ao mês (%)', 2], ['MAED máxima (%)', 20], ['MAED mínima (R$)', 200],
+      ['Início da obrigatoriedade (AAAAMM)', 202110]],
+  },
   decadencia: {
     titulo: 'Decadência', unidade: 'anos', colunas: ['chave'], rotuloChave: 'Parâmetro', opcoesChave: ['Prazo decadencial (anos)'],
     ajuda: 'Competências com mais anos que este prazo (contados do 1º dia do exercício seguinte) não são exigíveis.',
