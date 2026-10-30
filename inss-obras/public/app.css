@@ -66,6 +66,7 @@ tr.linha-rep { background: none; border-left: 0; }
 .acoes { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; align-items: center; } .acoes form { margin: 0; }
 .acoes-linha { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; } .acoes-linha form { margin: 0; display: inline-flex; gap: 6px; align-items: center; }
 .curto { width: 90px; } .medio { width: 170px; }
+.lista td:has(> .acoes-linha form.inline) { min-width: 300px; }
 details > summary { list-style: none; } details > summary::-webkit-details-marker { display: none; }
 details.card > summary { margin-bottom: 0; } details.card[open] > summary { margin-bottom: 12px; }
 .menu-acao { position: relative; } .menu-acao > div { position: absolute; z-index: 4; background: var(--card); border: 1px solid var(--borda); border-radius: 10px; padding: 6px; min-width: 260px; margin-top: 4px; box-shadow: 0 8px 24px #0002; }
@@ -81,7 +82,8 @@ table { border-collapse: collapse; width: 100%; } .lista th, .lista td { text-al
 .selo { background: var(--ok-fundo); padding: 2px 8px; border-radius: 99px; font-size: .8rem; white-space: nowrap; }
 .aviso { padding: 12px 14px; border-radius: 10px; margin-bottom: 14px; background: var(--ok-fundo); }
 .aviso.erro { background: var(--erro-fundo); color: var(--erro); } .aviso.alerta { background: var(--alerta-fundo); } .aviso ul { margin: 6px 0 0; padding-left: 18px; }
-.alerta-txt { color: var(--alerta); font-style: normal; }
+.alerta-txt { color: var(--alerta); font-style: normal; } .ajuste-txt { color: #2563eb; font-style: normal; }
+.selo.ajuste { background: #dbeafe; color: #1d4ed8; } .selo.padrao { background: var(--fundo); color: var(--suave); }
 .copiar { display: flex; gap: 8px; } .oculto { position: absolute; left: -9999px; width: 1px; height: 1px; }
 .grade-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .link-card { text-decoration: none; color: inherit; margin: 0; } .link-card:hover { border-color: var(--verde); } .link-card b { font-size: 1rem; margin-bottom: 4px; }

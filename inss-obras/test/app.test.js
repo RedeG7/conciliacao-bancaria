@@ -82,6 +82,31 @@ test('fluxo completo', async () => {
   assert.strictEqual((await get('/simulacoes/1', ck2)).status, 404);
   const pgOutro = await (await get('/ferramentas-extras/leads', ck2)).text();
   assert.doesNotMatch(pgOutro, /v@ex\.com/);
-  // usuário comum (não global) não altera parâmetros
-  assert.strictEqual((await post('/cadastros/parametros/aliquota/salvar', ck2, { id: '1', valor: '1' })).status, 403);
+  // admin do outro escritório ajusta um parâmetro: vale só para o escritório dele
+  const { db, paramReader } = require('../src/db');
+  const cpp = db.prepare("SELECT id FROM params WHERE tabela = 'aliquota' AND chave = 'Patronal (CPP)' AND office = ''").get().id;
+  r = await post('/cadastros/parametros/aliquota/salvar', ck2, { id: String(cpp), valor: '10', obs: 'teste' });
+  assert.strictEqual(r.status, 302);
+  assert.strictEqual(paramReader('outro').get('aliquota', 'Patronal (CPP)'), 10);
+  assert.strictEqual(paramReader('escritorio-dev').get('aliquota', 'Patronal (CPP)'), 20);
+  pg = await (await get('/cadastros/parametros/aliquota', ck2)).text();
+  assert.match(pg, /Ajuste do escritório/);
+  assert.match(pg, /Voltar ao padrão/);
+  pg = await (await get('/cadastros/parametros', ck2)).text();
+  assert.match(pg, /1 ajuste\(s\) do escritório/);
+  // voltar ao padrão
+  const ajuste = db.prepare("SELECT id FROM params WHERE office = 'outro'").get().id;
+  await post('/cadastros/parametros/aliquota/excluir', ck2, { id: String(ajuste) });
+  assert.strictEqual(paramReader('outro').get('aliquota', 'Patronal (CPP)'), 20);
+  // não apaga o padrão da plataforma nem ajuste de outro escritório
+  assert.strictEqual((await post('/cadastros/parametros/aliquota/excluir', ck2, { id: String(cpp) })).status, 404);
+  // usuário comum (não admin) não altera parâmetros
+  const ck3 = await login('?u=comum&office=outro&admin=0');
+  assert.strictEqual((await post('/cadastros/parametros/aliquota/salvar', ck3, { id: String(cpp), valor: '1' })).status, 403);
+  // super admin: padrão vale para todos; "só este escritório" vira ajuste
+  await post('/cadastros/parametros/aliquota/salvar', ck, { id: String(cpp), valor: '21' });
+  assert.strictEqual(paramReader('outro').get('aliquota', 'Patronal (CPP)'), 21);
+  await post('/cadastros/parametros/aliquota/salvar', ck, { id: String(cpp), valor: '22', escopo: 'escritorio' });
+  assert.strictEqual(paramReader('escritorio-dev').get('aliquota', 'Patronal (CPP)'), 22);
+  assert.strictEqual(paramReader('outro').get('aliquota', 'Patronal (CPP)'), 21);
 });

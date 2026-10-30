@@ -69,7 +69,6 @@ CREATE INDEX IF NOT EXISTS dctf_envios_office ON dctf_envios(office, ativo, comp
 CREATE TABLE IF NOT EXISTS params (
   id INTEGER PRIMARY KEY AUTOINCREMENT, tabela TEXT NOT NULL, uf TEXT NOT NULL DEFAULT '', chave TEXT NOT NULL,
   vigencia TEXT NOT NULL DEFAULT '', valor REAL NOT NULL, obs TEXT, updated_at TEXT NOT NULL, updated_by TEXT);
-CREATE UNIQUE INDEX IF NOT EXISTS params_chave ON params(tabela, uf, chave, vigencia);
 `);
 
 // colunas novas em tabelas que já existem em produção (ALTER só se faltar)
@@ -77,6 +76,12 @@ function addColumns(tabela, defs) {
   const tem = new Set(db.prepare(`PRAGMA table_info(${tabela})`).all().map(c => c.name));
   for (const d of defs) if (!tem.has(d.split(' ')[0])) db.exec(`ALTER TABLE ${tabela} ADD COLUMN ${d}`);
 }
+
+// Parâmetros por escritório: office '' = padrão da plataforma (super admin
+// do Hub); office = id do escritório = ajuste que vale só para ele (admin do
+// escritório). O cálculo usa o ajuste do escritório quando existe.
+addColumns('params', ["office TEXT NOT NULL DEFAULT ''"]);
+db.exec('DROP INDEX IF EXISTS params_chave; CREATE UNIQUE INDEX IF NOT EXISTS params_chave_office ON params(tabela, office, uf, chave, vigencia);');
 
 // Módulo DCTF Web (SPEC_MODULO_DCTFWEB): cliente como empregador eSocial
 // (S-1000) com procuração eletrônica para o procurador do escritório, cujo
@@ -148,7 +153,7 @@ const nowIso = () => new Date().toISOString();
 // valores iniciais das tabelas de parâmetros (só quando a tabela está vazia)
 for (const [tabela, def] of Object.entries(TABELAS)) {
   if (!def.seed) continue;
-  if (db.prepare('SELECT COUNT(*) AS n FROM params WHERE tabela = ?').get(tabela).n) continue;
+  if (db.prepare("SELECT COUNT(*) AS n FROM params WHERE tabela = ? AND office = ''").get(tabela).n) continue;
   const ins = db.prepare('INSERT INTO params (tabela, uf, chave, valor, obs, updated_at, updated_by) VALUES (?,?,?,?,?,?,?)');
   for (const row of def.seed) {
     const [uf, chave, valor] = row.length === 3 ? row : ['', row[0], row[1]];
@@ -161,11 +166,20 @@ function tx(fn) {
   try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 
-// Leitor de parâmetros usado pelas calculadoras (src/calc.js)
-function paramReader() {
-  const rows = db.prepare('SELECT tabela, uf, chave, vigencia, valor FROM params').all();
+const chaveParam = r => `${r.tabela}|${r.uf}|${r.chave}|${r.vigencia}`;
+// Linhas que valem para o escritório: as do padrão que ele não ajustou + os
+// ajustes dele (origem 'escritorio'). Sem escritório = só o padrão.
+function linhasEfetivas(office = '') {
+  const rows = db.prepare("SELECT * FROM params WHERE office = '' OR office = ?").all(office || '');
+  const ajustadas = new Set(rows.filter(r => r.office).map(chaveParam));
+  return rows.filter(r => r.office || !ajustadas.has(chaveParam(r))).map(r => ({ ...r, origem: r.office ? 'escritorio' : 'padrao' }));
+}
+
+// Leitor de parâmetros usado pelas calculadoras (src/calc.js), já com os
+// ajustes do escritório
+function paramReader(office = '') {
   const by = {};
-  for (const r of rows) (by[r.tabela] ||= []).push(r);
+  for (const r of linhasEfetivas(office)) (by[r.tabela] ||= []).push(r);
   return {
     list: tabela => (by[tabela] || []).map(r => ({ ...r })),
     // procura UF+chave exatas e depois os curingas "*" (e UF vazia)
@@ -187,6 +201,13 @@ function paramReader() {
   };
 }
 
+// grava (ou atualiza) um parâmetro do padrão (office '') ou de um escritório
+function gravarParam(tabela, { office = '', uf = '', chave, vigencia = '', valor, obs }, usuario) {
+  db.prepare(`INSERT INTO params (tabela, office, uf, chave, vigencia, valor, obs, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(tabela, office, uf, chave, vigencia) DO UPDATE SET valor = excluded.valor, obs = excluded.obs, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
+    .run(tabela, office, uf, chave, vigencia, valor, obs || '', nowIso(), usuario);
+}
+
 function ensureOffice(id, name) {
   const o = db.prepare('SELECT * FROM offices WHERE id = ?').get(id);
   if (o) {
@@ -198,4 +219,4 @@ function ensureOffice(id, name) {
   return db.prepare('SELECT * FROM offices WHERE id = ?').get(id);
 }
 
-module.exports = { db, tx, nowIso, paramReader, ensureOffice, setting, DATA_DIR };
+module.exports = { db, tx, nowIso, paramReader, linhasEfetivas, gravarParam, ensureOffice, setting, DATA_DIR };
