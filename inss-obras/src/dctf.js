@@ -306,20 +306,23 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
       <button type="button" class="botao sec pequeno remover-linha" aria-label="Remover trabalhador">✕</button></div>`;
     const linhaPar = p => html`<div class="linha-rep">${campo('Paralisada de', inp('par_ini', p.inicio, 'type="date"'))}${campo('até', inp('par_fim', p.fim, 'type="date"'))}
       <button type="button" class="botao sec pequeno remover-linha" aria-label="Remover paralisação">✕</button></div>`;
-    return html`<form method="post" action="${acao}" class="card"><div class="grade">
+    return html`<form method="post" action="${acao}" class="card">
+    <h3 class="primeiro">Identificação</h3><div class="grade">
       ${campo('Cliente *', select('client_id', [['', 'Selecione'], ...clientesDo(req.office).map(c => [c.id, c.nome])], w.client_id, 'required'))}
-      ${campo('Aferição de obra predial (simulação)', select('calculator_id', [['', '- selecione -'], ...afericoes.map(a => [a.id, `#${a.id} ${a.identifier || ''} (${dataBr(a.created_at)})`])], w.calculator_id))}
       ${campo('Nome da obra', inp('custom_name', w.custom_name, 'placeholder="Ex.: Rua X Q18 L37"'))}
+      ${campo('Aferição de obra predial (simulação)', select('calculator_id', [['', '- selecione -'], ...afericoes.map(a => [a.id, `#${a.id} ${a.identifier || ''} (${dataBr(a.created_at)})`])], w.calculator_id))}
+    </div><h3>Inscrição</h3><div class="grade g4">
       ${campo('Tipo de inscrição', select('registration_type', ['CNO'], w.registration_type))}
       ${campo('CNO', inp('cno', w.cno, 'placeholder="00.000.00000/00"'))}
       ${campo('Cadastro imobiliário (IPTU)', inp('real_estate_registration', w.real_estate_registration))}
       ${campo('CNAE', inp('cnae', w.cnae ?? '4120400'))}
+    </div><h3>Alvará e habite-se</h3><div class="grade g4">
       ${campo('Possui alvará?', simNao('has_construction_permit', w.has_construction_permit))}${campo('Data do alvará', inp('date_construction_permit', w.date_construction_permit, 'type="date"'))}
       ${campo('Possui habite-se?', simNao('has_habitese', w.has_habitese))}${campo('Data do habite-se', inp('date_habitese', w.date_habitese, 'type="date"'))}
-      ${campo('Área (m²)', inp('area', w.area ?? '', 'inputmode="decimal"'))}
+    </div><h3>Período e situação</h3><div class="grade g4">
       ${campo('Início', inp('data_inicio', w.data_inicio, 'type="date"'))}${campo('Término', inp('data_fim', w.data_fim, 'type="date"'))}
-      ${campo('Situação', select('status', STATUS_OBRA, w.status))}
-    </div><h3>Endereço da obra</h3><div class="grade">
+      ${campo('Área (m²)', inp('area', w.area ?? '', 'inputmode="decimal"'))}${campo('Situação', select('status', STATUS_OBRA, w.status))}
+    </div><h3>Endereço da obra</h3><div class="grade g4">
       ${campo('CEP', inp('cep', w.cep))}${campo('Rua', inp('endereco', w.endereco))}${campo('Número', inp('numero', w.numero))}${campo('Complemento', inp('complemento', w.complemento))}
       ${campo('Bairro', inp('bairro', w.bairro))}${campo('Cidade', inp('municipio', w.municipio))}${campo('UF', select('uf', ['', ...UFS], w.uf))}
     </div>
@@ -494,28 +497,30 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
     const info = (r, v) => html`<div><small>${r}</small><b>${v || '-'}</b></div>`;
     const ultimoMes = x.meses.length ? x.meses[x.meses.length - 1].competencia : (x.inicio || '').slice(0, 7);
     const linhaItem = (i, mid) => html`<tr class="linha-rep">
-      <td>${select('item_mason', [['', 'Selecione'], ...trab.map(t => [t.mason_id, t.name])], i.mason_id, 'aria-label="Autônomo"')}</td>
-      <td>${inp('item_iddmdev', i.id_dm_dev, 'class="curto" aria-label="Número"')}</td>
-      <td>${inp('item_valor', i.calc_base ? n2(i.calc_base) : '', 'inputmode="decimal" class="curto" aria-label="Valor"')}</td>
-      <td>${inp('item_pagto', i.payment_date, 'type="date" aria-label="Data de pagamento"')}</td>
-      <td>${inp('item_rec1200', i.nr_rec_1200, 'class="medio" placeholder="recibo S-1200" aria-label="Recibo S-1200"')}${inp('item_rec1210', i.nr_rec_1210, 'class="medio" placeholder="recibo S-1210" aria-label="Recibo S-1210"')}</td>
-      <td><button type="button" class="botao sec pequeno remover-linha" aria-label="Remover linha">✕</button>${mid ? '' : ''}</td></tr>`;
+      <td data-label="Autônomo">${select('item_mason', [['', 'Selecione'], ...trab.map(t => [t.mason_id, t.name])], i.mason_id, 'aria-label="Autônomo"')}</td>
+      <td data-label="Número">${inp('item_iddmdev', i.id_dm_dev, 'class="curto" aria-label="Número"')}</td>
+      <td data-label="Valor (base)">${inp('item_valor', i.calc_base ? n2(i.calc_base) : '', 'inputmode="decimal" class="curto" aria-label="Valor"')}</td>
+      <td data-label="Pagamento">${inp('item_pagto', i.payment_date, 'type="date" aria-label="Data de pagamento"')}</td>
+      <td data-label="Recibos" class="recibos">${inp('item_rec1200', i.nr_rec_1200, 'class="medio" placeholder="recibo S-1200" aria-label="Recibo S-1200"')}${inp('item_rec1210', i.nr_rec_1210, 'class="medio" placeholder="recibo S-1210" aria-label="Recibo S-1210"')}</td>
+      <td class="acao-linha"><button type="button" class="botao sec pequeno remover-linha" aria-label="Remover linha">✕ <span>Remover</span></button></td></tr>`;
 
     const bloqueio = !x.sp.ok ? html`<div class="aviso erro">Envio ao eSocial bloqueado: ${!x.sp.proc ? 'procuração eletrônica não informada ou vencida' : 'certificado do procurador inválido ou vencido'}. <a href="/clientes/${d.client_id}?guia=1">Completar o cliente</a></div>` : '';
     res.send(layout(req, `DCTFWeb #${d.id} - ${x.cli.nome}`, html`${bloqueio}
       ${d.status === 'cancelado' ? html`<div class="aviso alerta">Envio cancelado em ${dataHoraBr(d.canceled_at)}: ${d.cancel_reason}</div>` : ''}
       <div class="dctf-grade">
       <aside class="card lateral-dctf">
-        <b>#${d.id}</b><small>${x.cli.nome}</small>
-        ${x.sp.cert ? html`<div class="cert-mini"><small>Certificado do procurador</small><b>${x.sp.cert.titular}</b>${selo(cert.diasPara(x.sp.cert.validade))}</div>` : ''}
-        <button class="botao" form="formDctf">Salvar</button>
-        <button class="botao sec" form="formDctf" name="marcar" value="1" title="Marca os meses em rascunho para envio">Salvar e marcar para envio</button>
-        <form method="post" action="/dctf-web/${d.id}/lembretes"><button class="botao sec">${d.lembretes ? '🔔 Desativar lembretes' : '🔕 Ativar lembretes'}</button></form>
-        <a class="botao sec" href="/dctf-web/visualizar/${d.id}">Relatório</a>
-        <small class="desc">eSocial: ${req.officeRow.esocial_ambiente === 'producao' ? 'Produção' : 'Produção restrita (testes)'}</small>
-        <a class="botao sec" href="/dctf-web">Voltar</a>
-        ${d.status !== 'cancelado' ? html`<form method="post" action="/dctf-web/${d.id}/cancelar" data-pedir="Motivo do cancelamento:"><input type="hidden" name="cancel_reason"><button class="botao sec perigo">Cancelar envio</button></form>` : ''}
-        <p class="desc pequeno">A transmissão automática ao eSocial ainda não está ligada: transmita no eSocial/e-CAC e registre os recibos aqui.</p>
+        <div class="lado-info"><div><b>#${d.id}</b> <small>${x.cli.nome}</small></div>
+          ${x.sp.cert ? html`<div class="cert-mini"><small>Certificado do procurador</small><b>${x.sp.cert.titular}</b>${selo(cert.diasPara(x.sp.cert.validade))}</div>` : ''}
+          <small class="desc">eSocial: ${req.officeRow.esocial_ambiente === 'producao' ? 'Produção' : 'Produção restrita (testes)'}</small></div>
+        <div class="lado-botoes">
+          <button class="botao" form="formDctf">Salvar</button>
+          <button class="botao sec" form="formDctf" name="marcar" value="1" title="Marca os meses em rascunho para envio">Salvar e marcar para envio</button>
+          <form method="post" action="/dctf-web/${d.id}/lembretes"><button class="botao sec">${d.lembretes ? '🔔 Desativar lembretes' : '🔕 Ativar lembretes'}</button></form>
+          <a class="botao sec" href="/dctf-web/visualizar/${d.id}">Relatório</a>
+          <a class="botao sec" href="/dctf-web">Voltar</a>
+          ${d.status !== 'cancelado' ? html`<form method="post" action="/dctf-web/${d.id}/cancelar" data-pedir="Motivo do cancelamento:"><input type="hidden" name="cancel_reason"><button class="botao sec perigo">Cancelar envio</button></form>` : ''}
+        </div>
+        <p class="desc pequeno nota">A transmissão automática ao eSocial ainda não está ligada: transmita no eSocial/e-CAC e registre os recibos aqui.</p>
       </aside>
       <div>
       <nav class="abas-form">${abas.map(([k, t], i) => html`<button type="button" data-aba="${k}" class="${i ? '' : 'ativo'}">${t}</button>`)}</nav>
@@ -577,7 +582,7 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
           return html`<details class="card mes m-${m.status === 'fechado_externo' ? 'externo' : m.status}" open>
           <summary><b>${nomeMes(m.competencia)}</b> ${m.is_paralyzed ? html`<span class="selo alerta">Paralisado</span>` : html`<span>Valor: ${brl(ql?.informado)} informado / ${brl(ql?.calculado)} calculado</span>`}</summary>
           <form method="post" action="/dctf-web/${d.id}/meses/${m.id}">
-            <div class="rolagem"><table class="lista"><thead><tr><th>Autônomo</th><th>Número</th><th>Valor (base)</th><th>Pagamento</th><th>Recibos</th><th></th></tr></thead>
+            <div class="rolagem"><table class="lista cartoes"><thead><tr><th>Autônomo</th><th>Número</th><th>Valor (base)</th><th>Pagamento</th><th>Recibos</th><th></th></tr></thead>
             <tbody class="repetidor">${m.items.map(i => linhaItem(i))}</tbody></table></div>
             <template id="modeloItem${m.id}">${linhaItem({ payment_date: ultimoDia(m.competencia) })}</template>
             <button type="button" class="botao sec pequeno adicionar-linha" data-alvo="modeloItem${m.id}">+ Autônomo</button>

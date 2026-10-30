@@ -42,8 +42,14 @@ Ficam em `src/calc.js` (funções puras, testadas em `test/calc.test.js`) e
 **não têm nenhum percentual no código**: tudo vem das tabelas de
 Cadastros > Parâmetros (`src/params.js`). Os valores iniciais vêm marcados
 "Valor inicial - validar com o fiscal (IN RFB 2.021/2021)" e o Dashboard
-avisa enquanto houver algum sem conferir. VAU e Selic começam vazias: importe
-o CSV publicado (VAU: `uf;destinação;AAAA-MM;valor` · Selic: `AAAA-MM;percentual`).
+avisa enquanto houver algum sem conferir. VAU e Selic começam vazias:
+- **Selic**: vem sozinha da API pública do Banco Central (série 4390, Selic
+  acumulada no mês) - ao subir e uma vez por dia, ou pelo botão
+  "Atualizar pelo Banco Central" (`src/integracoes.js`; desligar com `SELIC_AUTO=0`).
+- **VAU**: não tem API pública (só aparece no SERO, com login). Em
+  Cadastros > Parâmetros > VAU, "Colar tabela do SERO": escolha UF e mês, cole
+  o texto copiado da tela "Consultar Tabela VAU" e o sistema reconhece cada
+  destinação e valor. Também aceita CSV `uf;destinação;AAAA-MM;valor`.
 
 Quadro de cálculo da folha (`src/folha.js`): CPP sobre a remuneração da
 competência; competência vencida (dia 20 do mês seguinte) leva multa de mora

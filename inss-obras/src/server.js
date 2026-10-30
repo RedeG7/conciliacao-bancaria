@@ -9,6 +9,7 @@ const express = require('express');
 const { db, tx, nowIso, paramReader, ensureOffice, setting } = require('./db');
 const sso = require('./sso');
 const calc = require('./calc');
+const integracoes = require('./integracoes');
 const { TABELAS, UFS, VALIDAR } = require('./params');
 const { avisosCertificados, situacaoProcuracao, lembretesDctf } = require('./dctf');
 const { KINDS, porSlug, herdarDePredial, camposPredial, lerPredial, resultadoPredial } = require('./kinds');
@@ -287,6 +288,7 @@ function telaForm(req, res, k, dados, { acao, erro, titulo }) {
       ${campo('Cliente', select('client_id', [['', '- sem cliente -'], ...clientesDo(req.office).map(c => [c.id, c.nome + (c.documento ? ` (${c.documento})` : '')])], dados.client_id))}
     </div>
     ${dados.base_simulation_id ? html`<input type="hidden" name="base_simulation_id" value="${dados.base_simulation_id}"><p class="desc">Dados herdados da simulação de obra predial #${dados.base_simulation_id}.</p>` : ''}
+    <h3>Dados da simulação</h3>
     ${k.campos(dados, P)}
     <div class="acoes"><button class="botao">Calcular e salvar</button><a class="botao sec" href="/simuladores/${k.slug}">Cancelar</a></div>
   </form>`, { descricao: k.descricao, migalha: `Simuladores / ${k.titulo}` }));
@@ -479,7 +481,7 @@ function formCliente(req, c, acao, completo = false) {
       ${campo('Registro (RG)', inp('registro'))}${campo('Contato', inp('contato'))}` : ''}
     ${campo('Observações', html`<textarea name="obs" rows="2">${c.obs || ''}</textarea>`, 'largo')}
     </div>
-    ${completo ? html`<h3>Endereço</h3><div class="grade">${campo('CEP', inp('cep'))}${campo('Rua', inp('rua'))}${campo('Número', inp('numero'))}${campo('Complemento', inp('complemento'))}
+    ${completo ? html`<h3>Endereço</h3><div class="grade g4">${campo('CEP', inp('cep'))}${campo('Rua', inp('rua'))}${campo('Número', inp('numero'))}${campo('Complemento', inp('complemento'))}
       ${campo('Bairro', inp('bairro'))}${campo('Cidade', inp('cidade'))}${campo('UF', select('uf', ['', ...UFS], c.uf))}</div>
     <h3>Procuração eletrônica e certificado do procurador</h3>
     <p class="desc">O cliente outorga procuração eletrônica no e-CAC ao procurador do escritório (permissões do eSocial e da DCTFWeb); o envio usa o certificado A1 do procurador. Sem procuração vigente o envio ao eSocial fica bloqueado.</p>
@@ -658,6 +660,14 @@ app.get('/cadastros/parametros/:tabela', h((req, res, next) => {
         ${campo(`Valor (${t.unidade})`, html`<input name="valor" inputmode="decimal" required>`)}
         ${campo('Fonte / observação', html`<input name="obs" placeholder="Ex.: IN RFB 2.021/2021, art. ...">`)}
       </div><div class="acoes"><button class="botao">Salvar</button></div></form></details>
+    ${req.params.tabela === 'selic' ? html`<form method="post" action="/cadastros/parametros/selic/banco-central" class="card acoes">
+      <button class="botao">↻ Atualizar pelo Banco Central</button><span class="desc">Selic acumulada no mês (série 4390 do Banco Central, a mesma usada pela Receita). Também atualiza sozinha todo dia.</span></form>` : ''}
+    ${req.params.tabela === 'vau' ? html`<details class="card" open><summary class="botao">Colar tabela do SERO</summary>
+      <form method="post" action="/cadastros/parametros/vau/colar"><p class="desc">No e-CAC, abra o SERO > Consultar Tabela VAU, escolha a UF e o mês, selecione a tabela, copie (Ctrl+C) e cole aqui (Ctrl+V). O sistema reconhece cada destinação e o valor.</p>
+        <div class="grade">${campo('UF *', select('uf', ['', ...UFS], req.query.uf || '', 'required'))}
+          ${campo('Mês de referência *', html`<input type="month" name="vigencia" value="${req.query.vigencia || new Date().toISOString().slice(0, 7)}" required>`)}</div>
+        <textarea name="texto" rows="8" placeholder="Residência unifamiliar     R$ 2.345,67&#10;Residência multifamiliar   R$ 2.123,45&#10;..." required></textarea>
+        <div class="acoes"><button class="botao">Importar VAU colada</button></div></form></details>` : ''}
     ${t.importavel ? html`<details class="card"><summary class="botao sec">Importar CSV</summary>
       <form method="post" action="/cadastros/parametros/${req.params.tabela}/importar"><p class="desc">${t.ajuda}. Separador ; ou , - linhas repetidas são atualizadas.</p>
         <input type="file" accept=".csv,.txt" class="ler-arquivo" data-alvo="csv${req.params.tabela}" aria-label="Arquivo CSV">
@@ -723,6 +733,29 @@ function importarCsv(tabela, texto, usuario) {
   });
   return { ok, erros };
 }
+
+app.post('/cadastros/parametros/selic/banco-central', h(async (req, res) => {
+  exigirGlobal(req);
+  try {
+    const r = await integracoes.atualizarSelic({ usuario: req.user.name });
+    flash(res, `Selic atualizada pelo Banco Central: ${r.gravados} mês(es), o último é ${r.ultimo || '-'}.`);
+  } catch (e) {
+    flash(res, `Não foi possível consultar o Banco Central agora (${e.message}). Tente de novo mais tarde ou importe o CSV.`, 'erro');
+  }
+  res.redirect('/cadastros/parametros/selic');
+}));
+app.post('/cadastros/parametros/vau/colar', h((req, res) => {
+  exigirGlobal(req);
+  const uf = UFS.includes(req.body.uf) ? req.body.uf : '';
+  const vigencia = /^\d{4}-\d{2}$/.test(req.body.vigencia || '') ? req.body.vigencia : '';
+  const volta = `/cadastros/parametros/vau?uf=${uf}&vigencia=${vigencia}`;
+  if (!uf || !vigencia) { flash(res, 'Escolha a UF e o mês de referência.', 'erro'); return res.redirect(volta); }
+  const itens = integracoes.importarVauColada({ uf, vigencia, texto: req.body.texto }, req.user.name);
+  if (!itens.length) { flash(res, 'Nenhuma destinação com valor foi reconhecida no texto colado. Confira se copiou a tabela inteira.', 'erro'); return res.redirect(volta); }
+  const faltam = TABELAS.vau.opcoesChave.filter(d => !itens.some(i => i.destinacao === d));
+  flash(res, `VAU ${uf} ${vigencia}: ${itens.map(i => `${i.destinacao} ${brl(i.valor)}`).join('; ')}.${faltam.length ? ` Não encontradas: ${faltam.join(', ')}.` : ''}`, faltam.length ? 'alerta' : 'ok');
+  res.redirect(volta);
+}));
 
 app.post('/cadastros/parametros/:tabela/importar', h((req, res, next) => {
   const t = TABELAS[req.params.tabela];
