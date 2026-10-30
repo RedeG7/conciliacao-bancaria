@@ -131,6 +131,20 @@ test('fluxo do módulo DCTF Web', async () => {
   assert.match(pg, /João Pedreiro/);
   assert.match(await get('/dctf-web/1/meses/2/recibo', ck), /Recibo de pagamento a autônomo/);
 
+  // lembretes: competência do mês anterior ainda não enviada aparece no Dashboard
+  const { lembretesDctf } = require('../src/dctf');
+  assert.deepStrictEqual(lembretesDctf('escritorio-dev', new Date('2026-11-10T12:00:00Z')), []);   // lembrete desligado
+  await post('/dctf-web/1/lembretes', ck, {});
+  assert.match(lembretesDctf('escritorio-dev', new Date('2026-11-10T12:00:00Z'))[0], /competência 10\/2026 vence em 20\/11\/2026/);
+  assert.match(lembretesDctf('escritorio-dev', new Date('2026-11-25T12:00:00Z'))[0], /VENCIDA em 20\/11\/2026/);
+  assert.deepStrictEqual(lembretesDctf('escritorio-dev', new Date('2026-08-10T12:00:00Z')), []);   // 07/2026 já registrada como enviada
+
+  // faixa de aviso (só super admin) e ambiente do eSocial do escritório
+  await post('/cadastros/aviso-topo', ck, { aviso: 'eSocial instável hoje' });
+  assert.match(await get('/dctf-web', ck), /eSocial instável hoje/);
+  await post('/cadastros/escritorio', ck, { display_name: 'Escritório Dev', esocial_ambiente: 'producao' });
+  assert.match(await get('/dctf-web/editar/1', ck), /eSocial: Produção</);
+
   // reabrir volta o guia para em andamento
   await post('/dctf-web/1/meses/2/reabrir', ck, {});
   assert.strictEqual(await progresso(ck, 1), '6');
@@ -141,4 +155,5 @@ test('fluxo do módulo DCTF Web', async () => {
   assert.strictEqual((await fetch(base + '/dctf-web/editar/1', { headers: { cookie: ck2 } })).status, 404);
   assert.strictEqual((await fetch(base + '/guia-de-envio/1', { headers: { cookie: ck2 } })).status, 404);
   assert.doesNotMatch(await get('/acompanhamento-de-obras/autonomos', ck2), /João/);
+  assert.strictEqual((await post('/cadastros/aviso-topo', ck2, { aviso: 'x' })).status, 403);
 });

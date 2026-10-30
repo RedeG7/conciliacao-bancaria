@@ -2,6 +2,10 @@
 // HTML renderizado no servidor: layout (menu lateral + barra superior) e
 // pequenos componentes reaproveitados pelas telas.
 
+// faixa de aviso no topo de todas as telas (ex.: instabilidade do eSocial),
+// definida pelo super administrador em Cadastros > Parâmetros
+const faixa = () => require('./db').setting('aviso_topo');
+
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // html`...` escapa as interpolações; use raw() para HTML já montado
 class Raw { constructor(s) { this.s = s; } toString() { return this.s; } }
@@ -73,6 +77,7 @@ function layout(req, titulo, corpo, { descricao = '', migalha = '' } = {}) {
         <a class="botao sec pequeno" href="/sair">Sair</a>
       </div>
     </header>
+    ${faixa() ? html`<div class="faixa-status" role="status">⚠️ ${faixa()}</div>` : ''}
     <main>
       <div class="cabecalho"><div><small class="migalha">${migalha}</small><h1>${titulo}</h1>${descricao ? html`<p class="desc">${descricao}</p>` : ''}</div></div>
       ${req.flash ? html`<div class="aviso ${req.flash.tipo || 'ok'}">${req.flash.msg}</div>` : ''}
