@@ -2,6 +2,11 @@
 // HTML renderizado no servidor: layout (menu lateral + barra superior) e
 // pequenos componentes reaproveitados pelas telas.
 
+// versão (hash do conteúdo) no endereço do CSS/JS: a cada deploy o navegador
+// baixa os arquivos novos em vez de usar os do cache (que vale 1 hora)
+const VERSAO = Object.fromEntries(['app.css', 'app.js'].map(f => [f, require('crypto').createHash('md5')
+  .update(require('fs').readFileSync(require('path').join(__dirname, '..', 'public', f))).digest('hex').slice(0, 10)]));
+
 // faixa de aviso no topo de todas as telas (ex.: instabilidade do eSocial),
 // definida pelo super administrador em Cadastros > Parâmetros
 const faixa = () => require('./db').setting('aviso_topo');
@@ -59,14 +64,14 @@ function layout(req, titulo, corpo, { descricao = '', migalha = '' } = {}) {
   return page(titulo, html`
 <div class="app">
   <aside class="lateral" id="lateral">
-    <div class="marca"><span class="logo">🏗️</span><div><b>Simulador INSS Obras</b><small>RedeG7</small></div>
+    <div class="marca"><span class="logo" id="logoMenu" title="Expandir menu">🏗️</span><div><b>Simulador INSS Obras</b><small>RedeG7</small></div>
       <button class="recolher" id="recolherMenu" aria-label="Recolher menu" title="Recolher / expandir menu">«</button></div>
     <input class="busca-menu" id="buscaMenu" placeholder="Buscar tela..." aria-label="Buscar tela">
     <nav>${menu}</nav>
   </aside>
   <div class="principal">
     <header class="topo">
-      <button class="icone" id="abrirMenu" aria-label="Abrir menu">☰</button>
+      <button class="icone" id="abrirMenu" aria-label="Menu" title="Recolher / expandir menu">☰</button>
       <div class="escritorio">${u.is_global && offices.length ? html`
         <form method="post" action="/trocar-escritorio"><select name="office" onchange="this.form.submit()" aria-label="Escritório">
           ${offices.map(o => html`<option value="${o.id}" ${o.id === req.office ? 'selected' : ''}>${o.name}</option>`)}
@@ -90,9 +95,9 @@ function layout(req, titulo, corpo, { descricao = '', migalha = '' } = {}) {
 
 function page(titulo, corpo, extraHead = '') {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(titulo)} · Simulador INSS Obras</title><link rel="stylesheet" href="/static/app.css">${extraHead}
+<title>${esc(titulo)} · Simulador INSS Obras</title><link rel="stylesheet" href="/static/app.css?v=${VERSAO['app.css']}">${extraHead}
 <script>try{var t=localStorage.getItem('tema');if(t)document.documentElement.dataset.theme=t;var m=localStorage.getItem('menu');if(m)document.documentElement.dataset.menu=m}catch(e){}</script></head>
-<body>${corpo}<script src="/static/app.js"></script></body></html>`;
+<body>${corpo}<script src="/static/app.js?v=${VERSAO['app.js']}"></script></body></html>`;
 }
 
 // 3 cartões: cadastrados hoje / no mês / no ano, com variação vs. período anterior

@@ -14,7 +14,6 @@
     salvar('tema', document.documentElement.dataset.theme);
   });
   $('#telaCheia')?.addEventListener('click', () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.()));
-  $('#abrirMenu')?.addEventListener('click', () => $('#lateral').classList.toggle('aberto'));
   // menu lateral: recolher (fica só com os ícones) e grupos fechados; lembra as escolhas
   const recolhido = () => document.documentElement.dataset.menu === 'recolhido';
   let fechados = [];
@@ -29,10 +28,18 @@
     fechados = fechados.filter(g => g !== d.dataset.grupo).concat(d.open ? [] : [d.dataset.grupo]);
     salvar('grupos-fechados', JSON.stringify(fechados));
   }));
-  $('#recolherMenu')?.addEventListener('click', () => {
+  const alternarMenu = () => {
     if (recolhido()) delete document.documentElement.dataset.menu; else document.documentElement.dataset.menu = 'recolhido';
     salvar('menu', recolhido() ? 'recolhido' : '');
     aplicarGrupos();
+  };
+  $('#recolherMenu')?.addEventListener('click', alternarMenu);
+  // com o menu recolhido, o logo também expande
+  $('#logoMenu')?.addEventListener('click', () => { if (recolhido()) alternarMenu(); });
+  // ☰ da barra de cima: no computador recolhe/expande; no celular abre o menu por cima
+  $('#abrirMenu')?.addEventListener('click', () => {
+    if (matchMedia('(min-width: 861px)').matches) alternarMenu();
+    else $('#lateral').classList.toggle('aberto');
   });
 
   $('#buscaMenu')?.addEventListener('input', e => {
