@@ -58,6 +58,17 @@ test('fluxo completo', async () => {
   // formulário público do escritório gera lead + resultado compartilhável
   const dash = await (await get('/dash', ck)).text();
   const link = dash.match(/\/simulador\/obras-prediais\/([\w-]+)/)[0];
+  // erro no formulário público: volta preenchido, sem acumular ?erro= no endereço
+  r = await post(link, '', { nome: 'Visitante', email: 'v@ex.com', telefone: '62988887777', uf: 'SP', tipo_responsavel: 'PF', premoldado: '0',
+    dest_destinacao: 'Comercial', dest_tipo_obra: 'Alvenaria', dest_categoria: 'Obra nova', dest_concreto: '0', dest_area: '80' });
+  assert.strictEqual(r.status, 422);
+  pg = await r.text();
+  assert.match(pg, /VAU não cadastrado para SP \/ Comercial/);
+  assert.doesNotMatch(pg, /\?erro=|Cadastros/);
+  assert.match(pg, /fale com o escritório/);
+  assert.match(pg, /name="nome" value="Visitante"/);
+  assert.match(pg, /name="dest_area" value="80"/);
+  assert.match(pg, /<option value="Comercial" selected>/);
   r = await post(link, '', { nome: 'Visitante', email: 'v@ex.com', telefone: '62988887777', uf: 'GO', tipo_responsavel: 'PJ', premoldado: '0',
     dest_destinacao: 'Residência unifamiliar', dest_tipo_obra: 'Alvenaria', dest_categoria: 'Obra nova', dest_concreto: '0', dest_area: '100' });
   assert.match(r.headers.get('location'), /^\/calculator\/show\//);
