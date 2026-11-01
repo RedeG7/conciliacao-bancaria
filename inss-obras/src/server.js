@@ -10,6 +10,7 @@ const { db, tx, nowIso, paramReader, linhasEfetivas, gravarParam, ensureOffice, 
 const sso = require('./sso');
 const calc = require('./calc');
 const integracoes = require('./integracoes');
+const vau = require('./vau');
 const { TABELAS, UFS, VALIDAR } = require('./params');
 const { avisosCertificados, situacaoProcuracao, lembretesDctf } = require('./dctf');
 const { KINDS, porSlug, herdarDePredial, camposPredial, lerPredial, resultadoPredial } = require('./kinds');
@@ -658,6 +659,9 @@ app.get('/cadastros/parametros/:tabela', h((req, res, next) => {
   // padrão: só as linhas da plataforma; escritório: o que vale para ele (padrão + ajustes)
   const rows = (esc ? linhasEfetivas(esc) : db.prepare("SELECT *, 'padrao' AS origem FROM params WHERE office = ''").all())
     .filter(r => r.tabela === tab).sort((a, b) => `${a.uf}|${a.chave}|${b.vigencia}`.localeCompare(`${b.uf}|${b.chave}|${a.vigencia}`));
+  // VAU: milhares de linhas (UF × competência × destinação) - mostra só a UF e o ano filtrados
+  const fUf = req.query.fuf ?? 'GO', fAno = req.query.fano ?? String(new Date().getFullYear());
+  if (tab === 'vau') rows.splice(0, rows.length, ...rows.filter(r => (!fUf || r.uf === fUf) && (!fAno || r.vigencia.startsWith(`${fAno}-`))));
   const temPadrao = r => !!db.prepare("SELECT 1 FROM params WHERE office = '' AND tabela = ? AND uf = ? AND chave = ? AND vigencia = ?").get(tab, r.uf, r.chave, r.vigencia);
   const usa = c => t.colunas.includes(c);
   const chaveInput = (v = '') => (t.opcoesChave ? select('chave', [...(t.aceitaCuringa ? ['*'] : []), ...t.opcoesChave], v) : html`<input name="chave" value="${v}" required>`);
@@ -692,7 +696,13 @@ app.get('/cadastros/parametros/:tabela', h((req, res, next) => {
       </div><div class="acoes"><button class="botao">Salvar</button></div></form></details>
     ${tab === 'selic' ? html`<form method="post" action="/cadastros/parametros/selic/banco-central" class="card acoes">
       <button class="botao">↻ Atualizar pelo Banco Central</button><span class="desc">Selic acumulada no mês (série 4390 do Banco Central, a mesma usada pela Receita), no padrão da plataforma. Também atualiza sozinha todo dia.</span></form>` : ''}
-    ${tab === 'vau' ? html`<details class="card" open><summary class="botao">Colar tabela do SERO</summary>
+    ${tab === 'vau' ? html`<details class="card" open><summary class="botao">Importar arquivo do e-CAC (JSON/CSV)</summary>
+      <form method="post" action="/cadastros/parametros/vau/arquivo">${hidEsc}<p class="desc">Arquivo extraído da consulta "Tabela VAU" do e-CAC (todas as UFs e competências, 7 padrões por linha).
+        Competências já existentes são atualizadas e as novas incluídas. Se alguma linha estiver inválida, nada é gravado.</p>
+        <input type="file" accept=".json,.csv" class="ler-arquivo" data-alvo="vauArquivo" data-nome="vauNome" aria-label="Arquivo da Tabela VAU">
+        <textarea name="conteudo" id="vauArquivo" hidden></textarea><input type="hidden" name="nome" id="vauNome">
+        <div class="acoes"><button class="botao">Importar arquivo</button></div></form></details>
+    <details class="card"><summary class="botao sec">Colar tabela do SERO</summary>
       <form method="post" action="/cadastros/parametros/vau/colar">${hidEsc}<p class="desc">No e-CAC, abra o SERO > Consultar Tabela VAU, escolha a UF e o mês, selecione a tabela, copie (Ctrl+C) e cole aqui (Ctrl+V). O sistema reconhece cada destinação e o valor.</p>
         <div class="grade">${campo('UF *', select('uf', ['', ...UFS], req.query.uf || '', 'required'))}
           ${campo('Mês de referência *', html`<input type="month" name="vigencia" value="${req.query.vigencia || new Date().toISOString().slice(0, 7)}" required>`)}</div>
@@ -703,7 +713,52 @@ app.get('/cadastros/parametros/:tabela', h((req, res, next) => {
         <input type="file" accept=".csv,.txt" class="ler-arquivo" data-alvo="csv${tab}" aria-label="Arquivo CSV">
         <textarea name="csv" id="csv${tab}" rows="8" placeholder="${tab === 'vau' ? 'GO;Residência unifamiliar;2026-10;1234,56' : '2026-09;0,95'}"></textarea>
         <div class="acoes"><button class="botao">Importar</button></div></form></details>` : ''}` : html`<div class="aviso">Somente administradores alteram os parâmetros.</div>`}
+    ${tab === 'vau' ? painelVau(req, esc, fUf, fAno) : ''}
     ${tabela(pode ? [...cab, 'Ações'] : cab, linhas)}`, { descricao: t.ajuda, migalha: 'Cadastros / Parâmetros' }));
+}));
+
+// VAU: filtro, resumo "largo" (como no e-CAC), última competência e importações
+function painelVau(req, esc, fUf, fAno) {
+  const anos = [...new Set(linhasEfetivas(esc || req.office).filter(r => r.tabela === 'vau').map(r => r.vigencia.slice(0, 4)))].sort().reverse();
+  const larga = vau.consultaLarga(esc || req.office, { uf: fUf, ano: fAno });
+  const dest = Object.values(vau.PADROES);
+  const hist = vau.historico(esc);
+  const qs = `fuf=${fUf}&fano=${fAno}${esc ? '&escopo=escritorio' : ''}`;
+  return html`<form method="get" class="card"><div class="grade">${esc ? html`<input type="hidden" name="escopo" value="escritorio">` : ''}
+      ${campo('UF', select('fuf', [['', 'Todas'], ...UFS], fUf))}
+      ${campo('Ano', select('fano', [['', 'Todos'], ...(anos.length ? anos : [String(new Date().getFullYear())])], fAno))}</div>
+      <div class="acoes"><button class="botao sec">Filtrar</button><a class="botao sec" href="/cadastros/parametros/vau/csv?${qs}">Baixar CSV</a>
+      <span class="desc">Última competência no banco: <b>${vau.ultimaCompetencia(esc || req.office) || '-'}</b> · valores em R$/m²</span></div></form>
+    ${larga.length ? html`<div class="card"><h3>Tabela VAU ${fUf || 'todas as UFs'} ${fAno || ''}</h3><div class="rolagem"><table class="lista cartoes"><thead><tr><th>Competência</th><th>UF</th>${dest.map(d => html`<th>${d}</th>`)}</tr></thead>
+      <tbody>${larga.map(l => html`<tr><td data-label="Competência">${l.competencia}</td><td data-label="UF">${l.uf}</td>${dest.map(d => html`<td data-label="${d}">${l[d] === undefined ? '-' : brl(l[d])}</td>`)}</tr>`)}</tbody></table></div></div>` : ''}
+    ${hist.length ? html`<details class="card"><summary class="botao sec">Importações recentes</summary>
+      ${tabela(['Data', 'Origem', 'Arquivo', 'Valores', 'Competências'], hist.map(i => [dataHoraBr(i.executado_em), i.origem, i.arquivo, i.registros, `${i.comp_inicio} a ${i.comp_fim}`]))}</details>` : ''}`;
+}
+
+app.post('/cadastros/parametros/vau/arquivo', h((req, res) => {
+  exigirEditorParam(req);
+  const esc = escopoParam(req);
+  const volta = `/cadastros/parametros/vau${qsEscopo(esc)}`;
+  if (String(req.body.conteudo || '').length > vau.MAX_BYTES) { flash(res, 'Arquivo grande demais.', 'erro'); return res.redirect(volta); }
+  const r = vau.importar({ conteudo: req.body.conteudo, nome: req.body.nome || 'arquivo', origem: 'upload', office: esc, usuario: req.user.name });
+  if (r.erros.length) {
+    flash(res, `Importação cancelada, nada foi gravado. ${r.erros.length} erro(s): ${r.erros.slice(0, 5).join(' | ')}`, 'erro');
+  } else {
+    flash(res, `VAU importada${esc ? ' (só deste escritório)' : ''}: ${r.registros} valores, ${r.competencias} competência(s) de ${r.inicio} a ${r.fim}, ${r.ufs} UF(s).`);
+  }
+  res.redirect(volta);
+}));
+
+// CSV no mesmo formato do arquivo do e-CAC (competencia;uf;padrões...)
+app.get('/cadastros/parametros/vau/csv', h((req, res) => {
+  const esc = escopoParam(req);
+  const larga = vau.consultaLarga(esc || req.office, { uf: req.query.fuf || '', ano: req.query.fano || '' });
+  const padroes = Object.entries(vau.PADROES);
+  const linhas = [['competencia', 'uf', ...padroes.map(p => p[0])].join(';'),
+    ...larga.map(l => [l.competencia, l.uf, ...padroes.map(([, d]) => (l[d] === undefined ? '' : String(l[d].toFixed(2)).replace('.', ',')))].join(';'))];
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="vau_${req.query.fuf || 'todas'}_${req.query.fano || 'todos'}.csv"`);
+  res.send('\uFEFF' + linhas.join('\r\n'));
 }));
 
 app.post('/cadastros/parametros/:tabela/salvar', h((req, res, next) => {

@@ -24,9 +24,9 @@ const VALIDAR = 'Valor inicial - validar com o fiscal (IN RFB 2.021/2021)';
 // colunas: quais campos a tabela usa além de "valor" (uf, chave, vigencia)
 const TABELAS = {
   vau: {
-    titulo: 'VAU por UF × destinação', unidade: 'R$/m²', colunas: ['uf', 'chave', 'vigencia'],
+    titulo: 'Tabela VAU (SERO)', unidade: 'R$/m²', colunas: ['uf', 'chave', 'vigencia'],
     rotuloChave: 'Destinação', opcoesChave: DESTINACOES, importavel: true,
-    ajuda: 'Valor Unitário (R$/m²) publicado mensalmente pela RFB. CSV: uf;destinação;vigência(AAAA-MM);valor',
+    ajuda: 'Valor Atualizado Unitário (R$/m²) por UF e padrão construtivo, publicado mensalmente pela RFB no SERO (a partir de 06/2021). O cálculo usa a VAU vigente: a última publicada até a competência da obra.',
   },
   selic: {
     titulo: 'Taxa Selic mensal', unidade: '% no mês', colunas: ['chave'], rotuloChave: 'Mês (AAAA-MM)', importavel: true,
