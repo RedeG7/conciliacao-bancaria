@@ -49,6 +49,7 @@ const MENU = [
   ['Ferramentas', [['/ferramentas-extras/leads', 'Leads', '🎯']]],
   ['Cadastros', [
     ['/cadastros/escritorio', 'Escritório e link público', '🏢'],
+    ['/cadastros/parametros/vau', 'Tabela VAU', '📐'],
     ['/cadastros/parametros', 'Parâmetros de cálculo', '⚙️'],
   ]],
 ];

@@ -99,7 +99,10 @@
     const f = inp.files[0];
     if (!f) return;
     const r = new FileReader();
-    r.onload = () => { document.getElementById(inp.dataset.alvo).value = r.result; };
+    r.onload = () => {
+      document.getElementById(inp.dataset.alvo).value = r.result;
+      if (inp.dataset.nome) document.getElementById(inp.dataset.nome).value = f.name;
+    };
     r.readAsText(f, 'utf-8');
   }));
 

@@ -55,6 +55,14 @@ avisa enquanto houver algum sem conferir. VAU e Selic começam vazias:
   Cadastros > Parâmetros > VAU, "Colar tabela do SERO": escolha UF e mês, cole
   o texto copiado da tela "Consultar Tabela VAU" e o sistema reconhece cada
   destinação e valor. Também aceita CSV `uf;destinação;AAAA-MM;valor`.
+- **Tabela VAU completa** (menu Cadastros > Tabela VAU): importa o arquivo
+  JSON/CSV extraído da consulta "Tabela VAU" do e-CAC no formato do módulo VAU
+  (`{"registros": [{"competencia", "uf", "casa_popular", ...7 padrões}]}` ou CSV
+  `;` com as mesmas colunas). Upsert por (competência, UF, padrão); se uma linha
+  for inválida nada é gravado; cada importação fica em `vau_importacao`
+  (`src/vau.js`). A tela filtra por UF/ano, mostra a tabela como no e-CAC e
+  baixa CSV no mesmo formato. O cálculo usa a VAU vigente (última publicada até
+  a competência), como o `get_vau_vigente` do módulo.
 
 Quadro de cálculo da folha (`src/folha.js`): CPP sobre a remuneração da
 competência; competência vencida (dia 20 do mês seguinte) leva multa de mora
