@@ -22,6 +22,7 @@ test.before(() => new Promise(r => { server = app.listen(0, () => { base = `http
 test.after(() => { server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
 const login = async (qs = '') => (await fetch(`${base}/dev-login${qs}`, { redirect: 'manual' })).headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
 const post = (url, cookie, body) => fetch(base + url, { method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(body).toString() });
+const desfazHtml = t => t.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 const contar = () => db.prepare("SELECT COUNT(*) AS n FROM params WHERE tabela = 'vau'").get().n;
 
 test('importação: JSON e CSV, tudo ou nada, upsert sem duplicar', () => {
@@ -60,6 +61,11 @@ test('tela: admin importa arquivo só para o escritório dele; filtro e CSV', as
   assert.match(decodeURIComponent(r.headers.getSetCookie().join()), /nada foi gravado/);
   const pg = await (await fetch(`${base}/cadastros/parametros/vau?fuf=GO&fano=2026`, { headers: { cookie: ck } })).text();
   assert.match(pg, /Última competência no banco: <b>2026-12<\/b>/);
+  // 3 abas do módulo e o botão de favorito do e-CAC
+  for (const aba of ['Consultar', 'Importar / atualizar', 'Extrair do e-CAC']) assert.match(pg, new RegExp(`data-aba="[a-z]+"[^>]*>${aba}</button>`));
+  const fav = pg.match(/href="(javascript:[^"]+)" data-favorito/)[1];
+  assert.doesNotThrow(() => new Function(decodeURIComponent(desfazHtml(fav).slice('javascript:'.length))));
+  assert.match(decodeURIComponent(desfazHtml(fav)), /exibirTabelaVAU\.jsf/);
   assert.match(pg, /R\$\s?9\.000,00/);
   const bruto = Buffer.from(await (await fetch(`${base}/cadastros/parametros/vau/csv?fuf=GO&fano=2026`, { headers: { cookie: ck } })).arrayBuffer());
   assert.deepStrictEqual([...bruto.subarray(0, 3)], [0xef, 0xbb, 0xbf]);   // BOM: o Excel abre com acentos

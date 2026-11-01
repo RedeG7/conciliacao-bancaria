@@ -63,6 +63,11 @@ avisa enquanto houver algum sem conferir. VAU e Selic começam vazias:
   (`src/vau.js`). A tela filtra por UF/ano, mostra a tabela como no e-CAC e
   baixa CSV no mesmo formato. O cálculo usa a VAU vigente (última publicada até
   a competência), como o `get_vau_vigente` do módulo.
+  A tela tem 3 abas: **Consultar**, **Importar / atualizar** e **Extrair do
+  e-CAC** - esta última traz o botão de favorito (`src/bookmarklet_vau.js`, do
+  vau_modulo) que, com o usuário logado no e-CAC, consulta todos os anos e UFs
+  do SERO e baixa o JSON para importar. O botão roda só no navegador do
+  usuário; nenhuma credencial passa pelo simulador.
 
 Quadro de cálculo da folha (`src/folha.js`): CPP sobre a remuneração da
 competência; competência vencida (dia 20 do mês seguinte) leva multa de mora

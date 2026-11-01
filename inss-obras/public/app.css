@@ -53,7 +53,8 @@ main { padding: 20px; max-width: 1280px; }
 .card { background: var(--card); border: 1px solid var(--borda); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
 .cards3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
 .cards3 .card { margin: 0; } .card small { color: var(--suave); display: block; }
-.card b { font-size: 1.35rem; display: block; } .card span { font-size: .85rem; color: var(--suave); }
+/* número grande só nos cartões de número (contadores, resultados, informações) */
+.card > b, .cards3 .card b, .info b { font-size: 1.35rem; display: block; } .card span { font-size: .85rem; color: var(--suave); }
 .card.destaque { border-color: var(--verde); box-shadow: inset 4px 0 0 var(--verde); }
 .contador .sobe { color: var(--verde); } .contador .desce { color: var(--erro); }
 .info { display: flex; flex-wrap: wrap; gap: 24px; } .info b { font-size: 1rem; }
@@ -119,6 +120,8 @@ table { border-collapse: collapse; width: 100%; } .lista th, .lista td { text-al
 .abas { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
 .abas a:not(.botao) { padding: 8px 14px; border-radius: 99px; border: 1px solid var(--borda); text-decoration: none; color: var(--texto); }
 .abas a.ativo { background: var(--verde); border-color: var(--verde); color: #fff; } .abas a span { opacity: .75; margin-left: 4px; } .abas .botao { margin-left: auto; }
+.botao.favorito { background: #1351b4; cursor: grab; } .passos-lista li { margin-bottom: 6px; }
+#codigoFavorito { font-family: monospace; font-size: .75rem; }
 .faixa-status { background: var(--alerta-fundo); color: var(--alerta); padding: 8px 20px; font-weight: 600; border-bottom: 1px solid var(--borda); }
 .abas-form { display: flex; gap: 4px; margin: 12px 0; border-bottom: 1px solid var(--borda); overflow-x: auto; scrollbar-width: thin; }
 .abas-form button { white-space: nowrap; flex: 0 0 auto; }
