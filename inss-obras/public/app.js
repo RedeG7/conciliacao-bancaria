@@ -42,6 +42,9 @@
     else $('#lateral').classList.toggle('aberto');
   });
 
+  // botão de favorito (Tabela VAU): clicar aqui não faz nada, é para arrastar
+  $$('[data-favorito]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); alert('Arraste este botão para a barra de favoritos. Clicar aqui não faz nada.'); }));
+
   $('#buscaMenu')?.addEventListener('input', e => {
     const q = e.target.value.trim().toLowerCase();
     $$('.lateral nav a').forEach(a => { a.hidden = q && !a.dataset.busca.includes(q); });

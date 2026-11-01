@@ -686,43 +686,84 @@ app.get('/cadastros/parametros/:tabela', h((req, res, next) => {
   const seletor = req.user.is_global ? html`<div class="abas"><a href="/cadastros/parametros/${tab}" class="${esc ? '' : 'ativo'}">Padrão da plataforma (todos os escritórios)</a>
     <a href="/cadastros/parametros/${tab}?escopo=escritorio" class="${esc ? 'ativo' : ''}">Só este escritório (${req.officeRow.name})</a></div>`
     : pode ? html`<div class="aviso">Seus ajustes valem só para o escritório ${req.officeRow.name}. As linhas "Padrão" seguem o valor da plataforma até você ajustar.</div>` : '';
-  res.send(layout(req, t.titulo, html`${seletor}
-    ${pode ? html`<details class="card"><summary class="botao">+ Novo registro</summary>
+  const novoRegistro = pode ? html`<details class="card"><summary class="botao">+ Novo registro</summary>
       <form method="post" action="/cadastros/parametros/${tab}/salvar">${hidEsc}<div class="grade">
         ${usa('uf') ? campo('UF', ufInput()) : ''}${campo(t.rotuloChave, chaveInput())}
         ${usa('vigencia') ? campo('Vigência', html`<input name="vigencia" type="month" required>`) : ''}
         ${campo(`Valor (${t.unidade})`, html`<input name="valor" inputmode="decimal" required>`)}
         ${campo('Fonte / observação', html`<input name="obs" placeholder="Ex.: IN RFB 2.021/2021, art. ...">`)}
-      </div><div class="acoes"><button class="botao">Salvar</button></div></form></details>
-    ${tab === 'selic' ? html`<form method="post" action="/cadastros/parametros/selic/banco-central" class="card acoes">
-      <button class="botao">↻ Atualizar pelo Banco Central</button><span class="desc">Selic acumulada no mês (série 4390 do Banco Central, a mesma usada pela Receita), no padrão da plataforma. Também atualiza sozinha todo dia.</span></form>` : ''}
-    ${tab === 'vau' ? html`<details class="card" open><summary class="botao">Importar arquivo do e-CAC (JSON/CSV)</summary>
-      <form method="post" action="/cadastros/parametros/vau/arquivo">${hidEsc}<p class="desc">Arquivo extraído da consulta "Tabela VAU" do e-CAC (todas as UFs e competências, 7 padrões por linha).
-        Competências já existentes são atualizadas e as novas incluídas. Se alguma linha estiver inválida, nada é gravado.</p>
-        <input type="file" accept=".json,.csv" class="ler-arquivo" data-alvo="vauArquivo" data-nome="vauNome" aria-label="Arquivo da Tabela VAU">
-        <textarea name="conteudo" id="vauArquivo" hidden></textarea><input type="hidden" name="nome" id="vauNome">
-        <div class="acoes"><button class="botao">Importar arquivo</button></div></form></details>
-    <details class="card"><summary class="botao sec">Colar tabela do SERO</summary>
-      <form method="post" action="/cadastros/parametros/vau/colar">${hidEsc}<p class="desc">No e-CAC, abra o SERO > Consultar Tabela VAU, escolha a UF e o mês, selecione a tabela, copie (Ctrl+C) e cole aqui (Ctrl+V). O sistema reconhece cada destinação e o valor.</p>
-        <div class="grade">${campo('UF *', select('uf', ['', ...UFS], req.query.uf || '', 'required'))}
-          ${campo('Mês de referência *', html`<input type="month" name="vigencia" value="${req.query.vigencia || new Date().toISOString().slice(0, 7)}" required>`)}</div>
-        <textarea name="texto" rows="8" placeholder="Residência unifamiliar     R$ 2.345,67&#10;Residência multifamiliar   R$ 2.123,45&#10;..." required></textarea>
-        <div class="acoes"><button class="botao">Importar VAU colada</button><a class="botao sec" href="https://cav.receita.fazenda.gov.br/ecac/Aplicacao.aspx?id=10031&origem=pesquisa" target="_blank" rel="noopener">Abrir SERO no e-CAC</a></div></form></details>` : ''}
-    ${t.importavel ? html`<details class="card"><summary class="botao sec">Importar CSV</summary>
-      <form method="post" action="/cadastros/parametros/${tab}/importar">${hidEsc}<p class="desc">${t.ajuda}. Separador ; ou , - linhas repetidas são atualizadas.</p>
+      </div><div class="acoes"><button class="botao">Salvar</button></div></form></details>` : '';
+  const importarCsv = pode && t.importavel ? html`<details class="card"><summary class="botao sec">Importar CSV (${tab === 'vau' ? 'uma linha por destinação' : 'mês;percentual'})</summary>
+      <form method="post" action="/cadastros/parametros/${tab}/importar">${hidEsc}<p class="desc">${tab === 'vau' ? 'CSV uf;destinação;vigência(AAAA-MM);valor' : t.ajuda}. Separador ; ou , - linhas repetidas são atualizadas.</p>
         <input type="file" accept=".csv,.txt" class="ler-arquivo" data-alvo="csv${tab}" aria-label="Arquivo CSV">
         <textarea name="csv" id="csv${tab}" rows="8" placeholder="${tab === 'vau' ? 'GO;Residência unifamiliar;2026-10;1234,56' : '2026-09;0,95'}"></textarea>
-        <div class="acoes"><button class="botao">Importar</button></div></form></details>` : ''}` : html`<div class="aviso">Somente administradores alteram os parâmetros.</div>`}
-    ${tab === 'vau' ? painelVau(req, esc, fUf, fAno) : ''}
-    ${tabela(pode ? [...cab, 'Ações'] : cab, linhas)}`, { descricao: t.ajuda, migalha: 'Cadastros / Parâmetros' }));
+        <div class="acoes"><button class="botao">Importar</button></div></form></details>` : '';
+  const somenteAdmin = pode ? '' : html`<div class="aviso">Somente administradores alteram os parâmetros.</div>`;
+  const lista = tabela(pode ? [...cab, 'Ações'] : cab, linhas);
+
+  if (tab === 'vau') {
+    // Tabela VAU em 3 abas (vau_modulo): Consultar · Importar / atualizar · Extrair do e-CAC
+    return res.send(layout(req, t.titulo, html`${seletor}
+      <nav class="abas-form"><button type="button" data-aba="consultar" class="ativo">Consultar</button>
+        <button type="button" data-aba="importar">Importar / atualizar</button><button type="button" data-aba="ecac">Extrair do e-CAC</button></nav>
+      <section data-painel="consultar">${painelVau(req, esc, fUf, fAno)}
+        <details class="card"><summary class="botao sec">Valores de ${fUf || 'todas as UFs'} ${fAno} para conferir${pode ? ' ou ajustar' : ''}</summary>${lista}</details></section>
+      <section data-painel="importar" hidden>${somenteAdmin}${pode ? html`<details class="card" open><summary class="botao">Importar arquivo do e-CAC (JSON/CSV)</summary>
+        <form method="post" action="/cadastros/parametros/vau/arquivo">${hidEsc}<p class="desc">Envie o JSON baixado pelo botão da aba "Extrair do e-CAC" (ou o CSV no mesmo formato).
+          Competências já existentes são atualizadas e as novas incluídas. Se alguma linha estiver inválida, nada é gravado.</p>
+          <input type="file" accept=".json,.csv" class="ler-arquivo" data-alvo="vauArquivo" data-nome="vauNome" aria-label="Arquivo da Tabela VAU">
+          <textarea name="conteudo" id="vauArquivo" hidden></textarea><input type="hidden" name="nome" id="vauNome">
+          <div class="acoes"><button class="botao">Importar arquivo</button></div></form></details>
+      <details class="card"><summary class="botao sec">Colar tabela do SERO (uma UF e mês)</summary>
+        <form method="post" action="/cadastros/parametros/vau/colar">${hidEsc}<p class="desc">No e-CAC, abra o SERO > Consultar Tabela VAU, escolha a UF e o mês, selecione a tabela, copie (Ctrl+C) e cole aqui (Ctrl+V). O sistema reconhece cada destinação e o valor.</p>
+          <div class="grade">${campo('UF *', select('uf', ['', ...UFS], req.query.uf || '', 'required'))}
+            ${campo('Mês de referência *', html`<input type="month" name="vigencia" value="${req.query.vigencia || new Date().toISOString().slice(0, 7)}" required>`)}</div>
+          <textarea name="texto" rows="8" placeholder="Residência unifamiliar     R$ 2.345,67&#10;Residência multifamiliar   R$ 2.123,45&#10;..." required></textarea>
+          <div class="acoes"><button class="botao">Importar VAU colada</button><a class="botao sec" href="https://cav.receita.fazenda.gov.br/ecac/Aplicacao.aspx?id=10031&origem=pesquisa" target="_blank" rel="noopener">Abrir SERO no e-CAC</a></div></form></details>
+      ${importarCsv}${novoRegistro}` : ''}${historicoVau(esc)}</section>
+      <section data-painel="ecac" hidden>${abaEcacVau()}</section>`, { descricao: t.ajuda, migalha: 'Cadastros / Parâmetros' }));
+  }
+
+  res.send(layout(req, t.titulo, html`${seletor}${somenteAdmin}${novoRegistro}
+    ${tab === 'selic' && pode ? html`<form method="post" action="/cadastros/parametros/selic/banco-central" class="card acoes">
+      <button class="botao">↻ Atualizar pelo Banco Central</button><span class="desc">Selic acumulada no mês (série 4390 do Banco Central, a mesma usada pela Receita), no padrão da plataforma. Também atualiza sozinha todo dia.</span></form>` : ''}
+    ${importarCsv}
+    ${lista}`, { descricao: t.ajuda, migalha: 'Cadastros / Parâmetros' }));
 }));
+
+// botão de favorito que extrai a Tabela VAU no e-CAC (src/bookmarklet_vau.js, do vau_modulo):
+// roda só no navegador de quem está logado no e-CAC e baixa o JSON para importar
+const BOOKMARKLET_VAU = 'javascript:' + encodeURIComponent(require('fs').readFileSync(require('path').join(__dirname, 'bookmarklet_vau.js'), 'utf8'));
+function abaEcacVau() {
+  return html`<div class="card texto"><p>A Receita não oferece API para a Tabela VAU: os valores só aparecem no e-CAC, com login.
+      Este botão de favorito faz a consulta de <b>todos os anos e UFs</b> direto na sua sessão do e-CAC e baixa um arquivo pronto para importar aqui.</p>
+    <h3>1. Instale o botão (uma vez só)</h3>
+    <p>Mostre a barra de favoritos (<b>Ctrl+Shift+B</b>) e <b>arraste</b> o botão abaixo para ela:</p>
+    <p><a class="botao favorito" href="${BOOKMARKLET_VAU}" data-favorito title="Arraste para a barra de favoritos">📥 Extrair VAU (inssobras)</a></p>
+    <details><summary class="link">Não consegue arrastar? Crie o favorito manualmente</summary>
+      <p class="desc">Clique com o botão direito na barra de favoritos → <b>Adicionar página</b>. Nome: <code>Extrair VAU (inssobras)</code>. No campo <b>URL</b>, cole o código abaixo:</p>
+      <div class="copiar"><textarea id="codigoFavorito" rows="4" readonly>${BOOKMARKLET_VAU}</textarea><button type="button" class="botao sec" data-copiar="codigoFavorito">Copiar</button></div></details>
+    <h3>2. Use todo mês</h3>
+    <ol class="passos-lista">
+      <li>Entre no <b>e-CAC</b> com o gov.br ou certificado (perfil com acesso ao SERO).</li>
+      <li>Clique no favorito <b>Extrair VAU (inssobras)</b>. Na primeira vez ele abre a tela <i>Consultar Tabela VAU</i>. Quando ela carregar, <b>clique de novo</b>.</li>
+      <li>Aguarde cerca de 1 minuto. Um quadro no canto da tela mostra o progresso, e no fim baixa <code>tabela_vau_sero_AAAA-MM_a_AAAA-MM.json</code>.</li>
+      <li>Volte aqui, abra a aba <b>Importar / atualizar</b> e envie o arquivo. Os meses que já existem são só atualizados.</li>
+    </ol>
+    <div class="aviso">O botão roda só no seu navegador, com a sua sessão do e-CAC. Nenhuma senha ou certificado passa pelo inssobras.</div></div>`;
+}
+
+function historicoVau(esc) {
+  const hist = vau.historico(esc);
+  return hist.length ? html`<div class="card"><h3>Importações recentes</h3>
+    ${tabela(['Data', 'Origem', 'Arquivo', 'Valores', 'Competências'], hist.map(i => [dataHoraBr(i.executado_em), i.origem, i.arquivo, i.registros, `${i.comp_inicio} a ${i.comp_fim}`]))}</div>` : '';
+}
 
 // VAU: filtro, resumo "largo" (como no e-CAC), última competência e importações
 function painelVau(req, esc, fUf, fAno) {
   const anos = [...new Set(linhasEfetivas(esc || req.office).filter(r => r.tabela === 'vau').map(r => r.vigencia.slice(0, 4)))].sort().reverse();
   const larga = vau.consultaLarga(esc || req.office, { uf: fUf, ano: fAno });
   const dest = Object.values(vau.PADROES);
-  const hist = vau.historico(esc);
   const qs = `fuf=${fUf}&fano=${fAno}${esc ? '&escopo=escritorio' : ''}`;
   return html`<form method="get" class="card"><div class="grade">${esc ? html`<input type="hidden" name="escopo" value="escritorio">` : ''}
       ${campo('UF', select('fuf', [['', 'Todas'], ...UFS], fUf))}
@@ -731,8 +772,7 @@ function painelVau(req, esc, fUf, fAno) {
       <span class="desc">Última competência no banco: <b>${vau.ultimaCompetencia(esc || req.office) || '-'}</b> · valores em R$/m²</span></div></form>
     ${larga.length ? html`<div class="card"><h3>Tabela VAU ${fUf || 'todas as UFs'} ${fAno || ''}</h3><div class="rolagem"><table class="lista cartoes"><thead><tr><th>Competência</th><th>UF</th>${dest.map(d => html`<th>${d}</th>`)}</tr></thead>
       <tbody>${larga.map(l => html`<tr><td data-label="Competência">${l.competencia}</td><td data-label="UF">${l.uf}</td>${dest.map(d => html`<td data-label="${d}">${l[d] === undefined ? '-' : brl(l[d])}</td>`)}</tr>`)}</tbody></table></div></div>` : ''}
-    ${hist.length ? html`<details class="card"><summary class="botao sec">Importações recentes</summary>
-      ${tabela(['Data', 'Origem', 'Arquivo', 'Valores', 'Competências'], hist.map(i => [dataHoraBr(i.executado_em), i.origem, i.arquivo, i.registros, `${i.comp_inicio} a ${i.comp_fim}`]))}</details>` : ''}`;
+`;
 }
 
 app.post('/cadastros/parametros/vau/arquivo', h((req, res) => {
