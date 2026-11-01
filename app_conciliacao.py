@@ -2014,7 +2014,7 @@ _APPS_HOME = [
         "icone": "🏗️",
         "titulo": "Simulador INSS Obras",
         "descricao": "Simulação de INSS de obras, link público de captação, propostas. Abre em outra aba, já logado.",
-        "departamento": "Fiscal",
+        "departamento": "RDO",
         "tela": None,
         # app separado (pasta inss-obras/, servico "inssobras" do
         # docker-compose), no subdominio DOMINIO_INSSOBRAS - entra ja logado
@@ -2054,6 +2054,7 @@ _DEPARTAMENTOS = {
     "Pessoal": {"icone": "👥", "cor": "#f97316"},
     # "chip": rotulo curto no card (o nome inteiro vai no filtro de departamentos)
     "Marketing & Comercial": {"icone": "📣", "cor": "#ec4899", "chip": "Comercial"},
+    "RDO": {"icone": "🏗️", "cor": "#f59e0b"},
 }
 _FILTRO_TODOS_DEPTOS = "Todos os departamentos"
 
