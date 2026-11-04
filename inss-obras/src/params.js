@@ -47,6 +47,15 @@ const TABELAS = {
     ajuda: 'Faixas pela área total da obra: a RMT da pessoa física é multiplicada pelo percentual da primeira faixa que comporta a área.',
     seed: [['100', 20], ['200', 40], ['300', 55], ['400', 70], ['999999999', 90]],
   },
+  reducao_equivalencia: {
+    titulo: 'Fator de redução de equivalência', unidade: '% do COD', colunas: ['chave'], rotuloChave: 'Destinação | área até (m²)',
+    ajuda: 'Multiplica o custo (COD) da destinação conforme a área dela na obra: vale a primeira faixa cuja área-limite comporta a área. Formato da chave: "Destinação | área até (m²)" (999999999 = sem limite). Destinação sem linha aqui fica sem redução (100%).',
+    obsSeed: 'Tabela informada pelo escritório',
+    seed: [['Residência unifamiliar | 1000', 89], ['Residência unifamiliar | 999999999', 85],
+      ['Comercial | 3000', 86], ['Comercial | 999999999', 83],
+      ['Casa popular | 999999999', 98],
+      ['Edifício de garagens | 3000', 86], ['Edifício de garagens | 999999999', 83]],
+  },
   area_complementar: {
     titulo: '% de equivalência das áreas complementares', unidade: '% da área', colunas: ['chave'], rotuloChave: 'Área | coberta/descoberta',
     opcoesChave: AREAS_COMPLEMENTARES.flatMap(a => [`${a} | coberta`, `${a} | descoberta`]),

@@ -69,8 +69,8 @@ function resultadoPredial(r) {
     <div class="card"><small>Custo da obra (COD)</small><b>${brl(r.cod_total)}</b><span>${n2(r.area_total)} m² · ${r.uf} · ref. ${r.referencia}</span></div>
   </div>
   <div class="card"><h3>Memória de cálculo</h3><div class="rolagem"><table class="lista">
-    <thead><tr><th>Item</th><th>Tipo de obra</th><th>Área equivalente</th><th>VAU (vigência)</th><th>Red. concreto</th><th>COD</th><th>% M.O.</th><th>RMT</th></tr></thead>
-    <tbody>${r.linhas.map(l => html`<tr><td>${l.rotulo}</td><td>${l.tipo_obra}</td><td>${n2(l.area)} m²</td><td>${brl(l.vau)} (${l.vigencia || '-'})</td><td>${l.red_concreto ? n2(l.red_concreto) + '%' : '-'}</td><td>${brl(l.cod)}</td><td>${n2(l.pct_mo)}%</td><td>${brl(l.rmt)}</td></tr>`)}</tbody>
+    <thead><tr><th>Item</th><th>Tipo de obra</th><th>Área equivalente</th><th>VAU (vigência)</th><th>Fator equiv.</th><th>Red. concreto</th><th>COD</th><th>% M.O.</th><th>RMT</th></tr></thead>
+    <tbody>${r.linhas.map(l => html`<tr><td>${l.rotulo}</td><td>${l.tipo_obra}</td><td>${n2(l.area)} m²</td><td>${brl(l.vau)} (${l.vigencia || '-'})</td><td>${l.fator_eq === undefined ? '-' : n2(l.fator_eq) + '%'}</td><td>${l.red_concreto ? n2(l.red_concreto) + '%' : '-'}</td><td>${brl(l.cod)}</td><td>${n2(l.pct_mo)}%</td><td>${brl(l.rmt)}</td></tr>`)}</tbody>
   </table></div>
   <table class="resumo">${r.etapas.map(e => html`<tr><td>${e.rotulo}</td><td>${brl(e.valor)}</td></tr>`)}
     ${r.aliquotas.map(a => html`<tr class="leve"><td>${a.nome} (${n2(a.valor)}%)</td><td>${brl(r.rmt * a.valor / 100)}</td></tr>`)}

@@ -41,11 +41,23 @@ function competencia(data) {
   return /^\d{4}-\d{2}$/.test(s) ? s : null;
 }
 
+// fator de redução de equivalência: primeira faixa ("Destinação | área até")
+// que comporta a área da destinação; sem linha para a destinação = 100%
+function fatorEquivalencia(P, destinacao, area) {
+  const faixas = P.list('reducao_equivalencia').map(l => {
+    const [dest, ate] = String(l.chave).split('|').map(x => x.trim());
+    return { dest, ate: num(ate) || Infinity, valor: l.valor };
+  }).filter(f => f.dest === destinacao).sort((a, b) => a.ate - b.ate);
+  if (!faixas.length) return 100;
+  return (faixas.find(f => area <= f.ate) || faixas[faixas.length - 1]).valor;
+}
+
 // ---------------------------------------------------------------------------
 // Obra predial - aferição indireta
 // ---------------------------------------------------------------------------
-// COD da destinação = área × % categoria × VAU (UF, destinação), menos a redução
-// de concreto usinado; RMT = COD × % de mão de obra do tipo de obra. Áreas
+// COD da destinação = área × % categoria × VAU (UF, destinação) × fator de
+// redução de equivalência (faixa pela área da destinação), menos a redução de
+// concreto usinado; RMT = COD × % de mão de obra do tipo de obra. Áreas
 // complementares entram pela % de equivalência, avaliadas na destinação
 // principal (a de maior área). Depois: fator social (só PF) e redução de
 // pré-moldados. INSS estimado = RMT × soma das alíquotas.
@@ -59,11 +71,15 @@ function predial(input, P, hoje = new Date()) {
   const linhas = [];
   let codTotal = 0, rmtTotal = 0, areaTotal = 0;
   const vauUsados = {};
+  // área de cada destinação na obra (define a faixa do fator de redução de equivalência)
+  const areaDest = {};
+  for (const d of destinos) areaDest[d.destinacao] = (areaDest[d.destinacao] || 0) + num(d.area);
   const calcLinha = (rotulo, d, area) => {
     const vau = P.vau(uf, d.destinacao, ref);
     if (!vau) throw new CalcError(`VAU não cadastrado para ${uf} / ${d.destinacao}. Importe a tabela em Cadastros > Parâmetros > VAU.`);
     vauUsados[d.destinacao] = vau;
-    let cod = area * vau.valor;
+    const fatorEq = fatorEquivalencia(P, d.destinacao, areaDest[d.destinacao] || 0);
+    let cod = area * vau.valor * fatorEq / 100;
     let redConcreto = 0;
     if (d.concreto_usinado) {
       redConcreto = exigir(P, 'concreto_usinado', d.destinacao, uf);
@@ -72,7 +88,7 @@ function predial(input, P, hoje = new Date()) {
     const pctMo = exigir(P, 'tipo_obra', d.tipo_obra);
     const rmt = cod * pctMo / 100;
     codTotal += cod; rmtTotal += rmt;
-    linhas.push({ rotulo, destinacao: d.destinacao, tipo_obra: d.tipo_obra, categoria: d.categoria || '', area: r2(area), vau: vau.valor, vigencia: vau.vigencia, red_concreto: redConcreto, cod: r2(cod), pct_mo: pctMo, rmt: r2(rmt) });
+    linhas.push({ rotulo, destinacao: d.destinacao, tipo_obra: d.tipo_obra, categoria: d.categoria || '', area: r2(area), vau: vau.valor, vigencia: vau.vigencia, fator_eq: fatorEq, red_concreto: redConcreto, cod: r2(cod), pct_mo: pctMo, rmt: r2(rmt) });
   };
 
   for (const d of destinos) {

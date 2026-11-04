@@ -86,3 +86,23 @@ test('PJ NF por medição: base por serviço × alíquota do regime', () => {
   assert.strictEqual(r.valor_total, 15000);
   assert.strictEqual(r.retencao, 825);          // 15000 × 50% × 11%
 });
+
+test('fator de redução de equivalência: caso real (sistema anterior = R$ 11.624,82)', () => {
+  const tabEq = [['Residência unifamiliar | 1000', 89], ['Residência unifamiliar | 999999999', 85], ['Casa popular | 999999999', 98]];
+  const linhasEq = tabEq.map(([chave, valor]) => ({ tabela: 'reducao_equivalencia', uf: '', chave, valor }));
+  const aliqReal = [['Patronal', 20], ['GILRAT', 3], ['Terceiros', 5.8], ['Segurados', 8]].map(([chave, valor]) => ({ tabela: 'aliquota', uf: '', chave, valor }));
+  const base = rows.filter(r => r.tabela !== 'aliquota');
+  const todas = [...base, ...aliqReal, ...linhasEq];
+  const PR = { ...P, list: t => todas.filter(r => r.tabela === t), vau: () => ({ valor: 2867, vigencia: '2026-11' }) };
+  const dest = area => ({ uf: 'GO', tipo_responsavel: 'PF', destinacoes: [{ destinacao: 'Residência unifamiliar', tipo_obra: 'Alvenaria', categoria: 'Obra nova', area }] });
+  const r = calc.predial(dest(154.75), PR);
+  assert.strictEqual(r.cod_total, 394864.74);
+  assert.strictEqual(r.rmt, 31589.18);
+  assert.strictEqual(r.inss, 11624.82);
+  assert.strictEqual(r.linhas[0].fator_eq, 89);
+  // acima de 1.000 m² usa a segunda faixa; destinação sem linha fica 100%
+  assert.strictEqual(calc.predial(dest(1000.01), PR).linhas[0].fator_eq, 85);
+  assert.strictEqual(calc.predial(dest(1000), PR).linhas[0].fator_eq, 89);
+  const galpao = calc.predial({ uf: 'GO', tipo_responsavel: 'PJ', destinacoes: [{ destinacao: 'Galpão industrial', tipo_obra: 'Alvenaria', categoria: 'Obra nova', area: 100 }] }, PR);
+  assert.strictEqual(galpao.linhas[0].fator_eq, 100);
+});
