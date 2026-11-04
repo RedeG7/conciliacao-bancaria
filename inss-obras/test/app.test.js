@@ -39,7 +39,7 @@ test('fluxo completo', async () => {
   assert.strictEqual(r.status, 302);
   const simUrl = r.headers.get('location');
   let pg = await (await get(simUrl, ck)).text();
-  assert.match(pg, /R\$\s?8\.832,00/);         // 150 m² × 2000 × 20% × 40% × 36,8%
+  assert.match(pg, /R\$\s?7\.860,48/);         // 150 m² × 2000 × 89% (equivalência) × 20% × 40% × 36,8%
 
   // erro de cálculo volta ao formulário com a mensagem
   pg = await (await post('/simuladores/obras-prediais/novo', ck, { ...dados, uf: 'SP' })).text();
@@ -47,7 +47,7 @@ test('fluxo completo', async () => {
 
   // Simular em -> fator de ajuste herda a RMT
   pg = await (await get('/simuladores/fator-de-ajuste-e-social/novo?base=1', ck)).text();
-  assert.match(pg, /name="rmt" value="24000"/);
+  assert.match(pg, /name="rmt" value="21360"/);   // 24.000 × 89% (equivalência)
   r = await post('/simuladores/fator-de-ajuste-e-social/novo', ck, { identifier: 'Casa Maria', client_id: '1', base_simulation_id: '1', rmt: '24000', remuneracao_declarada: '13000', honorarios: '1500' });
   const sim2 = r.headers.get('location');
   r = await post(`${sim2}/proposta`, ck, {});
@@ -73,7 +73,7 @@ test('fluxo completo', async () => {
     dest_destinacao: 'Residência unifamiliar', dest_tipo_obra: 'Alvenaria', dest_categoria: 'Obra nova', dest_concreto: '0', dest_area: '100' });
   assert.match(r.headers.get('location'), /^\/calculator\/show\//);
   pg = await (await get(r.headers.get('location'))).text();
-  assert.match(pg, /R\$\s?14\.720,00/);         // 100 × 2000 × 20% × 36,8% (PJ, sem fator social)
+  assert.match(pg, /R\$\s?13\.100,80/);         // 100 × 2000 × 89% × 20% × 36,8% (PJ, sem fator social)
   pg = await (await get('/ferramentas-extras/leads', ck)).text();
   assert.match(pg, /v@ex\.com/);
 

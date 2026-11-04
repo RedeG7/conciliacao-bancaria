@@ -157,7 +157,7 @@ for (const [tabela, def] of Object.entries(TABELAS)) {
   const ins = db.prepare('INSERT INTO params (tabela, uf, chave, valor, obs, updated_at, updated_by) VALUES (?,?,?,?,?,?,?)');
   for (const row of def.seed) {
     const [uf, chave, valor] = row.length === 3 ? row : ['', row[0], row[1]];
-    ins.run(tabela, uf, chave, valor, VALIDAR, nowIso(), 'sistema');
+    ins.run(tabela, uf, chave, valor, def.obsSeed || VALIDAR, nowIso(), 'sistema');
   }
 }
 
