@@ -122,6 +122,15 @@ table { border-collapse: collapse; width: 100%; } .lista th, .lista td { text-al
 .abas a.ativo { background: var(--verde); border-color: var(--verde); color: #fff; } .abas a span { opacity: .75; margin-left: 4px; } .abas .botao { margin-left: auto; }
 .botao.favorito { background: #1351b4; cursor: grab; } .passos-lista li { margin-bottom: 6px; }
 #codigoFavorito { font-family: monospace; font-size: .75rem; }
+.aviso-campo { color: var(--verde); font-size: .8rem; } .aviso-campo.erro { color: var(--erro); }
+.etapas-envio { display: flex; gap: 8px; list-style: none; padding: 0; margin: 18px 0; counter-reset: etapa; }
+.etapas-envio li { flex: 1; display: flex; align-items: center; gap: 8px; padding: 12px; border: 1px solid var(--borda); border-radius: 10px; color: var(--suave); font-weight: 600; }
+.etapas-envio li span { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--borda); flex: none; }
+.etapas-envio li.atual { color: var(--texto); border-color: var(--alerta); } .etapas-envio li.atual span { border-color: var(--alerta); border-top-color: transparent; animation: gira 1s linear infinite; }
+.etapas-envio li.feito { color: var(--verde); border-color: var(--verde); background: var(--ok-fundo); } .etapas-envio li.feito span { background: var(--verde); border-color: var(--verde); }
+.etapas-envio li.erro { color: var(--erro); border-color: var(--erro); background: var(--erro-fundo); } .etapas-envio li.erro span { background: var(--erro); border-color: var(--erro); }
+@keyframes gira { to { transform: rotate(360deg); } }
+pre.aviso { white-space: pre-wrap; font-family: inherit; }
 .faixa-status { background: var(--alerta-fundo); color: var(--alerta); padding: 8px 20px; font-weight: 600; border-bottom: 1px solid var(--borda); }
 .abas-form { display: flex; gap: 4px; margin: 12px 0; border-bottom: 1px solid var(--borda); overflow-x: auto; scrollbar-width: thin; }
 .abas-form button { white-space: nowrap; flex: 0 0 auto; }

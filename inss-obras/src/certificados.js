@@ -59,6 +59,18 @@ function lerPfx(buf, senha) {
   };
 }
 
+// chave privada e certificado do titular em PEM, para assinar o XML e abrir a
+// conexão TLS com o eSocial (convertido aqui porque o OpenSSL 3 não abre .pfx antigos)
+function pemDoCertificado(buf, senha) {
+  const p12 = forge.pkcs12.pkcs12FromAsn1(forge.asn1.fromDer(buf.toString('binary')), false, senha);
+  const certs = (p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] || []).map(b => b.cert).filter(Boolean);
+  const chave = ((p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag] || [])
+    .concat(p12.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag] || []))[0];
+  const titular = certs.find(c => !(c.getExtension('basicConstraints') || {}).cA) || certs[0];
+  if (!chave || !titular) throw new CertError('certificado sem chave privada');
+  return { keyPem: forge.pki.privateKeyToPem(chave.key), certPem: forge.pki.certificateToPem(titular) };
+}
+
 const diasPara = iso => Math.floor((new Date(iso) - Date.now()) / 864e5);
 
-module.exports = { lerPfx, cifrar, decifrar, cifraDisponivel, diasPara, CertError };
+module.exports = { lerPfx, pemDoCertificado, cifrar, decifrar, cifraDisponivel, diasPara, CertError };

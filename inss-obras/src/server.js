@@ -11,6 +11,7 @@ const sso = require('./sso');
 const calc = require('./calc');
 const integracoes = require('./integracoes');
 const vau = require('./vau');
+const esocial = require('./esocial');
 const { TABELAS, UFS, VALIDAR } = require('./params');
 const { avisosCertificados, situacaoProcuracao, lembretesDctf } = require('./dctf');
 const { KINDS, porSlug, herdarDePredial, camposPredial, lerPredial, resultadoPredial } = require('./kinds');
@@ -460,7 +461,7 @@ app.post('/propostas/:id/desativar', h((req, res) => {
 // Cliente = dono da obra. Para o envio eSocial/DCTFWeb ele é o empregador
 // (S-1000) e dá procuração eletrônica ao procurador do escritório, cujo
 // certificado A1 (DCTF Web > Certificados) transmite em nome dele.
-const CAMPOS_CLIENTE = ['tipo', 'nome', 'fantasia', 'documento', 'email', 'telefone', 'origem', 'obs', 'profissao', 'nacionalidade', 'registro', 'contato',
+const CAMPOS_CLIENTE = ['tipo', 'nome', 'fantasia', 'documento', 'nascimento', 'email', 'telefone', 'origem', 'obs', 'profissao', 'nacionalidade', 'registro', 'contato',
   'telefone_fixo', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'uf', 'complemento', 'possui_procuracao', 'procuracao_data_assinatura', 'procuracao_data_fim',
   'certificate_id', 's1000_inicio', 's1000_fim', 'class_trib', 'ind_opt_reg_eletron', 'ind_desoneracao', 'pis_pasep', 's1000_recibo'];
 const CLASS_TRIB = [['21', '21 - Empregador doméstico ou empregador PF'], ['22', '22 - Segurado especial'], ['60', '60 - Missão diplomática'], ['70', '70 - Organismo internacional']];
@@ -468,13 +469,19 @@ const CLASS_TRIB = [['21', '21 - Empregador doméstico ou empregador PF'], ['22'
 function formCliente(req, c, acao, completo = false) {
   const inp = (n, attrs = '') => html`<input name="${n}" value="${c[n] ?? ''}" ${raw(attrs)}>`;
   const certs = db.prepare('SELECT id, titular, documento, validade FROM certificates WHERE office = ? AND ativo = 1 ORDER BY titular').all(req.office);
+  // padrões pré-selecionados (podem ser alterados): procuração "Sim", o certificado
+  // válido do procurador e os dados do empregador do S-1000 da obra de PF
+  const semProcuracao = !c.possui_procuracao && !c.procuracao_data_assinatura && !c.procuracao_data_fim;
+  const certPadrao = c.certificate_id || (certs.find(ce => ce.validade >= new Date().toISOString()) || {}).id;
+  c = { ...c, possui_procuracao: semProcuracao ? 1 : c.possui_procuracao, certificate_id: certPadrao, s1000_inicio: c.s1000_inicio || '2021-01' };
   const sp = c.id ? situacaoProcuracao(c) : null;
   return html`<form method="post" action="${acao}" class="card">
     <h3>Dados do cliente</h3><div class="grade">
     ${campo('Tipo', select('tipo', [['PF', 'Pessoa Física'], ['PJ', 'Pessoa Jurídica']], c.tipo))}
     ${campo('Nome / razão social *', inp('nome', 'required'))}
     ${campo('Nome fantasia', inp('fantasia'))}
-    ${campo('CPF / CNPJ', inp('documento', 'inputmode="numeric"'))}
+    ${campo('CPF / CNPJ', inp('documento', 'inputmode="numeric" data-doc'))}
+    ${campo('Data de nascimento', inp('nascimento', 'type="date"'))}
     ${campo('E-mail', inp('email', 'type="email"'))}
     ${campo('Celular', inp('telefone'))}
     ${campo('Origem', inp('origem', 'placeholder="Indicação, site, Instagram..."'))}
@@ -482,7 +489,7 @@ function formCliente(req, c, acao, completo = false) {
       ${campo('Registro (RG)', inp('registro'))}${campo('Contato', inp('contato'))}` : ''}
     ${campo('Observações', html`<textarea name="obs" rows="2">${c.obs || ''}</textarea>`, 'largo')}
     </div>
-    ${completo ? html`<h3>Endereço</h3><div class="grade g4">${campo('CEP', inp('cep'))}${campo('Rua', inp('rua'))}${campo('Número', inp('numero'))}${campo('Complemento', inp('complemento'))}
+    ${completo ? html`<h3>Endereço</h3><div class="grade g4">${campo('CEP', inp('cep', `inputmode="numeric" data-cep='{"rua":"rua","bairro":"bairro","cidade":"cidade","uf":"uf","numero":"numero"}'`))}${campo('Rua', inp('rua'))}${campo('Número', inp('numero'))}${campo('Complemento', inp('complemento'))}
       ${campo('Bairro', inp('bairro'))}${campo('Cidade', inp('cidade'))}${campo('UF', select('uf', ['', ...UFS], c.uf))}</div>
     <h3>Procuração eletrônica e certificado do procurador</h3>
     <p class="desc">O cliente outorga procuração eletrônica no e-CAC ao procurador do escritório (permissões do eSocial e da DCTFWeb); o envio usa o certificado A1 do procurador. Sem procuração vigente o envio ao eSocial fica bloqueado.</p>
@@ -501,7 +508,11 @@ function formCliente(req, c, acao, completo = false) {
       ${campo('Tributação PIS/PASEP', select('pis_pasep', [['0', 'Não'], ['1', 'Sim']], c.pis_pasep ? '1' : '0'))}
       ${campo('Recibo do S-1000 (após cadastrar o empregador no eSocial)', inp('s1000_recibo'))}
     </div><p class="desc">Confira CPF e nome com o cadastro da Receita; se estiverem errados, o cliente precisa atualizar numa unidade conveniada antes do envio.</p>` : ''}
-    <div class="acoes"><button class="botao">Salvar</button>${c.id && !completo ? html`<a class="botao sec" href="/clientes/${c.id}?guia=1">Completar dados do eSocial</a>` : ''}</div></form>`;
+    ${completo && c.s1000_recibo ? html`<div class="aviso">Empregador já cadastrado no eSocial (recibo ${c.s1000_recibo}).</div>` : ''}
+    <div class="acoes">${completo && c.id && !c.s1000_recibo
+      ? html`<button class="botao" name="enviar" value="1" title="Salva e envia o S-1000 ao eSocial com o certificado do procurador">Salvar e enviar</button><button class="botao sec">Salvar sem enviar</button>`
+      : html`<button class="botao">Salvar</button>`}
+      ${c.id && !completo ? html`<a class="botao sec" href="/clientes/${c.id}?guia=1">Completar dados do eSocial</a>` : ''}</div></form>`;
 }
 function lerCliente(req, b, atual = {}) {
   const v = { ...atual };
@@ -557,6 +568,17 @@ app.post('/clientes/:id', h((req, res) => {
     flash(res, 'A data de fim da procuração é anterior à de assinatura.', 'erro'); return res.redirect(req.originalUrl);
   }
   db.prepare(`UPDATE clients SET ${CAMPOS_CLIENTE.map(k => `${k} = ?`).join(', ')} WHERE id = ?`).run(...CAMPOS_CLIENTE.map(k => v[k] ?? null), c.id);
+  if (req.body.enviar === '1') {
+    // "Salvar e enviar": S-1000 ao eSocial, acompanhado na tela de andamento
+    try {
+      const envio = esocial.enviarS1000(db.prepare('SELECT * FROM clients WHERE id = ?').get(c.id), req.office, req.user.name);
+      return res.redirect(`/esocial/envios/${envio}`);
+    } catch (e) {
+      if (!(e instanceof esocial.EsocialError)) throw e;
+      flash(res, `Cliente salvo, mas o S-1000 não foi enviado. ${e.message}`, 'erro');
+      return res.redirect(req.originalUrl);
+    }
+  }
   flash(res, 'Cliente salvo.');
   res.redirect(req.query.guia ? `/guia-de-envio/${c.id}` : '/acompanhamento-de-obras/clientes');
 }));
@@ -566,6 +588,46 @@ app.post('/clientes/:id/desativar', h((req, res) => {
   flash(res, 'Cliente desativado.');
   res.redirect('/acompanhamento-de-obras/clientes');
 }));
+
+// ---------------------------------------------------------------- envios ao eSocial
+// Tela de andamento: Enviado -> Processando -> Recebido (ou erro com as
+// ocorrências do eSocial). A página consulta /esocial/envios/:id.json sozinha.
+const ETAPAS_ENVIO = [['enviando', 'Enviado'], ['processando', 'Processando'], ['recebido', 'Recebido']];
+function carregarEnvioEsocial(req) {
+  const log = esocial.situacao(Number(req.params.id), req.office);
+  if (!log) throw Object.assign(new Error('Envio não encontrado.'), { status: 404 });
+  return log;
+}
+const jsonEnvio = log => ({ status: log.status, etapa: log.etapa, protocolo: log.protocolo, recibo: log.receipt, mensagem: log.mensagem });
+
+app.get('/esocial/envios/:id.json', h((req, res) => res.json(jsonEnvio(carregarEnvioEsocial(req)))));
+app.get('/esocial/envios/:id', h((req, res) => {
+  const log = carregarEnvioEsocial(req);
+  const cli = db.prepare('SELECT id, nome, documento FROM clients WHERE id = ?').get(log.client_id);
+  const pos = { enviando: 0, processando: 1, recebido: 2 }[log.status] ?? 0;
+  res.send(layout(req, `Envio ${log.event} ao eSocial`, html`
+    <div class="card envio-esocial" data-envio="${log.id}" data-status="${log.status}">
+      <p><b>${cli.nome}</b> (CPF ${cli.documento}) · ${log.ambiente === 'producao' ? 'Produção' : 'Produção restrita (testes)'} · enviado por ${log.usuario}</p>
+      <ol class="etapas-envio">${ETAPAS_ENVIO.map(([k, t], i) => html`<li data-etapa="${k}" class="${log.status === 'erro' ? (i <= pos ? 'erro' : '') : i < pos || log.status === 'recebido' ? 'feito' : i === pos ? 'atual' : ''}"><span></span>${t}</li>`)}</ol>
+      <p class="desc" id="envioEtapa">${log.etapa}${log.protocolo ? ` · protocolo ${log.protocolo}` : ''}</p>
+      <div id="envioRecibo" ${log.status === 'recebido' ? '' : 'hidden'} class="aviso">Recibo do ${log.event}: <b id="envioReciboNum">${log.receipt || ''}</b> (já gravado no cadastro do cliente).</div>
+      <pre id="envioMensagem" class="${log.status === 'erro' ? 'aviso erro' : 'aviso alerta'}" ${log.mensagem ? '' : 'hidden'}>${log.mensagem || ''}</pre>
+      <div class="acoes"><a class="botao sec" href="/clientes/${cli.id}?guia=1">Voltar ao cliente</a>
+        <form method="post" action="/esocial/envios/${log.id}/tentar" id="envioTentar" ${log.status === 'erro' ? '' : 'hidden'}><button class="botao">Tentar novamente</button></form></div>
+    </div>`, { migalha: 'DCTF Web / eSocial' }));
+}));
+app.post('/esocial/envios/:id/tentar', h((req, res) => {
+  const log = carregarEnvioEsocial(req);
+  const cli = db.prepare('SELECT * FROM clients WHERE id = ? AND office = ?').get(log.client_id, req.office);
+  try {
+    res.redirect(`/esocial/envios/${esocial.enviarS1000(cli, req.office, req.user.name)}`);
+  } catch (e) {
+    if (!(e instanceof esocial.EsocialError)) throw e;
+    flash(res, e.message, 'erro');
+    res.redirect(`/clientes/${cli.id}?guia=1`);
+  }
+}));
+
 
 // ---------------------------------------------------------------- leads
 app.get('/ferramentas-extras/leads', h((req, res) => {

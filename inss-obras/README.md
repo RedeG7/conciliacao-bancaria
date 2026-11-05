@@ -88,3 +88,20 @@ cd inss-obras && npm install && DEV_LOGIN=1 npm start
 ```
 
 Abra `http://localhost:3000/dev-login` (só com `DEV_LOGIN=1`). Testes: `npm test`.
+
+## Envio ao eSocial (S-1000)
+
+No cadastro completo do cliente (`/clientes/{id}?guia=1`), **Salvar e enviar**
+monta o S-1000 (leiaute S-1.3), assina (XMLDSig RSA-SHA256) com o certificado
+A1 do procurador do escritório, envia o lote ao web service do eSocial e
+consulta o protocolo até sair o recibo, que é gravado no cliente. A tela
+`/esocial/envios/{id}` mostra Enviado → Processando → Recebido (ou as
+ocorrências e "Tentar novamente"). Ambiente por escritório (Cadastros >
+Escritório), padrão **produção restrita**. Endereços, ações SOAP e namespaces
+ficam em `src/esocial.js` (bloco do topo); cada envio fica em `esocial_logs`
+com o XML enviado e a resposta. O build da imagem baixa a cadeia ICP-Brasil
+(`NODE_EXTRA_CA_CERTS`), necessária para a conexão TLS com o eSocial.
+
+Cadastro: CEP preenche o endereço (ViaCEP); CNPJ preenche razão social,
+contato e endereço (BrasilAPI); CPF é validado (nome/nascimento pelo CPF exigem
+um serviço pago, ainda não contratado).

@@ -86,7 +86,7 @@ db.exec('DROP INDEX IF EXISTS params_chave; CREATE UNIQUE INDEX IF NOT EXISTS pa
 // Módulo DCTF Web (SPEC_MODULO_DCTFWEB): cliente como empregador eSocial
 // (S-1000) com procuração eletrônica para o procurador do escritório, cujo
 // certificado A1 (tabela certificates) transmite em nome do cliente.
-addColumns('clients', ['profissao TEXT', 'nacionalidade TEXT', 'registro TEXT', 'contato TEXT', 'telefone_fixo TEXT',
+addColumns('clients', ['nascimento TEXT', 'profissao TEXT', 'nacionalidade TEXT', 'registro TEXT', 'contato TEXT', 'telefone_fixo TEXT',
   'cep TEXT', 'rua TEXT', 'numero TEXT', 'bairro TEXT', 'cidade TEXT', 'uf TEXT', 'complemento TEXT',
   'possui_procuracao INTEGER NOT NULL DEFAULT 0', 'procuracao_data_assinatura TEXT', 'procuracao_data_fim TEXT',
   'certificate_id INTEGER', 's1000_inicio TEXT', 's1000_fim TEXT', "class_trib TEXT DEFAULT '21'",
@@ -144,6 +144,8 @@ CREATE TABLE IF NOT EXISTS send_guides (
 // "Ativar lembretes" do envio, ambiente do eSocial por escritório (usado pela
 // transmissão, próxima etapa) e configurações gerais (faixa de aviso no topo)
 addColumns('dctf_webs', ['lembretes INTEGER NOT NULL DEFAULT 0']);
+// andamento de cada envio ao eSocial (src/esocial.js)
+addColumns('esocial_logs', ['etapa TEXT', 'ambiente TEXT', 'usuario TEXT', 'protocolo TEXT', 'mensagem TEXT', 'updated_at TEXT']);
 addColumns('offices', ["esocial_ambiente TEXT NOT NULL DEFAULT 'producao_restrita'"]);
 db.exec('CREATE TABLE IF NOT EXISTS settings (chave TEXT PRIMARY KEY, valor TEXT, updated_at TEXT, updated_by TEXT)');
 const setting = chave => db.prepare('SELECT valor FROM settings WHERE chave = ?').get(chave)?.valor || '';
