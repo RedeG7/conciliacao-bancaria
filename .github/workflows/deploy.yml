@@ -93,6 +93,15 @@ jobs:
           cache-from: type=gha,scope=inssobras
           cache-to: type=gha,mode=max,scope=inssobras
 
+      # RH (pasta rh/, Node)
+      - uses: docker/build-push-action@v5
+        with:
+          context: rh
+          push: true
+          tags: ghcr.io/redeg7/rh:latest
+          cache-from: type=gha,scope=rh
+          cache-to: type=gha,mode=max,scope=rh
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -154,6 +163,22 @@ jobs:
               fi
             else
               echo "Imagem inss-obras nao acessivel - Simulador INSS Obras nao ligado"
+            fi
+            # idem RH (profile "rh")
+            if docker pull -q ghcr.io/redeg7/rh:latest >/dev/null 2>&1; then
+              if ! grep -q '^COMPOSE_PROFILES=' .env; then
+                printf '\nCOMPOSE_PROFILES=rh\n' >> .env
+              elif ! grep -qE '^COMPOSE_PROFILES=(.*,)?rh(,|$)' .env; then
+                sed -i 's/^COMPOSE_PROFILES=\(.*\)$/COMPOSE_PROFILES=\1,rh/' .env
+              fi
+            else
+              echo "Imagem rh nao acessivel - RH nao ligado"
+            fi
+            # segredo do login unico Hub -> RH (api.py e rh/src/sso.js):
+            # gerado uma vez e guardado no .env
+            if ! grep -q '^RH_SSO_SECRET=.' .env; then
+              sed -i '/^RH_SSO_SECRET=/d' .env
+              printf '\nRH_SSO_SECRET=%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
             fi
             # segredo do login unico Hub -> Simulador INSS Obras (api.py e
             # inss-obras/src/sso.js): gerado uma vez e guardado no .env

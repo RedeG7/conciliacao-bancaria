@@ -486,3 +486,25 @@ def sso_inssobras(sessao_token: Optional[str] = Cookie(None)):
         return HTMLResponse("Seu usuário não tem acesso ao Simulador INSS Obras.", status_code=403)
     auth.registrar_acesso(dados["usuario"], dados.get("escritorio_id"), "Simulador INSS Obras")
     return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Login unico no RH (rh.redeg7.com, pasta rh/)
+# ---------------------------------------------------------------------------
+# Mesmo bilhete do Marketing, com segredo proprio (RH_SSO_SECRET). O RH separa
+# os dados por escritorio (campo "office" do bilhete) e confere o bilhete em
+# rh/src/sso.js.
+
+@app.get("/api/sso/rh")
+def sso_rh(sessao_token: Optional[str] = Cookie(None)):
+    dominio = os.environ.get("DOMINIO_RH", "")
+    segredo = os.environ.get("RH_SSO_SECRET", "")
+    if not dominio or not segredo:
+        return HTMLResponse("Acesso ao RH ainda não configurado no servidor.", status_code=503)
+    dados = auth.validar_sessao(sessao_token or "")
+    if not dados:
+        return RedirectResponse("/", status_code=302)
+    if not _app_permitido(dados, "rh"):
+        return HTMLResponse("Seu usuário não tem acesso ao RH.", status_code=403)
+    auth.registrar_acesso(dados["usuario"], dados.get("escritorio_id"), "RH")
+    return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)

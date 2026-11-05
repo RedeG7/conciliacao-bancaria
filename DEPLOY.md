@@ -374,3 +374,33 @@ sem ela os certificados gravados não abrem mais e precisam ser reenviados.
 
 Liberar/bloquear por escritório ou usuário: id `inssobras` em Gerenciar
 Escritórios/Usuários do Hub (mesma regra dos outros apps).
+
+## RH (rh.redeg7.com)
+
+App separado (Node.js, pasta `rh/`, ver `rh/README.md`): serviço `rh` do
+`docker-compose.yml`, imagem `ghcr.io/redeg7/rh:latest` (buildada pelo mesmo
+workflow), banco SQLite próprio no volume `rh_data`. Na home do Hub aparece o
+card "👥 RH" (departamento Pessoal), que abre o RH numa aba nova **já logado**
+(`/api/sso/rh` em `api.py`), no escritório do usuário.
+
+Ativar (uma vez só):
+
+1. No DNS do `redeg7.com`, crie um registro **A** `rh` apontando pro mesmo IP
+   do Hub (o Caddy emite o HTTPS sozinho).
+2. Nada a fazer no `.env`: o deploy acrescenta `rh` em `COMPOSE_PROFILES`
+   assim que a imagem puder ser baixada e gera o `RH_SSO_SECRET`. (Outro
+   endereço: `DOMINIO_RH=...` no `.env`.)
+3. Depois do primeiro deploy, entre pelo card como administrador do escritório,
+   importe os colaboradores em Configurações › Importar colaboradores e defina o
+   papel de cada usuário em Configurações › Usuários e papéis (quem entra começa
+   em "Apenas visualização", sem salários, documentos nem saúde).
+
+Liberar/bloquear por escritório ou usuário: id `rh` em Gerenciar
+Escritórios/Usuários do Hub (mesma regra dos outros apps).
+
+Backup do volume (dados pessoais e de saúde: guarde com o mesmo cuidado):
+
+```bash
+docker run --rm -v conciliacao-bancaria_rh_data:/data -v $(pwd):/b alpine \
+  tar czf /b/rh-$(date +%Y%m%d).tgz -C /data .
+```
