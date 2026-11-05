@@ -1,0 +1,17 @@
+{
+  "name": "rh",
+  "version": "1.0.0",
+  "description": "RH (RedeG7) - gestão de pessoas: colaboradores, ocorrências, férias, avaliações, metas, PDI, treinamentos, pesquisas e métricas",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.22.3"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "private": true
+}

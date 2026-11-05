@@ -37,6 +37,8 @@ services:
       # Simulador INSS Obras (pasta inss-obras/) - o card dele na home passa
       # por /api/sso/inssobras (api.py)
       - DOMINIO_INSSOBRAS=${DOMINIO_INSSOBRAS:-inssobras.redeg7.com}
+      # RH (pasta rh/) - o card dele na home passa por /api/sso/rh (api.py)
+      - DOMINIO_RH=${DOMINIO_RH:-rh.redeg7.com}
     depends_on:
       db:
         condition: service_healthy
@@ -73,6 +75,10 @@ services:
       # e gerado sozinho no .env pelo deploy (deploy.yml)
       - DOMINIO_INSSOBRAS=${DOMINIO_INSSOBRAS:-inssobras.redeg7.com}
       - INSSOBRAS_SSO_SECRET=${INSSOBRAS_SSO_SECRET:-}
+      # login unico no RH (/api/sso/rh) - o segredo e gerado sozinho no .env
+      # pelo deploy (deploy.yml)
+      - DOMINIO_RH=${DOMINIO_RH:-rh.redeg7.com}
+      - RH_SSO_SECRET=${RH_SSO_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -171,6 +177,28 @@ services:
     expose:
       - "3000"
 
+  # RH (pasta rh/): app Node separado, com banco proprio em SQLite (rh.db) no
+  # volume rh_data - dados separados por escritorio do Hub, login so pelo card
+  # do Hub (SSO). Profile "rh": o deploy liga sozinho quando a imagem ja pode
+  # ser baixada do GHCR (mesma logica do Marketing, ver deploy.yml).
+  rh:
+    image: ghcr.io/redeg7/rh:latest
+    profiles: ["rh"]
+    container_name: rh
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - DATA_DIR=/data
+      - COOKIE_SECURE=1
+      - TRUST_PROXY=1
+      - PUBLIC_URL=https://${DOMINIO_RH:-rh.redeg7.com}
+      - SSO_SECRET=${RH_SSO_SECRET:-}
+      - HUB_URL=https://${DOMINIO}
+    volumes:
+      - rh_data:/data
+    expose:
+      - "3000"
+
   caddy:
     image: caddy:2-alpine
     container_name: conciliacao-caddy
@@ -185,6 +213,8 @@ services:
       - DOMINIO_MARKETING=${DOMINIO_MARKETING:-mkt.redeg7.com}
       # subdominio do Simulador INSS Obras (registro DNS A apontando pro VPS)
       - DOMINIO_INSSOBRAS=${DOMINIO_INSSOBRAS:-inssobras.redeg7.com}
+      # subdominio do RH (registro DNS A apontando pro VPS)
+      - DOMINIO_RH=${DOMINIO_RH:-rh.redeg7.com}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -199,3 +229,4 @@ volumes:
   caddy_config:
   marketing_data:
   inssobras_data:
+  rh_data:
