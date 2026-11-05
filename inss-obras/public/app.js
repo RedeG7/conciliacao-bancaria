@@ -121,6 +121,85 @@
     r.readAsDataURL(f);
   }));
 
+  // aviso pequeno embaixo de um campo (preenchimento automático)
+  const avisoCampo = (inp, msg, erro) => {
+    let a = inp.parentElement.querySelector('.aviso-campo');
+    if (!a) { a = document.createElement('small'); a.className = 'aviso-campo'; inp.after(a); }
+    a.textContent = msg || ''; a.classList.toggle('erro', !!erro);
+  };
+  const preencher = (form, nome, valor) => {
+    const el = nome && form.querySelector(`[name="${nome}"]`);
+    if (!el || valor === undefined || valor === null || valor === '') return;
+    el.value = valor;
+  };
+  // CEP -> endereço (ViaCEP); data-cep diz em quais campos do formulário cada parte entra
+  $$('[data-cep]').forEach(inp => inp.addEventListener('change', async () => {
+    const cep = inp.value.replace(/\D/g, '');
+    if (cep.length !== 8) return avisoCampo(inp, cep ? 'CEP deve ter 8 dígitos.' : '', !!cep);
+    avisoCampo(inp, 'Buscando endereço...');
+    try {
+      const r = await (await fetch(`https://viacep.com.br/ws/${cep}/json/`)).json();
+      if (r.erro) return avisoCampo(inp, 'CEP não encontrado.', true);
+      const m = JSON.parse(inp.dataset.cep), f = inp.form;
+      preencher(f, m.rua, r.logradouro); preencher(f, m.bairro, r.bairro); preencher(f, m.cidade, r.localidade);
+      preencher(f, m.uf, r.uf); preencher(f, m.ibge, r.ibge);
+      inp.value = `${cep.slice(0, 5)}-${cep.slice(5)}`;
+      avisoCampo(inp, 'Endereço preenchido pelo CEP.');
+      f.querySelector(`[name="${m.numero}"]`)?.focus();
+    } catch (e) { avisoCampo(inp, 'Não foi possível consultar o CEP agora.', true); }
+  }));
+  // CPF/CNPJ: CPF é validado (dígitos); CNPJ busca razão social, contato e endereço (BrasilAPI)
+  const cpfValido = c => {
+    if (!/^\d{11}$/.test(c) || /^(\d)\1{10}$/.test(c)) return false;
+    const dv = n => { let s = 0; for (let i = 0; i < n; i++) s += Number(c[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
+    return dv(9) === Number(c[9]) && dv(10) === Number(c[10]);
+  };
+  $$('[data-doc]').forEach(inp => inp.addEventListener('change', async () => {
+    const d = inp.value.replace(/\D/g, ''), f = inp.form;
+    if (d.length === 11) return avisoCampo(inp, cpfValido(d) ? 'CPF válido.' : 'CPF inválido: confira os números.', !cpfValido(d));
+    if (d.length !== 14) return avisoCampo(inp, d ? 'Informe 11 dígitos (CPF) ou 14 (CNPJ).' : '', !!d);
+    avisoCampo(inp, 'Buscando CNPJ na Receita...');
+    try {
+      const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${d}`);
+      if (!resp.ok) return avisoCampo(inp, 'CNPJ não encontrado.', true);
+      const r = await resp.json();
+      preencher(f, 'tipo', 'PJ'); preencher(f, 'nome', r.razao_social); preencher(f, 'fantasia', r.nome_fantasia);
+      preencher(f, 'email', (r.email || '').toLowerCase()); preencher(f, 'telefone', r.ddd_telefone_1);
+      preencher(f, 'cep', r.cep); preencher(f, 'rua', [r.descricao_tipo_de_logradouro, r.logradouro].filter(Boolean).join(' '));
+      preencher(f, 'numero', r.numero); preencher(f, 'complemento', r.complemento); preencher(f, 'bairro', r.bairro);
+      preencher(f, 'cidade', r.municipio); preencher(f, 'uf', r.uf);
+      avisoCampo(inp, `Dados de ${r.razao_social} preenchidos pela Receita.`);
+    } catch (e) { avisoCampo(inp, 'Não foi possível consultar o CNPJ agora.', true); }
+  }));
+
+  // andamento do envio ao eSocial: consulta a situação a cada 3 segundos até
+  // sair o recibo ou o erro
+  const telaEnvio = $('.envio-esocial');
+  if (telaEnvio) {
+    const ordem = ['enviando', 'processando', 'recebido'];
+    const pintar = j => {
+      const pos = ordem.indexOf(j.status);
+      $$('.etapas-envio li', telaEnvio).forEach((li, i) => {
+        li.className = j.status === 'erro' ? (i <= Math.max(pos, 0) ? 'erro' : '') : (i < pos || j.status === 'recebido' ? 'feito' : i === pos ? 'atual' : '');
+      });
+      $('#envioEtapa').textContent = (j.etapa || '') + (j.protocolo ? ` · protocolo ${j.protocolo}` : '');
+      $('#envioRecibo').hidden = j.status !== 'recebido';
+      $('#envioReciboNum').textContent = j.recibo || '';
+      const m = $('#envioMensagem');
+      m.hidden = !j.mensagem; m.textContent = j.mensagem || ''; m.className = j.status === 'erro' ? 'aviso erro' : 'aviso alerta';
+      $('#envioTentar').hidden = j.status !== 'erro';
+    };
+    const consultar = async () => {
+      try {
+        const j = await (await fetch(`/esocial/envios/${telaEnvio.dataset.envio}.json`)).json();
+        pintar(j);
+        if (j.status === 'recebido' || j.status === 'erro') return;
+      } catch (e) { /* tenta de novo */ }
+      setTimeout(consultar, 3000);
+    };
+    if (!['recebido', 'erro'].includes(telaEnvio.dataset.status)) setTimeout(consultar, 1500);
+  }
+
   // tabelas: busca e paginação no navegador
   $$('.tabela-topo').forEach(topo => {
     const card = topo.parentElement;

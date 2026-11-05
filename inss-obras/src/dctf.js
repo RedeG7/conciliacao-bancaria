@@ -222,7 +222,7 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
         ${campo('Condição de ingresso (estrangeiro)', inp('entry_condition', m.entry_condition))}
       </div></section>
       <section data-painel="a3" hidden><div class="grade">
-        ${campo('CEP', inp('address_zip_code', m.address_zip_code))}${campo('Logradouro', inp('address', m.address))}${campo('Número', inp('address_number', m.address_number))}
+        ${campo('CEP', inp('address_zip_code', m.address_zip_code, `inputmode="numeric" data-cep='{"rua":"address","bairro":"address_district","cidade":"address_city","ibge":"address_municipality","numero":"address_number"}'`))}${campo('Logradouro', inp('address', m.address))}${campo('Número', inp('address_number', m.address_number))}
         ${campo('Complemento', inp('address_complement', m.address_complement))}${campo('Bairro', inp('address_district', m.address_district))}
         ${campo('Cidade', inp('address_city', m.address_city))}${campo('Código do município (IBGE)', inp('address_municipality', m.address_municipality))}
       </div></section>
@@ -323,7 +323,7 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
       ${campo('Início', inp('data_inicio', w.data_inicio, 'type="date"'))}${campo('Término', inp('data_fim', w.data_fim, 'type="date"'))}
       ${campo('Área (m²)', inp('area', w.area ?? '', 'inputmode="decimal"'))}${campo('Situação', select('status', STATUS_OBRA, w.status))}
     </div><h3>Endereço da obra</h3><div class="grade g4">
-      ${campo('CEP', inp('cep', w.cep))}${campo('Rua', inp('endereco', w.endereco))}${campo('Número', inp('numero', w.numero))}${campo('Complemento', inp('complemento', w.complemento))}
+      ${campo('CEP', inp('cep', w.cep, `inputmode="numeric" data-cep='{"rua":"endereco","bairro":"bairro","cidade":"municipio","uf":"uf","numero":"numero"}'`))}${campo('Rua', inp('endereco', w.endereco))}${campo('Número', inp('numero', w.numero))}${campo('Complemento', inp('complemento', w.complemento))}
       ${campo('Bairro', inp('bairro', w.bairro))}${campo('Cidade', inp('municipio', w.municipio))}${campo('UF', select('uf', ['', ...UFS], w.uf))}
     </div>
     <h3>Trabalhadores da obra</h3>${cliId ? '' : html`<p class="desc">Salve a obra com o cliente para escolher os autônomos dele.</p>`}
