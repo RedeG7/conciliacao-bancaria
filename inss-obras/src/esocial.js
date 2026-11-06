@@ -62,7 +62,9 @@ function idEvento(tpInsc, nrInsc, agora = new Date(), seq = 1) {
   return `ID${tpInsc}${soDigitos(nrInsc).padEnd(14, '0')}${ts}${String(seq).padStart(5, '0')}`;
 }
 
-// S-1000 (informações do empregador) - inclusão, empregador pessoa física (CPF)
+// S-1000 (informações do empregador) - inclusão, empregador pessoa física (CPF).
+// procEmi 1 = aplicativo do empregador (webservice): o empregador fica no módulo
+// Geral do portal, não no Simplificado (que usa procEmi 22, doméstico/seg. especial).
 function xmlS1000(cliente, tpAmb, agora = new Date()) {
   const cpf = soDigitos(cliente.documento);
   const id = idEvento(2, cpf, agora);
