@@ -30,11 +30,16 @@ const MENU = [
     ['/config/importar', 'Importar colaboradores', '📥', null, 'edita'], ['/config/auditoria', 'Auditoria', '🔍', null, 'configura']]],
 ];
 
+// roda antes da primeira pintura, para o grupo minimizado não piscar aberto
+const RESTAURA_MENU = `<script>try{var g=JSON.parse(localStorage.getItem('menuFechado')||'[]');document.querySelectorAll('.lateral .grupo').forEach(function(d){if(g.indexOf(d.dataset.grupo)>=0)d.open=false})}catch(e){}</script>`;
+// muda a cada publicação, para o navegador não usar o JS/CSS antigo do cache
+const VERSAO = Date.now().toString(36);
+
 function layout(req, titulo, corpo, { descricao = '', migalha = '' } = {}) {
   const u = req.user, atual = req.path, offices = u.is_global ? JSON.parse(u.offices || '[]') : [];
   const menu = MENU.map(([grupo, itens]) => {
     const vis = itens.filter(([, , , cl, acao]) => ve(req.papel, cl) && (!acao || pode(req.papel, acao)));
-    return vis.length ? html`<details class="grupo" open><summary>${grupo}</summary>
+    return vis.length ? html`<details class="grupo" data-grupo="${grupo}" open><summary>${grupo}</summary>
       ${vis.map(([href, rot, ic]) => html`<a href="${href}" class="${atual === href || atual.startsWith(href + '/') ? 'ativo' : ''}" data-busca="${rot.toLowerCase()}"><span>${ic}</span>${rot}</a>`)}
     </details>` : '';
   });
@@ -44,6 +49,7 @@ function layout(req, titulo, corpo, { descricao = '', migalha = '' } = {}) {
     <div class="marca"><span class="logo">👥</span><div><b>RH</b><small>RedeG7</small></div></div>
     <input class="busca-menu" id="buscaMenu" placeholder="Buscar tela..." aria-label="Buscar tela">
     <nav>${menu}</nav>
+    ${raw(RESTAURA_MENU)}
   </aside>
   <div class="principal">
     <header class="topo">
@@ -69,9 +75,9 @@ function layout(req, titulo, corpo, { descricao = '', migalha = '' } = {}) {
 
 function page(titulo, corpo) {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(titulo)} · RH</title><link rel="stylesheet" href="/static/app.css">
+<title>${esc(titulo)} · RH</title><link rel="stylesheet" href="/static/app.css?v=${VERSAO}">
 <script>try{var t=localStorage.getItem('tema');if(t)document.documentElement.dataset.theme=t}catch(e){}</script></head>
-<body>${corpo}<script src="/static/app.js"></script></body></html>`;
+<body>${corpo}<script src="/static/app.js?v=${VERSAO}"></script></body></html>`;
 }
 
 // tabela com busca e paginação no navegador (public/app.js)

@@ -16,9 +16,25 @@
   $('#telaCheia')?.addEventListener('click', () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.()));
   $('#abrirMenu')?.addEventListener('click', () => $('#lateral').classList.toggle('aberto'));
 
+  // grupos do menu: o minimizado continua minimizado ao trocar de tela
+  const lerFechados = () => { try { return JSON.parse(localStorage.getItem('menuFechado') || '[]'); } catch (e) { return []; } };
+  $$('.lateral .grupo > summary').forEach(s => s.addEventListener('click', () => {
+    const d = s.parentElement, g = d.dataset.grupo;
+    const fechados = lerFechados().filter(x => x !== g);
+    if (d.open) fechados.push(g); // o clique ainda vai fechar
+    salvar('menuFechado', JSON.stringify(fechados));
+  }));
+
   $('#buscaMenu')?.addEventListener('input', e => {
     const q = e.target.value.trim().toLowerCase();
     $$('.lateral nav a').forEach(a => { a.hidden = q && !a.dataset.busca.includes(q); });
+    // a busca abre os grupos sem mudar a escolha salva; ao limpar, ela volta
+    const fechados = lerFechados();
+    $$('.lateral .grupo').forEach(d => {
+      const achou = $$('a', d).some(a => !a.hidden);
+      d.hidden = !achou;
+      d.open = q ? achou : !fechados.includes(d.dataset.grupo);
+    });
   });
 
   document.addEventListener('click', e => {
