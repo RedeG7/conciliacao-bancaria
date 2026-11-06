@@ -26,6 +26,8 @@ daquela plataforma.
 
 O menu lateral segue os nomes e a organização da plataforma atual (abas e subabas). A tabela abaixo agrupa as telas por assunto, não pelo menu.
 
+A tela Visão Geral (`/desenvolvimento`), em Desenv. e Performance, reúne AVD, PDI e feedbacks. As médias por competência dependem das avaliações por link, ainda não feitas.
+
 | Área | Telas | Situação |
 |---|---|---|
 | Início | Painel com alertas, aniversariantes | ✅ |

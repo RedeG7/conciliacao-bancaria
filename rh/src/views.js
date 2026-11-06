@@ -31,6 +31,7 @@ const MENU = [
     cad('motivo_demissao', 'Motivo de Demissões'), cad('unidade', 'Unidades'), tela('/metricas/colaboradores', 'Métricas do Colaborador'),
   ], '👥'),
   aba('Desenv. e Performance', [
+    tela('/desenvolvimento', 'Visão Geral'),
     aba('Competências', [cad('grupo_competencia', 'Grupos de competências'), cad('competencia', 'Competências')]),
     aba('Avaliação Desemp.', [cad('ciclo', 'Solicitar Avaliação'), cad('avaliacao', 'Relatórios Individuais')]),
     aba('Gestão de Metas', [cad('meta', 'Cadastro de Metas'), cad('meta_colaborador', 'Controle de Metas')]),
@@ -138,11 +139,11 @@ const campo = (rotulo, input, extra = '') => html`<label class="campo ${raw(extr
 const cartao = (titulo, valor, nota = '') => html`<div class="card"><small>${titulo}</small><b>${valor}</b>${nota ? html`<span>${nota}</span>` : ''}</div>`;
 
 // composição de um total: uma cor só, sempre com o número ao lado da barra
-function barras(pares, vazio = 'Sem dados ainda.') {
+function barras(pares, vazio = 'Sem dados ainda.', { partes = true } = {}) {
   if (!pares.length) return html`<p class="desc">${vazio}</p>`;
   const maior = Math.max(...pares.map(p => p[1]), 1);
   const total = pares.reduce((s, p) => s + p[1], 0);
-  return html`<div class="barras">${pares.map(([r, v]) => html`<div class="item" title="${r}: ${v} (${total ? Math.round((v / total) * 100) : 0}%)"><span>${r}</span>
+  return html`<div class="barras">${pares.map(([r, v]) => html`<div class="item" title="${partes ? `${r}: ${v} (${total ? Math.round((v / total) * 100) : 0}%)` : r}"><span>${r}</span>
     <div class="barra"><span style="width:${Math.round((v / maior) * 100)}%"></span></div><span class="valor">${n2(v)}</span></div>`)}</div>`;
 }
 
