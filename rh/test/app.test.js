@@ -306,6 +306,31 @@ test('importar competências: arquivo da Sólides com cargos separados por barra
   assert.match(await (await post('/cad/competencias/importar', ck, { csv: exportado })).text(), /Atualizados<\/small><b>2</, 'aceita o próprio arquivo exportado');
 });
 
+test('importar avaliação da Sólides: ciclo do ano, média e relatório individual', async () => {
+  const ck = await login('?office=avs');
+  await novoColab(ck, { nome: 'Pessoa Um' });
+  const cab = 'Nome avaliado,Matrícula,Nome avaliador,Data da avaliação,Grupo de competência,Competência,Peso da competência,Nota,Moderação,Cargo do avaliado,Departamento do avaliado,Auto avaliação,Considerar nota,Moderador,Comentário por competência,Comentário geral,Data da avaliação\n';
+  const lin = (nome, comp, peso, nota, auto = 'Não') => `${nome},1,Chefe Um,30/06/2026 às 12:51,Técnicas,${comp},${peso},${nota},Não,Analista,"Geral, Tudo",${auto},Não,-,Comenta ${comp},"Geral\nsegunda linha",17/09/2026\n`;
+  const csv = cab + lin('Pessoa Um', 'A', 1, 5) + lin('Pessoa Um', 'B', 3, 3) + lin('Pessoa Um', 'C', 1, 1, 'Sim') + lin('Pessoa Fora', 'A', 1, 4);
+  let t = await (await post('/cad/ciclos-avaliacao/importar', ck, { csv })).text();
+  assert.match(t, /Novos<\/small><b>1</);
+  assert.match(t, /Pessoa Fora: não está em Colaboradores/);
+  assert.match(await texto('/cad/ciclos-avaliacao', ck), /Avaliação de Desempenho 2026/);
+  const lista = await texto('/cad/avaliacoes', ck);
+  assert.match(lista, /3,5/, 'média ponderada, sem a autoavaliação');
+  const id = lista.match(/\/avaliacoes\/(\d+)/)[1];
+  const rel = await texto(`/avaliacoes/${id}`, ck);
+  assert.match(rel, /Comenta B/);
+  assert.doesNotMatch(rel, /Comenta C/);
+  assert.match(rel, /Não avaliado/);
+  assert.match(rel, /Chefe Um/);
+  t = await (await post('/cad/ciclos-avaliacao/importar', ck, { csv })).text();
+  assert.match(t, /Atualizados<\/small><b>1</, 'reimportar não duplica');
+  assert.strictEqual((await get('/matriz-potencial', ck)).status, 200, 'sem potencial a matriz ainda abre');
+  const leitor = await login('?office=avs&u=leitor3&admin=0');
+  assert.strictEqual((await get(`/avaliacoes/${id}`, leitor)).status, 403);
+});
+
 test('importar colaboradores: superior direto pelo nome, mesmo em linha abaixo', async () => {
   const ck = await login('?office=sup');
   const b = await base_colab(ck);

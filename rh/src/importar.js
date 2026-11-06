@@ -135,4 +135,53 @@ function importar(texto, c, usuario, k = KINDS.colaborador) {
   return res;
 }
 
-module.exports = { parseCsv, importar, modelo };
+// ---------------------------------------------------------------- avaliações da Sólides
+// Uma linha por competência avaliada. Vira uma avaliação por pessoa no ciclo do
+// ano, com a média ponderada em Desempenho e as notas guardadas em itens.
+const coluna = (cab, nome) => cab.findIndex(h => norm(h) === norm(nome));
+const ehAvaliacaoSolides = texto => {
+  const cab = parseCsv(String(texto).split(/\r?\n/, 1)[0])[0] || [];
+  return coluna(cab, 'Nome avaliado') >= 0 && coluna(cab, 'Competência') >= 0 && coluna(cab, 'Nota') >= 0;
+};
+const dataIso = s => { const m = String(s).match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : ''; };
+
+function importarAvaliacoes(texto, c, usuario) {
+  const [cab, ...linhas] = parseCsv(texto);
+  const col = Object.fromEntries(Object.entries({ avaliado: 'Nome avaliado', avaliador: 'Nome avaliador', grupo: 'Grupo de competência', competencia: 'Competência', peso: 'Peso da competência', nota: 'Nota', auto: 'Auto avaliação', comentario: 'Comentário por competência', geral: 'Comentário geral' }).map(([k, n]) => [k, coluna(cab, n)]));
+  const iData = coluna(cab, 'Data da avaliação'), iResp = cab.map(norm).lastIndexOf(norm('Data da avaliação'));
+  const res = { criados: 0, atualizados: 0, ignoradas: [], erros: [], destino: 'avaliacoes' };
+  const validas = linhas.filter(l => norm(l[col.auto] ?? '') !== 'sim' && Number(l[col.nota]) >= 1 && Number(l[col.nota]) <= 5);
+  if (!validas.length) { res.erros.push('Nenhuma nota de avaliador encontrada no arquivo.'); return res; }
+  const inicios = validas.map(l => dataIso(l[iData])).filter(Boolean).sort(), fins = validas.map(l => dataIso(l[iResp])).filter(Boolean).sort();
+  const ano = (inicios[0] || fins[0] || '').slice(0, 4);
+  if (!ano) { res.erros.push('O arquivo não traz a data da avaliação.'); return res; }
+
+  const pessoas = new Map();
+  for (const l of validas) {
+    const n = norm(l[col.avaliado]);
+    pessoas.set(n, [...(pessoas.get(n) || []), l]);
+  }
+  const colabs = R.listar(c.office, 'colaborador');
+  R.tx(() => {
+    const titulo = `Avaliação de Desempenho ${ano}`;
+    const inicio = inicios[0] || fins[0], fim = fins[fins.length - 1] || inicio;
+    const ciclo = R.listar(c.office, 'ciclo').find(x => norm(x.titulo) === norm(titulo));
+    const cicloId = ciclo?.id ?? R.criar(c.office, 'ciclo', { titulo, inicio, fim, status: 'Encerrado' }, usuario);
+    const avaliacoes = R.listar(c.office, 'avaliacao');
+    for (const [n, ls] of pessoas) {
+      const achados = colabs.filter(p => norm(p.nome) === n);
+      if (achados.length !== 1) { res.erros.push(`${ls[0][col.avaliado]}: ${achados.length ? 'há mais de um cadastro' : 'não está em Colaboradores'}.`); continue; }
+      const itens = ls.map(l => ({ grupo: l[col.grupo].trim(), competencia: l[col.competencia].trim(), peso: Number(l[col.peso]) || 1, nota: Number(l[col.nota]), comentario: l[col.comentario].trim().replace(/^-$/, '') }));
+      const pesos = itens.reduce((s, i) => s + i.peso, 0);
+      const media = Math.round((itens.reduce((s, i) => s + i.nota * i.peso, 0) / pesos) * 100) / 100;
+      const atual = avaliacoes.find(a => a.ciclo_id === cicloId && a.colaborador_id === achados[0].id);
+      const dados = { ...(atual ? R.soDados(atual) : { potencial: null }), ciclo_id: cicloId, colaborador_id: achados[0].id, desempenho: media,
+        avaliador: [...new Set(ls.map(l => l[col.avaliador].trim()))].join(', '), data_resposta: ls.map(l => dataIso(l[iResp])).filter(Boolean).sort().pop() || null,
+        comentario: (ls[0][col.geral] || '').trim() || null, itens };
+      if (atual) { R.atualizar(c.office, 'avaliacao', atual.id, dados); res.atualizados++; } else { R.criar(c.office, 'avaliacao', dados, usuario); res.criados++; }
+    }
+  });
+  return res;
+}
+
+module.exports = { parseCsv, importar, modelo, ehAvaliacaoSolides, importarAvaliacoes };
