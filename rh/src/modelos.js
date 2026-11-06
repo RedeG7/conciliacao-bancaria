@@ -5,7 +5,8 @@
 // Campo: F(nome, rótulo, tipo, opções). Tipos: texto, longo, data, numero,
 // dinheiro, email, tel, opcao (op: lista), sim (Sim/Não), ref (ref: outro kind).
 // Opções: req (obrigatório), cl (classe sensível, ver src/acesso.js), s (seção
-// do formulário), min/max, interno (não aparece no formulário).
+// do formulário), min/max, interno (não aparece no formulário), obrig (obrigatório
+// conferido em validar), alias (outros nomes de coluna aceitos na importação).
 const { addDias } = require('./datas');
 
 const F = (n, r, t = 'texto', o = {}) => ({ n, r, t, ...o });
@@ -33,40 +34,56 @@ const colaborador = {
     F('situacao', 'Situação', 'texto', { interno: true }),
     F('nome', 'Nome completo', 'texto', { req: true, s: nomeSe }),
     F('nome_social', 'Nome social', 'texto', { s: nomeSe }),
-    F('nascimento', 'Data de nascimento', 'data', { s: nomeSe }),
-    F('genero', 'Gênero', 'opcao', { s: nomeSe, cl: 'pessoal', op: ['Feminino', 'Masculino', 'Não binário', 'Prefiro não informar'] }),
-    F('raca', 'Raça/etnia', 'opcao', { s: nomeSe, cl: 'pessoal', op: ['Amarela', 'Branca', 'Indígena', 'Parda', 'Preta', 'Prefiro não informar'] }),
-    F('pcd', 'Pessoa com deficiência', 'sim', { s: nomeSe, cl: 'pessoal' }),
-    F('estado_civil', 'Estado civil', 'opcao', { s: nomeSe, cl: 'pessoal', op: ['Solteiro(a)', 'Casado(a)', 'União estável', 'Divorciado(a)', 'Viúvo(a)'] }),
-    F('escolaridade', 'Escolaridade', 'opcao', { s: nomeSe, cl: 'pessoal', op: ['Fundamental', 'Médio', 'Técnico', 'Superior incompleto', 'Superior completo', 'Pós-graduação', 'Mestrado', 'Doutorado'] }),
-    F('mae', 'Nome da mãe', 'texto', { s: nomeSe, cl: 'pessoal' }),
-    F('pai', 'Nome do pai', 'texto', { s: nomeSe, cl: 'pessoal' }),
+    F('nascimento', 'Data de nascimento', 'data', { req: true, s: nomeSe }),
+    F('genero', 'Gênero', 'opcao', { req: true, s: nomeSe, cl: 'pessoal', alias: ['Sexo'], op: ['Feminino', 'Masculino', 'Não binário', 'Não informado', 'Transgênero', 'Gênero neutro', 'Prefiro não declarar'] }),
+    F('raca', 'Raça/etnia', 'opcao', { s: nomeSe, cl: 'pessoal', alias: ['Raça / Etnia', 'Raça', 'Etnia'], op: ['Amarela', 'Branca', 'Indígena', 'Parda', 'Preta', 'Outro'] }),
+    F('pcd', 'Pessoa com deficiência', 'sim', { s: nomeSe, cl: 'pessoal', alias: ['PCD'] }),
+    F('estado_civil', 'Estado civil', 'opcao', { s: nomeSe, cl: 'pessoal', op: ['Casado', 'Divorciado', 'Separado', 'Solteiro', 'União Estável', 'Viúvo'] }),
+    F('escolaridade', 'Escolaridade', 'opcao', { s: nomeSe, cl: 'pessoal', op: ['Analfabeto', 'Quinto Ano Incompleto', 'Quinto Ano Completo', 'Fundamental Incompleto', 'Fundamental Completo', 'Médio Incompleto', 'Médio Completo', 'Curso Técnico', 'Curso extra-curricular', 'Certificação', 'Tecnólogo', 'Superior Incompleto', 'Superior (cursando)', 'Superior Completo', 'Pós Graduação (cursando)', 'Pós Graduação', 'MBA', 'Mestrado', 'Doutorado', 'Pós-doutorado'] }),
+    F('mae', 'Nome da mãe', 'texto', { s: nomeSe, cl: 'pessoal', alias: ['Mãe'] }),
+    F('pai', 'Nome do pai', 'texto', { s: nomeSe, cl: 'pessoal', alias: ['Pai'] }),
     F('cep', 'CEP', 'texto', { s: endSe, cl: 'pessoal' }), F('logradouro', 'Logradouro', 'texto', { s: endSe, cl: 'pessoal' }),
     F('numero', 'Número', 'texto', { s: endSe, cl: 'pessoal' }), F('complemento', 'Complemento', 'texto', { s: endSe, cl: 'pessoal' }),
     F('bairro', 'Bairro', 'texto', { s: endSe, cl: 'pessoal' }), F('cidade', 'Cidade', 'texto', { s: endSe, cl: 'pessoal' }),
-    F('uf', 'UF', 'opcao', { s: endSe, cl: 'pessoal', op: UFS }),
-    F('email', 'E-mail corporativo', 'email', { s: conSe }), F('email_pessoal', 'E-mail pessoal', 'email', { s: conSe, cl: 'pessoal' }),
+    F('uf', 'UF', 'opcao', { s: endSe, cl: 'pessoal', alias: ['Estado'], op: UFS }),
+    F('email', 'E-mail', 'email', { req: true, s: conSe }), F('email_corporativo', 'E-mail corporativo', 'email', { s: conSe, alias: ['Email Corporativo'] }),
+    F('email_pessoal', 'E-mail pessoal', 'email', { s: conSe, cl: 'pessoal', alias: ['Email Pessoal'] }),
     F('celular', 'Celular', 'tel', { s: conSe, cl: 'pessoal' }), F('telefone', 'Telefone', 'tel', { s: conSe, cl: 'pessoal' }),
-    F('contato_emergencia', 'Contato de emergência', 'texto', { s: conSe, cl: 'pessoal' }),
+    F('contato_emergencia', 'Contato de emergência', 'texto', { s: conSe, cl: 'pessoal', alias: ['Emergencia', 'Emergência'] }),
     F('data_admissao', 'Data de admissão', 'data', { req: true, s: ctrSe }),
-    F('departamento_id', 'Departamento', 'ref', { ref: 'departamento', s: ctrSe }),
-    F('cargo_id', 'Cargo', 'ref', { ref: 'cargo', s: ctrSe }),
+    F('departamento_id', 'Departamento', 'ref', { ref: 'departamento', req: true, s: ctrSe }),
+    F('cargo_id', 'Cargo', 'ref', { ref: 'cargo', req: true, s: ctrSe }),
     F('filial_id', 'Filial', 'ref', { ref: 'filial', s: ctrSe }),
     F('unidade_id', 'Unidade', 'ref', { ref: 'unidade', s: ctrSe }),
-    F('tipo_contrato', 'Tipo de contrato', 'opcao', { s: ctrSe, op: ['CLT', 'Estágio', 'Aprendiz', 'Temporário', 'Prazo determinado', 'Autônomo', 'PJ', 'Sócio'] }),
-    F('turno', 'Turno', 'opcao', { s: ctrSe, op: ['Manhã', 'Tarde', 'Noite', 'Integral', 'Escala'] }),
+    F('tipo_contrato', 'Tipo de contrato', 'opcao', { s: ctrSe, op: ['CLT', 'CLT + Comissão', 'Comissionado', 'Concursados', 'Contrato', 'Cooperado', 'Efetivos', 'Estagiário', 'Estatuários', 'Menor Aprendiz', 'Jovem Aprendiz', 'Prestador de Serviço', 'Sócio', 'Temporário', 'Parceiros', 'Mais Médicos', 'Cedido pela União', 'Outros'] }),
+    F('turno', 'Turno', 'texto', { s: ctrSe }),
     F('matricula', 'Matrícula', 'texto', { s: ctrSe }),
     F('superior_id', 'Superior direto', 'ref', { ref: 'colaborador', s: ctrSe }),
     F('salario', 'Salário', 'dinheiro', { s: ctrSe, cl: 'salario', min: 0 }),
+    F('grau_hierarquico', 'Grau hierárquico', 'opcao', { s: ctrSe, op: ['Alto', 'Médio', 'Baixo'] }),
+    F('periodo_experiencia', 'Período de experiência (dias)', 'numero', { s: ctrSe, min: 0, max: 365, inteiro: true, alias: ['Período de experiência', 'Período em dias'] }),
     F('fim_experiencia', 'Fim da experiência', 'data', { s: ctrSe }),
-    F('fim_contrato', 'Fim do contrato', 'data', { s: ctrSe }),
+    F('data_contrato', 'Data do contrato', 'data', { s: ctrSe }),
+    F('duracao_contrato', 'Duração do contrato (dias)', 'numero', { s: ctrSe, min: 0, max: 3650, inteiro: true, alias: ['Duração do contrato'] }),
+    F('fim_contrato', 'Vencimento do contrato', 'data', { s: ctrSe, alias: ['Fim do contrato'] }),
+    F('inicio_cargo', 'Início no cargo', 'data', { s: ctrSe, alias: ['Data de início no cargo'] }),
+    F('inicio_vigencia', 'Início de vigência', 'data', { s: ctrSe }),
+    F('codigo_externo', 'Código externo', 'texto', { s: ctrSe }),
+    F('duplo_vinculo', 'Duplo vínculo', 'sim', { s: ctrSe }),
     F('periculosidade', 'Periculosidade', 'sim', { s: ctrSe }), F('insalubridade', 'Insalubridade', 'sim', { s: ctrSe }),
-    F('cpf', 'CPF', 'texto', { s: docSe, cl: 'pessoal' }), F('rg', 'RG', 'texto', { s: docSe, cl: 'pessoal' }),
-    F('cnh', 'CNH', 'texto', { s: docSe, cl: 'pessoal' }), F('titulo_eleitor', 'Título de eleitor', 'texto', { s: docSe, cl: 'pessoal' }),
-    F('pis', 'PIS', 'texto', { s: docSe, cl: 'pessoal' }), F('ctps', 'CTPS', 'texto', { s: docSe, cl: 'pessoal' }),
+    F('percentual_insalubridade', 'Percentual de insalubridade', 'opcao', { s: ctrSe, op: ['10%', '20%', '40%'] }),
+    F('cpf', 'CPF', 'texto', { obrig: true, s: docSe, cl: 'pessoal' }), F('estrangeiro', 'Estrangeiro (sem CPF)', 'sim', { s: docSe, cl: 'pessoal', alias: ['Estrangeiro'] }),
+    F('cnpj', 'CNPJ', 'texto', { s: docSe, cl: 'pessoal' }), F('rg', 'RG', 'texto', { s: docSe, cl: 'pessoal' }),
+    F('rg_expedicao', 'RG: data de expedição', 'data', { s: docSe, cl: 'pessoal', alias: ['Data de expedição'] }),
+    F('rg_orgao', 'RG: órgão expedidor', 'texto', { s: docSe, cl: 'pessoal', alias: ['Órgão Expedidor'] }),
+    F('cnh', 'CNH', 'texto', { s: docSe, cl: 'pessoal' }), F('reservista', 'Reservista', 'texto', { s: docSe, cl: 'pessoal' }),
+    F('titulo_eleitor', 'Título de eleitor', 'texto', { s: docSe, cl: 'pessoal' }),
+    F('titulo_zona', 'Zona eleitoral', 'texto', { s: docSe, cl: 'pessoal' }), F('titulo_secao', 'Seção eleitoral', 'texto', { s: docSe, cl: 'pessoal' }),
+    F('pis', 'PIS', 'texto', { s: docSe, cl: 'pessoal' }), F('ctps', 'CTPS: número', 'texto', { s: docSe, cl: 'pessoal', alias: ['CTPS', 'CTPS NUM'] }),
+    F('ctps_serie', 'CTPS: série', 'texto', { s: docSe, cl: 'pessoal', alias: ['CTPS Série'] }),
     F('matricula_esocial', 'Matrícula eSocial', 'texto', { s: docSe, cl: 'pessoal' }),
     F('banco', 'Banco', 'texto', { s: docSe, cl: 'pessoal' }), F('agencia', 'Agência', 'texto', { s: docSe, cl: 'pessoal' }),
-    F('conta', 'Conta', 'texto', { s: docSe, cl: 'pessoal' }), F('pix', 'Chave Pix', 'texto', { s: docSe, cl: 'pessoal' }),
+    F('conta', 'Conta', 'texto', { s: docSe, cl: 'pessoal', alias: ['Conta Corrente'] }), F('pix', 'Chave Pix', 'texto', { s: docSe, cl: 'pessoal' }),
     F('observacoes', 'Observações', 'longo', { s: adiSe }),
   ],
   colunas: ['nome', 'cargo_id', 'departamento_id', 'data_admissao', 'salario',
@@ -74,9 +91,14 @@ const colaborador = {
   fixar(d, atual) {
     if (!atual) d.situacao = 'Ativo';
     if (d.cpf) d.cpf = formataCpf(d.cpf);
+    // informado o período, a data final sai dele (o campo de data pode ser usado sozinho)
+    if (d.periodo_experiencia && d.data_admissao) d.fim_experiencia = addDias(d.data_admissao, d.periodo_experiencia - 1);
+    if (d.duracao_contrato && d.data_contrato) d.fim_contrato = addDias(d.data_contrato, d.duracao_contrato - 1);
+    if (!d.insalubridade) d.percentual_insalubridade = null;
   },
   validar(d, c, atual) {
     const e = [];
+    if (!d.cpf && !d.estrangeiro) e.push('Preencha: CPF (ou marque Estrangeiro).');
     if (d.cpf && !cpfValido(d.cpf)) e.push('CPF inválido.');
     if (d.cpf && c.listar('colaborador', { inativos: true }).some(o => o.cpf === d.cpf && o.id !== atual?.id)) e.push('Já existe colaborador com este CPF.');
     return e;

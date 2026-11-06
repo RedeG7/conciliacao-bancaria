@@ -52,7 +52,7 @@ h3.primeiro, form > h3:first-child { margin-top: 0; }
 .campo.largo { grid-column: 1 / -1; }
 input, select, textarea { font: inherit; padding: 8px 10px; border: 1px solid var(--borda); border-radius: 8px; background: var(--card); color: var(--texto); width: 100%; }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--verde); outline-offset: -1px; }
-fieldset { border: 0; padding: 0; margin: 0; }
+fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .linha-rep { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; padding: 12px; background: var(--linha-fundo); border: 1px solid var(--linha-borda); border-left: 4px solid var(--verde); border-radius: 10px; margin-bottom: 8px; }
 .linha-rep > .campo { flex: 1 1 150px; min-width: 0; } .linha-rep > .remover-linha { flex: 0 0 auto; height: 38px; }
 .botao.sec.remover-linha { color: var(--erro); border-color: var(--erro-borda); background: var(--erro-fundo); font-weight: 700; }
