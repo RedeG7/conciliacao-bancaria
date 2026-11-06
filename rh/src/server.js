@@ -436,6 +436,60 @@ app.get('/performance', h((req, res) => {
     { descricao: 'Alta = desempenho 4 ou 5. Baixa = desempenho 1 ou 2.' }));
 }));
 
+// ---------------------------------------------------------------- visão geral
+const FICHA = (c, id) => html`<a href="/cad/colaboradores/${id}/ficha">${c.nome('colaborador', id) || 'Colaborador removido'}</a>`;
+const ABA_AVD = [['cargos', 'Cargos', 'cargo'], ['departamentos', 'Departamentos', 'departamento'], ['unidades', 'Unidades', 'unidade']];
+
+function visaoAvd(req) {
+  const c = req.c, { ciclos, atual, avaliacoes } = seletorCiclo(req);
+  if (!atual) return html`<div class="aviso alerta">Crie um ciclo em <a href="/cad/ciclos-avaliacao">Solicitar Avaliação</a> e lance as avaliações.</div>`;
+  const pendentes = M.pendentesAvd(atual, c.listar('colaborador'), avaliacoes);
+  const total = avaliacoes.length + pendentes.length;
+  const pessoa = a => c.registro('colaborador', a.colaborador_id) || {};
+  const [por, rotulo, kind] = ABA_AVD.find(x => x[0] === req.query.por) || ABA_AVD[0];
+  const todos = req.query.mostrar === 'todos';
+  const medias = M.mediasPor(avaliacoes, a => c.nome(kind, pessoa(a)[`${kind}_id`]) || `Sem ${kind}`);
+  const url = (p, m) => `?aba=avd&ciclo=${atual.id}&por=${p}&mostrar=${m}`;
+  const linhas = [
+    ...avaliacoes.map(a => [FICHA(c, a.colaborador_id), c.nome('colaborador', pessoa(a).superior_id) || '-', c.nome('cargo', pessoa(a).cargo_id) || '-', 'Respondida', a.desempenho, a.potencial]),
+    ...pendentes.map(p => [FICHA(c, p.id), c.nome('colaborador', p.superior_id) || '-', c.nome('cargo', p.cargo_id) || '-', 'Pendente', '-', '-']),
+  ];
+  return html`${formCiclo(ciclos, atual)}
+    <div class="cards4">${cartao('Avaliados', avaliacoes.length)}${cartao('Pendentes', pendentes.length)}
+      ${cartao('Taxa de resposta', total ? `${Math.round((avaliacoes.length / total) * 100)}%` : '-')}${cartao('Média de desempenho', avaliacoes.length ? n2(M.media(avaliacoes.map(a => a.desempenho))) : '-', 'Notas de 1 a 5')}</div>
+    <h3>Notas médias</h3>
+    <div class="abas">${ABA_AVD.map(([p, r]) => html`<a href="${url(p, todos ? 'todos' : 'top')}" class="${p === por ? 'ativo' : ''}">${r}</a>`)}
+      <a href="${url(por, 'top')}" class="fim ${todos ? '' : 'ativo'}">Top 5</a><a href="${url(por, 'todos')}" class="${todos ? 'ativo' : ''}">Todos</a></div>
+    <div class="card">${barras(todos ? medias : medias.slice(0, 5), `Nenhuma avaliação por ${rotulo.toLowerCase()} neste ciclo.`, { partes: false })}</div>
+    <h3>Avaliações do ciclo</h3>
+    ${tabela(['Avaliado', 'Avaliador', 'Cargo', 'Status', 'Desempenho', 'Potencial'], linhas, 'Nenhuma avaliação neste ciclo.')}
+    <a class="botao sec" href="/cad/avaliacoes">Ver todas as avaliações</a>`;
+}
+
+function visaoPdi(req) {
+  const c = req.c, dia = hoje(), pdis = ordenar(KINDS.pdi, c.listar('pdi')), avaliacoes = c.listar('avaliacao');
+  const nota = p => (avaliacoes.find(a => a.colaborador_id === p.colaborador_id && a.ciclo_id === p.ciclo_id) || avaliacoes.find(a => a.colaborador_id === p.colaborador_id))?.desempenho ?? '-';
+  const ativa = M.PDI_SITUACOES.includes(req.query.pdi) ? req.query.pdi : 'Todos';
+  const conta = s => pdis.filter(p => M.situacaoPdi(p, dia) === s).length;
+  const lista = ativa === 'Todos' ? pdis : pdis.filter(p => M.situacaoPdi(p, dia) === ativa);
+  return html`<div class="abas">${[['Todos', pdis.length], ...M.PDI_SITUACOES.map(s => [s, conta(s)])].map(([s, n]) => html`<a href="?aba=pdi&pdi=${encodeURIComponent(s)}" class="${s === ativa ? 'ativo' : ''}">${s}<span>${n}</span></a>`)}</div>
+    ${tabela(['Colaborador', 'Título do PDI', 'Iniciado em', 'Prazo', 'Nota AVD', 'Status'], lista.map(p => [FICHA(c, p.colaborador_id), html`<a href="/cad/pdi/${p.id}">${p.titulo}</a>`, dataBr(p.inicio), dataBr(p.entrega), nota(p), M.situacaoPdi(p, dia).replace(/s$/, '')]), 'Nenhum PDI nesta situação.')}
+    <a class="botao sec" href="/cad/pdi">Ver todos os PDIs</a>`;
+}
+
+function visaoFeedbacks(req) {
+  const c = req.c, lista = c.listar('feedback').sort((a, b) => String(b.data).localeCompare(String(a.data))).slice(0, 50);
+  return html`${tabela(['Colaborador', 'Tipo do feedback', 'Data', 'Autor'], lista.map(f => [FICHA(c, f.colaborador_id), html`<a href="/cad/feedbacks/${f.id}">${f.classificacao}</a>`, dataBr(f.data), f.criado_por || '-']), 'Nenhum feedback registrado.')}
+    <a class="botao sec" href="/cad/feedbacks">Ver todos os feedbacks</a>`;
+}
+
+app.get('/desenvolvimento', h((req, res) => {
+  const abas = { avd: ['AVD', visaoAvd], pdi: ['PDI', visaoPdi], feedbacks: ['Feedbacks', visaoFeedbacks] };
+  const ativa = abas[req.query.aba] ? req.query.aba : 'avd';
+  res.send(layout(req, 'Visão Geral', html`<div class="abas">${Object.entries(abas).map(([k, [r]]) => html`<a href="?aba=${k}" class="${k === ativa ? 'ativo' : ''}">${r}</a>`)}</div>${abas[ativa][1](req)}`,
+    { migalha: 'Desenv. e Performance', descricao: 'Avaliações, PDIs e feedbacks reunidos em um só lugar.' }));
+}));
+
 app.get('/cad/pdi/avaliados-sem-pdi', h((req, res) => {
   const c = req.c, editar = pode(req.papel, 'edita');
   const lista = M.avaliadosSemPdi(c.listar('colaborador'), c.listar('avaliacao'), c.listar('pdi'));

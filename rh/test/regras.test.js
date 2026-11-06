@@ -97,3 +97,18 @@ test('métricas', () => {
   assert.strictEqual(r.menosDeUmAno, 1);
   assert.strictEqual(r.valorRescisao, 100);
 });
+
+test('visão geral: situação do PDI, pendentes da AVD e médias por grupo', () => {
+  const dia = '2026-11-06';
+  assert.strictEqual(M.situacaoPdi({ status: 'Finalizado', entrega: '2026-01-01' }, dia), 'Concluídos');
+  assert.strictEqual(M.situacaoPdi({ status: 'Aberto', entrega: '2026-11-05' }, dia), 'Atrasados');
+  assert.strictEqual(M.situacaoPdi({ status: 'Em revisão', entrega: '2026-11-05' }, dia), 'Atrasados');
+  assert.strictEqual(M.situacaoPdi({ status: 'Em revisão', entrega: '2026-11-06' }, dia), 'Aguardando aprovação');
+  assert.strictEqual(M.situacaoPdi({ status: 'Aberto', entrega: '2026-12-01' }, dia), 'Em andamento');
+  const pessoas = [{ id: 1, situacao: 'Ativo', data_admissao: '2026-01-01' }, { id: 2, situacao: 'Ativo', data_admissao: '2026-01-01' },
+    { id: 3, situacao: 'Inativo', data_admissao: '2026-01-01' }, { id: 4, situacao: 'Ativo', data_admissao: '2027-01-01' }];
+  const ciclo = { status: 'Aberto', fim: '2026-12-31' };
+  assert.deepStrictEqual(M.pendentesAvd(ciclo, pessoas, [{ colaborador_id: 1 }]).map(p => p.id), [2]);
+  assert.deepStrictEqual(M.pendentesAvd({ ...ciclo, status: 'Encerrado' }, pessoas, []), []);
+  assert.deepStrictEqual(M.mediasPor([{ g: 'A', desempenho: 2 }, { g: 'B', desempenho: 5 }, { g: 'A', desempenho: 4 }], a => a.g), [['B', 5], ['A', 3]]);
+});

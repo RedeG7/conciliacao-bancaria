@@ -73,4 +73,27 @@ function avaliadosSemPdi(colaboradores, avaliacoes, pdis) {
     .sort((a, b) => a.avaliacao.desempenho - b.avaliacao.desempenho);
 }
 
-module.exports = { avaliadosSemPdi, contar, media, resumoQuadro, resumoDesligamentos, matriz, enps };
+// Visão Geral: situação do PDI vista por quem acompanha. Atraso vem antes da
+// revisão, porque é o que pede ação primeiro.
+const PDI_SITUACOES = ['Em andamento', 'Concluídos', 'Atrasados', 'Aguardando aprovação'];
+function situacaoPdi(p, hoje) {
+  if (p.status === 'Finalizado') return 'Concluídos';
+  if (p.entrega && p.entrega < hoje) return 'Atrasados';
+  return p.status === 'Em revisão' ? 'Aguardando aprovação' : 'Em andamento';
+}
+
+// pendente = ativo, admitido até o fim do ciclo e sem avaliação; só em ciclo aberto
+function pendentesAvd(ciclo, colaboradores, avaliacoes) {
+  if (ciclo.status !== 'Aberto') return [];
+  const feitos = new Set(avaliacoes.map(a => a.colaborador_id));
+  return colaboradores.filter(c => c.situacao === 'Ativo' && !feitos.has(c.id) && (!c.data_admissao || c.data_admissao <= ciclo.fim));
+}
+
+// média de desempenho por grupo, da maior para a menor
+function mediasPor(avaliacoes, grupoDe) {
+  const grupos = new Map();
+  for (const a of avaliacoes) grupos.set(grupoDe(a), [...(grupos.get(grupoDe(a)) || []), a.desempenho]);
+  return [...grupos].map(([g, n]) => [g, media(n)]).sort((x, y) => y[1] - x[1] || String(x[0]).localeCompare(String(y[0])));
+}
+
+module.exports = { avaliadosSemPdi, contar, media, resumoQuadro, resumoDesligamentos, matriz, enps, PDI_SITUACOES, situacaoPdi, pendentesAvd, mediasPor };

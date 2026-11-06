@@ -261,3 +261,28 @@ test('menu em abas e subabas: abre a aba da tela atual e não perde nenhuma tela
   assert.strictEqual(new Set(todas).size, todas.length, 'tela repetida no menu');
   for (const url of todas) assert.strictEqual((await get(url, ck)).status, 200, url);
 });
+
+test('visão geral reúne AVD, PDI e feedbacks', async () => {
+  const ck = await login('?office=vg');
+  await novoColab(ck, { nome: 'Pessoa Avaliada' });
+  await novoColab(ck, { nome: 'Pessoa Pendente' });
+  assert.match(await texto('/desenvolvimento', ck), /Crie um ciclo/);
+  const ids = [...(await texto('/cad/colaboradores', ck)).matchAll(/\/cad\/colaboradores\/(\d+)\/ficha">Pessoa (\w+)/g)];
+  const id = n => ids.find(m => m[2] === n)[1];
+  await post('/cad/ciclos-avaliacao/novo', ck, { titulo: 'Ciclo 1', inicio: '2020-01-01', fim: '2099-12-31', status: 'Aberto' });
+  const ciclo_id = (await texto('/cad/ciclos-avaliacao', ck)).match(/\/cad\/ciclos-avaliacao\/(\d+)/)[1];
+  await post('/cad/avaliacoes/novo', ck, { ciclo_id, colaborador_id: id('Avaliada'), desempenho: '4', potencial: '3' });
+  await post('/cad/pdi/novo', ck, { colaborador_id: id('Avaliada'), titulo: 'Plano atrasado', inicio: '2020-01-01', entrega: '2020-06-01', status: 'Aberto' });
+  await post('/cad/feedbacks/novo', ck, { colaborador_id: id('Avaliada'), data: '2026-01-01', classificacao: 'Positivo', texto: 'Texto reservado' });
+  const avd = await texto('/desenvolvimento', ck);
+  assert.ok(avd.includes('Pendente') && avd.includes('50%'), 'uma de duas pessoas respondeu');
+  assert.ok((await texto('/desenvolvimento?aba=avd&por=unidades&mostrar=todos', ck)).includes('Sem unidade'));
+  const atrasados = await texto('/desenvolvimento?aba=pdi&pdi=Atrasados', ck);
+  assert.ok(atrasados.includes('Plano atrasado'));
+  assert.match(atrasados, /<td data-label="Nota AVD">4<\/td>/);
+  assert.ok(!(await texto('/desenvolvimento?aba=pdi&pdi=Conclu%C3%ADdos', ck)).includes('Plano atrasado'));
+  const fb = await texto('/desenvolvimento?aba=feedbacks', ck);
+  assert.ok(fb.includes('Positivo') && !fb.includes('Texto reservado'), 'a lista não mostra o texto do feedback');
+  const outro = await login('?office=outro-vg');
+  assert.ok(!(await texto('/desenvolvimento?aba=pdi', outro)).includes('Plano atrasado'), 'isolamento entre escritórios');
+});

@@ -183,3 +183,4 @@ ol.guia { list-style: none; padding: 0; margin: 0; }
 .pergunta { margin-bottom: 16px; }
 .celula-acoes { white-space: nowrap; }
 @media (max-width: 640px) { .barras .item { grid-template-columns: 1fr 64px; } .barras .barra { grid-column: 1 / -1; grid-row: 2; } .nove { grid-template-columns: 1fr; } .nove > div { min-height: 0; } }
+.abas a.fim { margin-left: auto; }
