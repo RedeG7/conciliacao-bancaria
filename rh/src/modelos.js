@@ -21,6 +21,22 @@ function vencimentoTreinamento(participacao, treinamento) {
 }
 const dataTexto = s => (s ? s.split('-').reverse().join('/') : '');
 const ENPS_PADRAO = 'De 0 a 10, o quanto você recomendaria esta empresa como um bom lugar para trabalhar?';
+// perguntas prontas por categoria: a pessoa edita antes de abrir a pesquisa
+const MODELOS_PESQUISA = {
+  eNPS: [ENPS_PADRAO],
+  Clima: [
+    'Tenho clareza do que se espera do meu trabalho.',
+    'Tenho as ferramentas e informações de que preciso para trabalhar bem.',
+    'Minha liderança direta me orienta e me dá retorno sobre o meu trabalho.',
+    'Sinto que posso dar minha opinião sem medo de consequências.',
+    'A comunicação entre as áreas funciona bem.',
+    'Sou reconhecido(a) pelo trabalho que faço.',
+    'Vejo oportunidades de aprender e crescer aqui.',
+    'Considero justa a minha remuneração e os meus benefícios.',
+    'Consigo equilibrar o trabalho com a minha vida pessoal.',
+    'Tenho orgulho de trabalhar nesta empresa.',
+  ],
+};
 
 function cpfValido(cpf) {
   const c = String(cpf).replace(/\D/g, '');
@@ -230,13 +246,18 @@ const KINDS_LISTA = [
   {
     kind: 'pesquisa', slug: 'pesquisas', titulo: 'Pesquisas', singular: 'pesquisa', icone: '📋',
     desc: 'Clima e eNPS por link anônimo: nenhuma resposta fica ligada a uma pessoa.',
-    campos: [F('titulo', 'Título', 'texto', { req: true }), F('categoria', 'Categoria', 'opcao', { req: true, op: ['Clima', 'eNPS', 'Outra'] }), F('status', 'Status', 'opcao', { req: true, op: ['Rascunho', 'Aberta', 'Encerrada'] }),
+    campos: [F('titulo', 'Título', 'texto', { req: true }), F('categoria', 'Categoria', 'opcao', { req: true, op: ['Clima', 'eNPS', 'Personalizada'] }), F('status', 'Status', 'opcao', { req: true, op: ['Rascunho', 'Aberta', 'Encerrada'] }),
       F('disponivel_em', 'Disponível a partir de', 'data'), F('perguntas', 'Perguntas (uma por linha, nota de 0 a 10)', 'longo'), F('token', 'Link', 'texto', { interno: true })],
-    colunas: ['titulo', 'categoria', 'status', 'disponivel_em', { r: 'Respostas', v: (r, c) => c.respostas(r.id) }],
+    colunas: ['titulo', 'categoria', 'status', 'disponivel_em', { r: 'Respostas', v: (r, c) => c.respostas(r.id) }, { r: 'Última resposta', v: (r, c) => dataTexto(c.ultimaResposta(r.id)) }],
+    novoHref: '/cad/pesquisas/modelos', acoesLista: [['/cad/pesquisas/comparar', 'Comparar pesquisas']],
+    aoAbrirNovo(d) {
+      if (!d.status) d.status = 'Rascunho';
+      if (!d.perguntas && MODELOS_PESQUISA[d.categoria]) d.perguntas = MODELOS_PESQUISA[d.categoria].join('\n');
+    },
     acoes: r => [[`/pesquisas/${r.id}`, 'Resultados']],
     fixar(d, atual, c) {
       if (!d.token) d.token = c.novoToken();
-      if (d.categoria === 'eNPS' && !String(d.perguntas || '').trim()) d.perguntas = ENPS_PADRAO;
+      if (!String(d.perguntas || '').trim() && MODELOS_PESQUISA[d.categoria]) d.perguntas = MODELOS_PESQUISA[d.categoria].join('\n');
     },
     validar(d, c, atual) {
       const e = [];
@@ -272,4 +293,4 @@ const rotulo = (k, r) => (k.rotulo ? k.rotulo(r) : r.nome || r.titulo || `#${r.i
 // abas da ficha do colaborador
 const HISTORICO = ['ocorrencia', 'feedback', 'ferias', 'banco_horas', 'saude', 'dependente', 'avaliacao', 'meta_colaborador', 'pdi', 'participacao', 'beneficiario', 'desligamento'];
 
-module.exports = { KINDS, KINDS_LISTA, porSlug, rotulo, HISTORICO, MESES, ENPS_PADRAO, cpfValido, formataCpf, vencimentoTreinamento };
+module.exports = { KINDS, KINDS_LISTA, porSlug, rotulo, HISTORICO, MESES, ENPS_PADRAO, MODELOS_PESQUISA, cpfValido, formataCpf, vencimentoTreinamento };

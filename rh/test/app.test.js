@@ -132,7 +132,7 @@ test('pesquisa anônima: link público, uma resposta, resultado só com 3 ou mai
   assert.match(res, /<b>33<\/b>/, '2 promotores e 1 detrator de 3 = 33');
   r = await post(`/pesquisa/${token}`, 'rh_resp_' + id + '=1', { q0: '10' });
   assert.match(await r.text(), /já foi registrada/);
-  r = await post(`/cad/pesquisas/${id}`, ck, { titulo: 'Clima', categoria: 'Outra', status: 'Aberta', perguntas: 'Outra pergunta' });
+  r = await post(`/cad/pesquisas/${id}`, ck, { titulo: 'Clima', categoria: 'Personalizada', status: 'Aberta', perguntas: 'Outra pergunta' });
   assert.strictEqual(r.status, 422, 'perguntas travadas depois da 1ª resposta');
 });
 
@@ -217,4 +217,32 @@ test('treinamento com horas e competências; PDI a partir de quem foi avaliado',
   await post('/cad/pdi/novo', ck, { colaborador_id: id, ciclo_id: ciclo, titulo: 'Plano', inicio: '2026-01-01', entrega: '2026-06-01', status: 'Aberto' });
   assert.ok(!(await texto('/cad/pdi/avaliados-sem-pdi', ck)).includes('Avaliada'));
   assert.match(await texto('/cad/pdi', ck), /Ciclo A/);
+});
+
+test('modelos de pesquisa, última resposta e comparação sem quebrar o anonimato', async () => {
+  const ck = await login('?office=mod&u=adm');
+  assert.match(await texto('/cad/pesquisas', ck), /href="\/cad\/pesquisas\/modelos"/);
+  assert.match(await texto('/cad/pesquisas/modelos', ck), /Clima[\s\S]*eNPS[\s\S]*Personalizada/);
+  const form = await texto('/cad/pesquisas/novo?categoria=Clima', ck);
+  assert.match(form, /Tenho orgulho de trabalhar/, 'modelo já vem preenchido para editar');
+  assert.ok(!(await texto('/cad/pesquisas/novo?categoria=Personalizada', ck)).includes('Tenho orgulho'));
+  assert.match(await texto('/cad/pesquisas/comparar', ck), /Abra ao menos duas/);
+  const comum = 'Pergunta igual\n';
+  await post('/cad/pesquisas/novo', ck, { titulo: 'Semestre 1', categoria: 'Personalizada', status: 'Aberta', perguntas: `${comum}So da primeira` });
+  await post('/cad/pesquisas/novo', ck, { titulo: 'Semestre 2', categoria: 'Personalizada', status: 'Aberta', perguntas: `${comum}So da segunda` });
+  const lista = await texto('/cad/pesquisas', ck);
+  const [id2, id1] = [...lista.matchAll(/href="\/pesquisas\/(\d+)"/g)].map(m => m[1]);
+  const tok = async id => (await texto(`/pesquisas/${id}`, ck)).match(/\/pesquisa\/([\w-]+)/)[1];
+  const [t1, t2] = [await tok(id1), await tok(id2)];
+  for (const n of ['4', '6', '8']) await post(`/pesquisa/${t1}`, '', { q0: n, q1: '5' });
+  await post(`/pesquisa/${t2}`, '', { q0: '10', q1: '10' });
+  const c = await texto(`/cad/pesquisas/comparar?a=${id1}&b=${id2}`, ck);
+  assert.match(c, /Pergunta igual/);
+  assert.ok(!c.includes('So da primeira'), 'só perguntas em comum');
+  assert.match(c, /poucas respostas/, 'a pesquisa com 1 resposta não mostra nota');
+  assert.ok(!/<td[^>]*>10<\/td>/.test(c), 'a nota da resposta única não aparece');
+  assert.match(c, /<td[^>]*>6<\/td>/, 'média 6 na pergunta comum da que tem 3 respostas');
+  const hoje = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+  assert.ok((await texto('/cad/pesquisas', ck)).includes(hoje), 'coluna última resposta');
+  assert.strictEqual((await get('/cad/pesquisas/modelos', await login('?office=mod&admin=0&u=leitor'))).status, 403);
 });
