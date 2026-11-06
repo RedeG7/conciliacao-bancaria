@@ -42,8 +42,8 @@ function resumoDesligamentos(desligamentos, colaboradores, hoje, meses = 12) {
   };
 }
 
-// matriz 3x3: nota 1-2 = baixo, 3 = médio, 4-5 = alto
-const faixa = n => (n <= 2 ? 0 : n === 3 ? 1 : 2);
+// matriz 3x3: nota 1-2 = baixo, 3 = médio, 4-5 = alto (médias vão para a nota mais próxima)
+const faixa = n => (n < 2.5 ? 0 : n < 3.5 ? 1 : 2);
 const QUADRANTES = [ // linha = potencial (de cima para baixo: alto, médio, baixo), coluna = desempenho
   ['Enigma', 'Crescimento', 'Talento de destaque'],
   ['Atenção', 'Base consistente', 'Alto desempenho'],
@@ -51,7 +51,7 @@ const QUADRANTES = [ // linha = potencial (de cima para baixo: alto, médio, bai
 ];
 function matriz(avaliacoes) {
   const m = QUADRANTES.map(l => l.map(nome => ({ nome, itens: [] })));
-  for (const a of avaliacoes) m[2 - faixa(a.potencial)][faixa(a.desempenho)].itens.push(a);
+  for (const a of avaliacoes.filter(x => x.potencial != null)) m[2 - faixa(a.potencial)][faixa(a.desempenho)].itens.push(a);
   return m;
 }
 

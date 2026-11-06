@@ -309,7 +309,9 @@ function carregarImportavel(req) {
   return k;
 }
 app.get('/cad/:slug/importar', exige('edita'), h((req, res) => {
-  const k = carregarImportavel(req), aviso = k.kind === 'colaborador'
+  const k = carregarImportavel(req), aviso = ['ciclo', 'avaliacao'].includes(k.kind)
+    ? 'Aceita o arquivo de resultados de avaliação da Sólides: cria o ciclo do ano e uma avaliação por pessoa, com a média e as notas por competência.'
+    : k.kind === 'colaborador'
     ? 'CPF já cadastrado atualiza só as colunas da planilha. Departamento, cargo, filial e unidade novos são criados pelo nome.'
     : 'Aceita o arquivo de Exportar CSV. Registro já existente é atualizado, e linha repetida não duplica; os demais viram cadastro novo. Pessoas e outros cadastros citados precisam já existir, pelo nome; departamento, cargo, filial, unidade e grupo de competências são criados.';
   res.send(layout(req, `Importar: ${k.titulo}`, html`<form method="post" class="card">
@@ -323,12 +325,13 @@ app.get('/cad/:slug/importar/modelo', exige('edita'), h((req, res) => {
 }));
 app.post('/cad/:slug/importar', exige('edita'), h((req, res) => {
   const k = carregarImportavel(req);
-  const r = imp.importar(String(um(req.body.csv) || ''), req.c, req.user.name, k);
+  const csvTexto = String(um(req.body.csv) || '');
+  const r = ['ciclo', 'avaliacao'].includes(k.kind) && imp.ehAvaliacaoSolides(csvTexto) ? imp.importarAvaliacoes(csvTexto, req.c, req.user.name) : imp.importar(csvTexto, req.c, req.user.name, k);
   auditar(req, 'Importou', k.kind, null, `${r.criados} novos, ${r.atualizados} atualizados, ${r.erros.length} erros`);
   res.send(layout(req, 'Importação concluída', html`<div class="cards4">${cartao('Novos', r.criados)}${cartao('Atualizados', r.atualizados)}${cartao('Com erro', r.erros.length)}</div>
     ${r.erros.length ? html`<div class="aviso erro"><ul>${r.erros.slice(0, 100).map(e => html`<li>${e}</li>`)}</ul></div>` : ''}
     ${r.ignoradas.length ? html`<div class="aviso alerta">Colunas não reconhecidas (ignoradas): ${r.ignoradas.join(', ')}</div>` : ''}
-    <div class="acoes"><a class="botao" href="/cad/${k.slug}">Ver ${k.titulo.toLowerCase()}</a><a class="botao sec" href="/cad/${k.slug}/importar">Importar outra</a></div>`, { migalha: k.titulo }));
+    <div class="acoes"><a class="botao" href="/cad/${r.destino || k.slug}">Ver ${r.destino ? 'relatórios individuais' : k.titulo.toLowerCase()}</a><a class="botao sec" href="/cad/${k.slug}/importar">Importar outra</a></div>`, { migalha: k.titulo }));
 }));
 app.get('/cad/:slug/novo', exige('edita'), h((req, res) => {
   const k = carregarKind(req);
@@ -455,6 +458,19 @@ app.get('/matriz-potencial', h((req, res) => {
   res.send(layout(req, 'Matriz de potencial', html`${formCiclo(ciclos, atual)}<div class="card"><p class="eixo">↑ Potencial</p><div class="nove">
     ${M.matriz(avaliacoes).flat().map(q => html`<div><h4>${q.nome} (${q.itens.length})</h4><ul>${q.itens.map(a => html`<li><a href="/cad/colaboradores/${a.colaborador_id}/ficha">${req.c.nome('colaborador', a.colaborador_id)}</a></li>`)}</ul></div>`)}
   </div><p class="eixo">Desempenho →</p></div>`, { descricao: 'Nota 1-2 = baixo, 3 = médio, 4-5 = alto.' }));
+}));
+
+app.get('/avaliacoes/:id(\\d+)', h((req, res) => {
+  if (!ve(req.papel, 'pessoal')) throw falha(403, 'Seu papel não permite ver o relatório individual.');
+  const a = R.obter(req.office, 'avaliacao', req.params.id);
+  if (!a) throw falha(404, 'Avaliação não encontrada.');
+  const c = req.c, itens = a.itens || [];
+  const porGrupo = [...new Set(itens.map(i => i.grupo))].map(g => [g, M.media(itens.filter(i => i.grupo === g).map(i => i.nota))]);
+  res.send(layout(req, c.nome('colaborador', a.colaborador_id), html`<div class="cards4">${cartao('Desempenho', n2(a.desempenho))}${cartao('Potencial', a.potencial ?? 'Não avaliado')}${cartao('Ciclo', c.nome('ciclo', a.ciclo_id))}${cartao('Avaliador', a.avaliador || '-', dataBr(a.data_resposta))}</div>
+    ${porGrupo.length ? html`<div class="card"><h3 class="primeiro">Média por grupo</h3>${barras(porGrupo, '', { partes: false })}</div>` : ''}
+    ${a.comentario ? html`<div class="card"><h3 class="primeiro">Comentário geral</h3><p style="white-space:pre-line">${a.comentario}</p></div>` : ''}
+    ${itens.length ? tabela(['Competência', 'Grupo', 'Peso', 'Nota', 'Comentário'], itens.map(i => [i.competencia, i.grupo, i.peso, i.nota, i.comentario])) : ''}
+    <div class="acoes nao-imprime"><button type="button" class="botao sec" onclick="window.print()">Imprimir ou salvar PDF</button><a class="botao sec" href="/cad/avaliacoes">Voltar</a></div>`, { migalha: 'Relatórios Individuais' }));
 }));
 
 app.get('/performance', h((req, res) => {

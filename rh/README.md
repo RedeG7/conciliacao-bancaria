@@ -19,7 +19,7 @@ daquela plataforma.
 | `src/crud.js` | Lê e valida formulários, monta telas e exportação a partir dos modelos |
 | `src/acesso.js` | Papéis e classes de dados sensíveis |
 | `src/alertas.js`, `src/metricas.js`, `src/datas.js` | Regras puras, testadas sem banco |
-| `src/importar.js` | Importação por CSV de qualquer cadastro |
+| `src/importar.js` | Importação por CSV de qualquer cadastro e dos resultados de avaliação da Sólides |
 | `src/graficos.js` | Gráficos em HTML e CSS |
 | `src/comportamental.js` | Questionário próprio de perfil comportamental e cálculo |
 | `src/rotas_comportamental.js` | Telas e links do perfil comportamental |

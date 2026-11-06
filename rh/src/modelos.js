@@ -205,9 +205,11 @@ const KINDS_LISTA = [
   {
     kind: 'avaliacao', slug: 'avaliacoes', titulo: 'Avaliações', singular: 'avaliação', icone: '⭐', unico: ['ciclo_id', 'colaborador_id'],
     desc: 'Notas de 1 a 5, que alimentam a matriz de potencial e a análise de performance.',
+    acoes: r => [[`/avaliacoes/${r.id}`, 'Relatório']],
     campos: [F('ciclo_id', 'Ciclo', 'ref', { ref: 'ciclo', req: true }), colab(),
-      F('desempenho', 'Desempenho (1 a 5)', 'numero', { req: true, min: 1, max: 5, inteiro: true }), F('potencial', 'Potencial (1 a 5)', 'numero', { req: true, min: 1, max: 5, inteiro: true }),
-      F('comentario', 'Comentário', 'longo')],
+      F('desempenho', 'Desempenho (1 a 5)', 'numero', { req: true, min: 1, max: 5 }), F('potencial', 'Potencial (1 a 5)', 'numero', { min: 1, max: 5, inteiro: true }),
+      F('avaliador', 'Avaliador'), F('data_resposta', 'Data da resposta', 'data'), F('comentario', 'Comentário', 'longo', { cl: 'pessoal' }),
+      F('itens', 'Notas por competência', 'texto', { interno: true })],
     colunas: ['ciclo_id', 'colaborador_id', 'desempenho', 'potencial'],
   },
   {
