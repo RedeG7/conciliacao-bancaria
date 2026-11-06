@@ -24,6 +24,8 @@ daquela plataforma.
 
 ## Escopo
 
+O menu lateral segue os nomes e a organização da plataforma atual (abas e subabas). A tabela abaixo agrupa as telas por assunto, não pelo menu.
+
 | Área | Telas | Situação |
 |---|---|---|
 | Início | Painel com alertas, aniversariantes | ✅ |

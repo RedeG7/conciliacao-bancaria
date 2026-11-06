@@ -247,9 +247,17 @@ test('modelos de pesquisa, última resposta e comparação sem quebrar o anonima
   assert.strictEqual((await get('/cad/pesquisas/modelos', await login('?office=mod&admin=0&u=leitor'))).status, 403);
 });
 
-test('menu lateral marca os grupos para lembrar o que foi minimizado', async () => {
-  const h = await texto('/dash', await login());
-  assert.match(h, /<details class="grupo" data-grupo="Pessoas" open>/);
-  assert.ok(h.indexOf('menuFechado') > h.indexOf('</nav>'), 'restaura logo depois do menu, antes de pintar a tela');
+test('menu em abas e subabas: abre a aba da tela atual e não perde nenhuma tela', async () => {
+  const ck = await login();
+  const h = await texto('/cad/grupos-competencias', ck);
+  const { MENU } = require('../src/views');
+  assert.match(h, /<details class="grupo" data-grupo="Desenv\. e Performance" open>/);
+  assert.match(h, /<details class="grupo" data-grupo="Desenv\. e Performance\/Competências" open>/);
+  assert.match(h, /<details class="grupo" data-grupo="Gestão de Talentos" >/, 'as outras abas vêm fechadas');
+  assert.ok(h.indexOf('menuAberto') > h.indexOf('</nav>'), 'restaura logo depois do menu, antes de pintar a tela');
   assert.ok(h.includes('/static/app.js?v='), 'versão no endereço do script');
+  const hrefs = (itens) => itens.flatMap(i => (i.nome ? (i.href ? [i.href] : hrefs(i.itens)) : [i[0]]));
+  const todas = hrefs(MENU);
+  assert.strictEqual(new Set(todas).size, todas.length, 'tela repetida no menu');
+  for (const url of todas) assert.strictEqual((await get(url, ck)).status, 200, url);
 });

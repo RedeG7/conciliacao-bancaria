@@ -24,9 +24,16 @@ h1 { font-size: 1.5rem; margin: .2rem 0; } h3 { margin: 1.4rem 0 .6rem; font-siz
 .marca { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
 .marca small { display: block; opacity: .7; } .logo { font-size: 1.6rem; }
 .busca-menu { width: 100%; margin-bottom: 10px; background: #ffffff14; color: inherit; border-color: #ffffff22; }
-.grupo summary { cursor: pointer; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; opacity: .7; padding: 8px 6px 4px; }
-.grupo a { display: flex; gap: 8px; padding: 7px 8px; border-radius: 8px; color: inherit; text-decoration: none; }
-.grupo a:hover { background: #ffffff12; } .grupo a.ativo { background: var(--verde); color: #fff; }
+.lateral nav > .grupo { margin-bottom: 2px; }
+.grupo summary { cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; }
+.grupo summary b { flex: 1; font-weight: 500; min-width: 0; }
+.grupo summary::after { content: '›'; opacity: .6; transition: transform .15s; }
+.grupo[open] > summary::after { transform: rotate(90deg); }
+.grupo summary:hover { background: #ffffff12; }
+.grupo .subitens { margin-left: 16px; padding-left: 8px; border-left: 1px solid #ffffff22; }
+.grupo .subitens summary, .grupo .subitens a { font-size: .9rem; padding: 6px 8px; }
+.lateral nav a { display: flex; gap: 8px; padding: 7px 8px; border-radius: 8px; color: inherit; text-decoration: none; }
+.lateral nav a:hover { background: #ffffff12; } .lateral nav a.ativo { background: var(--verde); color: #fff; }
 .principal { flex: 1; min-width: 0; }
 .topo { display: flex; align-items: center; gap: 12px; padding: 10px 20px; background: var(--card); border-bottom: 1px solid var(--borda); position: sticky; top: 0; z-index: 5; }
 .escritorio { flex: 1; font-weight: 600; } .acoes-topo { display: flex; align-items: center; gap: 8px; }
