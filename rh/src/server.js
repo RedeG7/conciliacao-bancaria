@@ -311,7 +311,7 @@ function carregarImportavel(req) {
 app.get('/cad/:slug/importar', exige('edita'), h((req, res) => {
   const k = carregarImportavel(req), aviso = k.kind === 'colaborador'
     ? 'CPF já cadastrado atualiza só as colunas da planilha. Departamento, cargo, filial e unidade novos são criados pelo nome.'
-    : 'Aceita o arquivo de Exportar CSV. Registro já existente é atualizado, e linha repetida não duplica; os demais viram cadastro novo. Pessoas e outros cadastros citados precisam já existir, pelo nome.';
+    : 'Aceita o arquivo de Exportar CSV. Registro já existente é atualizado, e linha repetida não duplica; os demais viram cadastro novo. Pessoas e outros cadastros citados precisam já existir, pelo nome; departamento, cargo, filial, unidade e grupo de competências são criados.';
   res.send(layout(req, `Importar: ${k.titulo}`, html`<form method="post" class="card">
     ${campo('Arquivo CSV', html`<input type="file" accept=".csv,text/csv" class="ler-arquivo" data-alvo="csv">`)}
     ${campo('Conteúdo', html`<textarea id="csv" name="csv" rows="10" required></textarea>`)}
