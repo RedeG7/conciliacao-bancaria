@@ -4,13 +4,14 @@
 // acentos ou maiúsculas. Registro já existente atualiza só as colunas presentes
 // (colaborador pelo CPF; os demais pelos campos únicos ou pelo nome); os outros
 // viram cadastro novo. Departamento, cargo, filial e unidade que ainda não
-// existem são criados pelo nome; as demais referências precisam já existir.
+// existem são criados pelo nome, assim como grupos de competências; as demais
+// referências precisam já existir. Lista na mesma célula: separada por | ou vírgula.
 const R = require('./db');
 const { KINDS, rotulo } = require('./modelos');
 const { lerForm, norm } = require('./crud');
 const { ve } = require('./acesso');
 
-const CRIA_PELO_NOME = ['departamento', 'cargo', 'filial', 'unidade'];
+const CRIA_PELO_NOME = ['departamento', 'cargo', 'filial', 'unidade', 'grupo_competencia'];
 
 // separador detectado na 1ª linha (; ou ,); aspas podem conter o separador e quebra de linha
 function parseCsv(texto) {
@@ -96,7 +97,7 @@ function importar(texto, c, usuario, k = KINDS.colaborador) {
           let v = (lin[j] ?? '').trim();
           if (colab && f.n === 'superior_id') { superior = v; return; }
           if (f.t === 'ref' && v) v = refId(f.ref, v, f);
-          if (f.t === 'refs') v = v ? v.split(',').map(x => refId(f.ref, x.trim(), f)) : [];
+          if (f.t === 'refs') v = v ? v.split(v.includes('|') ? '|' : ',').filter(x => x.trim()).map(x => refId(f.ref, x.trim(), f)) : [];
           if (f.t === 'opcao' && v) v = opcao(f, v);
           if (f.t === 'sim' && v) v = /^(s|sim|1|true)$/i.test(v) ? '1' : '0';
           body[f.n] = v;

@@ -289,6 +289,23 @@ test('importar: todo cadastro aceita o arquivo que ele mesmo exporta', async () 
   assert.strictEqual((await get('/config/importar', ck)).status, 302);
 });
 
+test('importar competências: arquivo da Sólides com cargos separados por barra', async () => {
+  const ck = await login('?office=comp');
+  const csv = 'Competência,Grupo de competência,Descrição,Peso,Tipo de Avaliação,Cargo\nColaboração,Comportamentais,"Une, coopera\n",1,Desempenho,Auxiliar Financeiro |Diretor\nInovação,Comportamentais,Evolui,2,Desempenho,Diretor\n';
+  let t = await (await post('/cad/competencias/importar', ck, { csv })).text();
+  assert.match(t, /Novos<\/small><b>2</);
+  assert.doesNotMatch(t, /não reconhecidas/, 'todas as colunas entram');
+  const lista = await texto('/cad/cargos', ck);
+  assert.strictEqual([...lista.matchAll(/>Diretor</g)].length, 1, 'cargo citado duas vezes vira um só');
+  assert.match(lista, />Auxiliar Financeiro</);
+  assert.match(await texto('/cad/grupos-competencias', ck), />Comportamentais</);
+  const exportado = await texto('/cad/competencias/exportar', ck);
+  assert.match(exportado, /Colaboração;Comportamentais;1;Desempenho;Une, coopera;.*Auxiliar Financeiro, Diretor/);
+  t = await (await post('/cad/competencias/importar', ck, { csv })).text();
+  assert.match(t, /Atualizados<\/small><b>2</, 'reimportar atualiza pelo nome');
+  assert.match(await (await post('/cad/competencias/importar', ck, { csv: exportado })).text(), /Atualizados<\/small><b>2</, 'aceita o próprio arquivo exportado');
+});
+
 test('importar colaboradores: superior direto pelo nome, mesmo em linha abaixo', async () => {
   const ck = await login('?office=sup');
   const b = await base_colab(ck);

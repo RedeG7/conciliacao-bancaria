@@ -195,7 +195,7 @@ const KINDS_LISTA = [
   },
   simples('checklist', 'checklists', 'Checklists', 'tópico', '✅', [F('titulo', 'Tópico', 'texto', { req: true }), F('etapa', 'Etapa', 'opcao', { req: true, op: ['Contratação', 'Demissão'] })]),
   simples('grupo_competencia', 'grupos-competencias', 'Grupos de competências', 'grupo', '🧠', [F('nome', 'Nome', 'texto', { req: true }), F('categoria', 'Eixo na matriz', 'opcao', { op: ['Desempenho', 'Potencial'] })]),
-  simples('competencia', 'competencias', 'Competências', 'competência', '🎯', [F('nome', 'Nome', 'texto', { req: true }), F('grupo_id', 'Grupo', 'ref', { ref: 'grupo_competencia' }), F('peso', 'Peso', 'numero', { min: 0 }), F('descricao', 'Descrição', 'longo')], { colunas: ['nome', 'grupo_id', 'peso'] }),
+  simples('competencia', 'competencias', 'Competências', 'competência', '🎯', [F('nome', 'Nome', 'texto', { req: true, alias: ['Competência'] }), F('grupo_id', 'Grupo', 'ref', { ref: 'grupo_competencia', alias: ['Grupo de competência', 'Grupo de competências'] }), F('peso', 'Peso', 'numero', { min: 0 }), F('tipo_avaliacao', 'Tipo de avaliação', 'opcao', { op: ['Desempenho', 'Potencial'] }), F('descricao', 'Descrição', 'longo'), F('cargos', 'Cargos', 'refs', { ref: 'cargo', alias: ['Cargo'] })], { colunas: ['nome', 'grupo_id', 'tipo_avaliacao', 'peso'] }),
   {
     kind: 'ciclo', slug: 'ciclos-avaliacao', titulo: 'Ciclos de avaliação', singular: 'ciclo', icone: '🔄',
     campos: [F('titulo', 'Título', 'texto', { req: true }), F('inicio', 'Início', 'data', { req: true }), F('fim', 'Fim', 'data', { req: true }), F('status', 'Status', 'opcao', { req: true, op: ['Aberto', 'Encerrado'] })],
