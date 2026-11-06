@@ -8,7 +8,7 @@ const express = require('express');
 const R = require('./db');
 const { db, tx, nowIso, ensureOffice } = R;
 const sso = require('./sso');
-const { KINDS, porSlug, HISTORICO, MESES, rotulo } = require('./modelos');
+const { KINDS, porSlug, HISTORICO, MESES, MODELOS_PESQUISA } = require('./modelos');
 const { PAPEIS, ve, pode } = require('./acesso');
 const { um, contexto, lerForm, mudancas, colunas, ordenar, formulario, csv, exportar, numero, data, valor } = require('./crud');
 const { alertas, ANTECEDENCIA_PADRAO } = require('./alertas');
@@ -255,7 +255,8 @@ function telaLista(req, res, k) {
       ${editar && !k.ficha ? html`<a href="/cad/${k.slug}/${r.id}">Editar</a>` : ''}${apagar ? html`<form method="post" action="/cad/${k.slug}/${r.id}/apagar" data-confirmar="Apagar este registro?"><button class="link">Apagar</button></form>` : ''}</span>`,
   ]);
   res.send(layout(req, k.titulo, html`${resumo}${abas}
-    <div class="acoes">${editar && !k.novoBloqueado ? html`<a class="botao" href="/cad/${k.slug}/novo">Adicionar</a>` : ''}
+    <div class="acoes">${editar && !k.novoBloqueado ? html`<a class="botao" href="${k.novoHref || `/cad/${k.slug}/novo`}">Adicionar</a>` : ''}
+      ${(k.acoesLista || []).map(([href, t]) => html`<a class="botao sec" href="${href}">${t}</a>`)}
       <a class="botao sec" href="/cad/${k.slug}/exportar">Exportar CSV</a></div>
     ${tabela([...cols.map(x => x.rotulo), 'Ações'], corpo)}`, { descricao: k.desc }));
 }
@@ -301,6 +302,7 @@ app.get('/cad/:slug/novo', exige('edita'), h((req, res) => {
   const k = carregarKind(req);
   if (k.novoBloqueado) throw falha(404, 'Tela não encontrada.');
   const dados = Object.fromEntries(k.campos.filter(f => req.query[f.n] !== undefined).map(f => [f.n, req.query[f.n]]));
+  if (k.aoAbrirNovo) k.aoAbrirNovo(dados);
   telaForm(req, res, k, { dados, ficha: idFicha(req, req.query) });
 }));
 app.post('/cad/:slug/novo', exige('edita'), h((req, res) => {
@@ -446,12 +448,41 @@ app.get('/cad/pdi/avaliados-sem-pdi', h((req, res) => {
 // ---------------------------------------------------------------- pesquisas
 const MIN_RESPOSTAS = 3; // com menos, a média poderia revelar a nota de alguém
 
+function resumoPesquisa(office, p) {
+  const resp = db.prepare('SELECT dados FROM respostas WHERE office = ? AND pesquisa_id = ?').all(office, p.id).map(r => JSON.parse(r.dados));
+  const notas = i => resp.map(r => r.notas[i]).filter(n => n !== undefined);
+  return { resp, q: perguntasDe(p), notas, visivel: resp.length >= MIN_RESPOSTAS, media: M.media(resp.flatMap(r => r.notas)), enps: p.categoria === 'eNPS' ? M.enps(notas(0)) : null };
+}
+
+app.get('/cad/pesquisas/modelos', exige('edita'), h((req, res) => {
+  const opcoes = [['Clima', 'Clima', `${MODELOS_PESQUISA.Clima.length} perguntas prontas sobre liderança, comunicação, reconhecimento e ambiente.`],
+    ['eNPS', 'eNPS', 'Uma pergunta: o quanto a pessoa recomendaria a empresa como lugar para trabalhar.'],
+    ['Personalizada', 'Personalizada', 'Comece em branco e escreva as suas perguntas.']];
+  res.send(layout(req, 'Nova pesquisa', html`<div class="grade-cards">${opcoes.map(([v, t, d]) => html`<a class="card link-card" href="/cad/pesquisas/novo?categoria=${v}"><b>${t}</b><span>${d}</span></a>`)}</div>
+    <a class="botao sec" href="/cad/pesquisas">Voltar</a>`, { migalha: 'Pesquisas', descricao: 'Escolha um modelo. Você pode editar tudo antes de abrir a pesquisa.' }));
+}));
+
+app.get('/cad/pesquisas/comparar', h((req, res) => {
+  const lista = req.c.listar('pesquisa').filter(p => p.status !== 'Rascunho');
+  if (lista.length < 2) return res.send(layout(req, 'Comparar pesquisas', html`<div class="aviso alerta">Abra ao menos duas pesquisas para comparar.</div><a class="botao sec" href="/cad/pesquisas">Voltar</a>`, { migalha: 'Pesquisas' }));
+  const achar = (id, padrao) => lista.find(p => p.id === Number(id)) || padrao;
+  const pa = achar(req.query.a, lista[1]), pb = achar(req.query.b, lista[0]);
+  const a = resumoPesquisa(req.office, pa), b = resumoPesquisa(req.office, pb);
+  const num = (r, v) => (!r.visivel ? 'poucas respostas' : v === null ? '-' : n2(v));
+  const op = lista.map(p => [p.id, p.titulo]);
+  const comuns = a.q.filter(t => b.q.includes(t));
+  const linhas = [['Respostas', a.resp.length, b.resp.length], ['Média geral', num(a, a.media), num(b, b.media)], ['eNPS', num(a, a.enps), num(b, b.enps)],
+    ...comuns.map(t => [t, num(a, M.media(a.notas(a.q.indexOf(t)))), num(b, M.media(b.notas(b.q.indexOf(t))))])];
+  res.send(layout(req, 'Comparar pesquisas', html`<form class="acoes" method="get">
+      ${select('a', op, pa.id, 'class="medio" onchange="this.form.submit()" aria-label="Primeira pesquisa"')}${select('b', op, pb.id, 'class="medio" onchange="this.form.submit()" aria-label="Segunda pesquisa"')}</form>
+    ${tabela(['Indicador', pa.titulo, pb.titulo], linhas)}`, { migalha: 'Pesquisas', descricao: `Resultados só com ${MIN_RESPOSTAS} respostas ou mais. Perguntas iguais nas duas aparecem lado a lado.` }));
+}));
+
 app.get('/pesquisas/:id(\\d+)', h((req, res) => {
   const p = R.obter(req.office, 'pesquisa', req.params.id);
   if (!p) throw falha(404, 'Pesquisa não encontrada.');
-  const resp = db.prepare('SELECT dados FROM respostas WHERE office = ? AND pesquisa_id = ?').all(req.office, p.id).map(r => JSON.parse(r.dados));
-  const q = perguntasDe(p), link = `${baseUrl(req)}/pesquisa/${p.token}`;
-  const notas = i => resp.map(r => r.notas[i]).filter(n => n !== undefined);
+  const { resp, q, notas } = resumoPesquisa(req.office, p);
+  const link = `${baseUrl(req)}/pesquisa/${p.token}`;
   const resultado = resp.length < MIN_RESPOSTAS ? html`<div class="aviso alerta">Os resultados aparecem a partir de ${MIN_RESPOSTAS} respostas, para proteger o anonimato.</div>` : html`
     ${p.categoria === 'eNPS' ? html`<div class="cards4">${cartao('eNPS', M.enps(notas(0)), 'promotores menos detratores')}</div>` : ''}
     ${tabela(['Pergunta', 'Média', 'Respostas'], q.map((t, i) => [t, n2(M.media(notas(i))), notas(i).length]))}

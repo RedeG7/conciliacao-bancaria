@@ -55,6 +55,7 @@ function contexto(office, papel) {
       return `${n2(c._saldo.get(id) || 0)}h`;
     },
     respostas: id => Number(R.db.prepare('SELECT COUNT(*) n FROM respostas WHERE office = ? AND pesquisa_id = ?').get(office, id).n),
+    ultimaResposta: id => R.db.prepare('SELECT MAX(criado_em) d FROM respostas WHERE office = ? AND pesquisa_id = ?').get(office, id).d,
   };
   return c;
 }
