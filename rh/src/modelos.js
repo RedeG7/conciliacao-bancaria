@@ -9,6 +9,7 @@
 // do formulário), min/max, interno (não aparece no formulário), obrig (obrigatório
 // conferido em validar), alias (outros nomes de coluna aceitos na importação).
 const { addDias, addMeses } = require('./datas');
+const { ESTILOS } = require('./comportamental');
 
 const F = (n, r, t = 'texto', o = {}) => ({ n, r, t, ...o });
 
@@ -136,7 +137,7 @@ const colab = (o = {}) => F('colaborador_id', 'Colaborador', 'ref', { ref: 'cola
 const KINDS_LISTA = [
   colaborador,
   simples('departamento', 'departamentos', 'Departamentos', 'departamento', '🏬', [F('nome', 'Nome', 'texto', { req: true }), F('localizacao', 'Localização'), F('telefone', 'Telefone', 'tel')]),
-  simples('cargo', 'cargos', 'Cargos', 'cargo', '🧩', [F('nome', 'Nome', 'texto', { req: true }), F('senioridade', 'Senioridade', 'opcao', { op: ['Estagiário', 'Assistente', 'Júnior', 'Pleno', 'Sênior', 'Coordenação', 'Gerência', 'Diretoria'] }), F('cbo', 'CBO'), F('piso', 'Piso salarial', 'dinheiro', { cl: 'salario', min: 0 })]),
+  simples('cargo', 'cargos', 'Cargos', 'cargo', '🧩', [F('nome', 'Nome', 'texto', { req: true }), F('senioridade', 'Senioridade', 'opcao', { op: ['Estagiário', 'Assistente', 'Júnior', 'Pleno', 'Sênior', 'Coordenação', 'Gerência', 'Diretoria'] }), F('cbo', 'CBO'), F('piso', 'Piso salarial', 'dinheiro', { cl: 'salario', min: 0 }), F('perfil_esperado', 'Perfil esperado', 'opcao', { op: Object.entries(ESTILOS).map(([v, e]) => [v, e.nome]) })]),
   simples('filial', 'filiais', 'Filiais', 'filial', '🏢', [F('nome', 'Nome', 'texto', { req: true }), F('cnpj', 'CNPJ')]),
   simples('unidade', 'unidades', 'Unidades', 'unidade', '📍', [F('nome', 'Nome', 'texto', { req: true })]),
   simples('motivo_demissao', 'motivos-demissao', 'Motivos de demissão', 'motivo', '📝', [F('nome', 'Motivo', 'texto', { req: true })]),

@@ -98,6 +98,24 @@ test('métricas', () => {
   assert.strictEqual(r.valorRescisao, 100);
 });
 
+test('perfil comportamental: pontuação, segundo estilo, faixas e aderência', () => {
+  const P = require('../src/comportamental');
+  assert.strictEqual(P.QUESTOES.length, 24);
+  for (const e of P.CHAVES) assert.strictEqual(P.QUESTOES.filter(q => q.estilo === e).length, 6, e);
+  assert.strictEqual(P.pontuar([1, 2]), null, 'faltando resposta');
+  assert.strictEqual(P.pontuar(Array(24).fill(6)), null, 'fora da escala');
+  const r = P.pontuar(P.QUESTOES.map(q => (q.estilo === 'realizador' ? 5 : q.estilo === 'conector' ? 4 : 1)));
+  assert.deepStrictEqual(r.pontos, { realizador: 100, conector: 75, constante: 0, criterioso: 0 });
+  assert.strictEqual(r.principal, 'realizador');
+  assert.strictEqual(r.secundario, null, '25 pontos de distância não contam como 2º estilo');
+  const perto = P.pontuar(P.QUESTOES.map((q, i) => (q.estilo === 'realizador' ? 5 : q.estilo === 'conector' ? (i === 1 ? 3 : 5) : 1)));
+  assert.strictEqual(perto.secundario, 'conector');
+  assert.strictEqual(P.nomePerfil(perto), 'Realizador e Conector');
+  assert.deepStrictEqual([P.faixa(39), P.faixa(40), P.faixa(70)], ['Baixo', 'Médio', 'Alto']);
+  assert.strictEqual(P.aderencia(r.pontos, r.pontos), 100);
+  assert.strictEqual(P.aderencia({ realizador: 0, conector: 0, constante: 0, criterioso: 0 }, { realizador: 100, conector: 100, constante: 100, criterioso: 100 }), 0);
+});
+
 test('visão geral: situação do PDI, pendentes da AVD e médias por grupo', () => {
   const dia = '2026-11-06';
   assert.strictEqual(M.situacaoPdi({ status: 'Finalizado', entrega: '2026-01-01' }, dia), 'Concluídos');

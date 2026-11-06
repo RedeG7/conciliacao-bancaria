@@ -170,6 +170,7 @@ ol.guia { list-style: none; padding: 0; margin: 0; }
   .lista tbody tr[hidden] { display: table-row !important; }
 }
 /* RH: barras de composição, matriz 3x3 e perguntas da pesquisa */
+.aceite { display: flex; gap: 8px; align-items: center; margin: 12px 0; } .aceite input { width: auto; }
 .barras { display: grid; gap: 8px; } .barras .item { display: grid; grid-template-columns: minmax(110px, 1fr) 2fr 56px; gap: 10px; align-items: center; font-size: .9rem; }
 .barras .barra { margin: 0; } .barras .valor { text-align: right; font-variant-numeric: tabular-nums; }
 .grade-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; } .grade-2 > .card { margin: 0; }
