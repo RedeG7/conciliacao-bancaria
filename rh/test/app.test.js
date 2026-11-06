@@ -262,6 +262,56 @@ test('menu em abas e subabas: abre a aba da tela atual e não perde nenhuma tela
   for (const url of todas) assert.strictEqual((await get(url, ck)).status, 200, url);
 });
 
+test('perfil comportamental: link individual, link geral, permissões e isolamento', async () => {
+  const ck = await login('?office=pc');
+  await novoColab(ck, { nome: 'Pessoa Perfil' });
+  const colab = (await texto('/cad/colaboradores', ck)).match(/\/cad\/colaboradores\/(\d+)\/ficha/)[1];
+  const cargo = (await texto('/cad/cargos', ck)).match(/\/cad\/cargos\/(\d+)/)[1];
+  await post(`/cad/cargos/${cargo}`, ck, { nome: 'Analista', perfil_esperado: 'realizador' });
+
+  assert.strictEqual((await post('/comportamental/enviar', ck, { colaboradores: colab, candidatos: 'Sem Email' })).status, 302);
+  assert.doesNotMatch(await texto('/comportamental/perfis', ck), /Sem Email/, 'linha inválida não gera nada');
+  await post('/comportamental/enviar', ck, { colaboradores: colab, candidatos: 'Cand Um;cand@exemplo.com' });
+  await post('/comportamental/enviar', ck, { colaboradores: colab });
+  const lista = await texto('/comportamental/perfis', ck);
+  assert.strictEqual([...lista.matchAll(/">Pessoa Perfil</g)].length, 1, 'não duplica envio pendente');
+  const id = lista.match(/\/comportamental\/perfis\/(\d+)">Pessoa Perfil/)[1];
+  const token = (await texto(`/comportamental/perfis/${id}`, ck)).match(/\/perfil\/([\w-]+)/)[1];
+
+  const respostas = Object.fromEntries(Array.from({ length: 24 }, (_, i) => [`q${i}`, i % 4 === 0 ? '5' : '2']));
+  assert.match(await texto(`/perfil/${token}`), /Olá, Pessoa Perfil./);
+  assert.strictEqual((await post(`/perfil/${token}`, '', { ...respostas, q3: '9', aceite: '1' })).status, 422);
+  assert.strictEqual((await post(`/perfil/${token}`, '', respostas)).status, 422, 'sem aceite não grava');
+  assert.strictEqual((await post(`/perfil/${token}`, '', { ...respostas, aceite: '1' })).status, 200);
+  assert.match(await texto(`/perfil/${token}`), /já foi respondido/);
+  const detalhe = await texto(`/comportamental/perfis/${id}`, ck);
+  assert.match(detalhe, /Realizador/);
+  assert.match(detalhe, /Aderência a Analista/);
+
+  const aberto = (await texto('/comportamental/enviar', ck)).match(/\/perfil-aberto\/([\w-]+)/)[1];
+  assert.strictEqual((await post(`/perfil-aberto/${aberto}`, '', { ...respostas, aceite: '1', nome: 'Cand Aberto', email: 'aberto@exemplo.com' })).status, 200);
+  assert.match(await texto('/comportamental/perfis?vinculo=Candidato', ck), /Cand Aberto/);
+  await post('/comportamental/enviar/novo-link', ck, {});
+  assert.strictEqual((await get(`/perfil-aberto/${aberto}`)).status, 404, 'link trocado para de funcionar');
+
+  assert.match(await texto('/comportamental/metricas?aba=empresa', ck), /Média por estilo/);
+  assert.match(await texto('/comportamental/metricas?aba=participacao', ck), /Participação/);
+  assert.match(await texto('/comportamental/busca?tipo=estilo&estilo=realizador&buscar=1', ck), /Pessoa Perfil/);
+  assert.match(await texto(`/comportamental/busca?tipo=cargo&cargo=${cargo}&buscar=1`, ck), /Pessoa Perfil/);
+  assert.match(await texto('/comportamental/busca?tipo=indicador&estilo=realizador&faixa=Alto&buscar=1', ck), /Pessoa Perfil/);
+  assert.match(await texto(`/comportamental/comparar?a=p${id}&b=c${cargo}`, ck), /Cargo: Analista/);
+  assert.match(await texto(`/comportamental/grupos?ids=${id}`, ck), /Estilo mais presente/);
+  await post('/comportamental/grupos', ck, { nome: 'Time A', ids: id });
+  assert.match(await texto('/comportamental/metricas?aba=grupos', ck), /Time A/);
+  assert.match(await texto('/comportamental/extrato', ck), /Resposta/);
+
+  const leitor = await login('?office=pc&u=leitor&admin=0');
+  assert.strictEqual((await get('/comportamental/perfis', leitor)).status, 403, 'apenas visualização não vê');
+  assert.doesNotMatch(await texto('/dash', leitor), /Perfil Comportamental/);
+  const outro = await login('?office=pc2');
+  assert.strictEqual((await get(`/comportamental/perfis/${id}`, outro)).status, 404, 'outro escritório não vê');
+});
+
 test('visão geral reúne AVD, PDI e feedbacks', async () => {
   const ck = await login('?office=vg');
   await novoColab(ck, { nome: 'Pessoa Avaliada' });

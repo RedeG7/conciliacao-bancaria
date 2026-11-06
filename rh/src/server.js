@@ -1,7 +1,8 @@
 'use strict';
 // RH (rh.redeg7.com) - servidor HTTP (Express) com páginas renderizadas aqui
-// mesmo (src/views.js). Login só pelo Hub (/sso, ver src/sso.js). A única página
-// sem login é a resposta anônima de pesquisa (/pesquisa/:token).
+// mesmo (src/views.js). Login só pelo Hub (/sso, ver src/sso.js). Sem login, só a
+// resposta anônima de pesquisa (/pesquisa/:token) e o questionário de perfil
+// comportamental (/perfil/:token e /perfil-aberto/:token).
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
@@ -14,6 +15,7 @@ const { um, contexto, lerForm, mudancas, colunas, ordenar, formulario, csv, expo
 const { alertas, ANTECEDENCIA_PADRAO } = require('./alertas');
 const M = require('./metricas');
 const imp = require('./importar');
+const perfilRotas = require('./rotas_comportamental');
 const { hoje, addMeses } = require('./datas');
 const V = require('./views');
 const { html, raw, brl, n2, dataBr, dataHoraBr, layout, page, tabela, select, campo, cartao, barras } = V;
@@ -149,6 +151,8 @@ app.post('/pesquisa/:token', h((req, res) => {
   setCookie(res, `rh_resp_${p.id}`, '1', 90 * 86400);
   telaPesquisa(res, p, 'Resposta registrada. Obrigado por participar!');
 }));
+
+perfilRotas.publicas(app, { h, excedeuLimite, telaErro });
 
 // ---------------------------------------------------------------- sessão
 app.use(h((req, res, next) => {
@@ -643,6 +647,8 @@ app.get('/config/auditoria', exige('configura'), h((req, res) => {
   res.send(layout(req, 'Auditoria', tabela(['Quando', 'Usuário', 'Ação', 'Cadastro', 'Registro', 'Detalhe'], lista.map(a => [dataHoraBr(a.em), a.usuario, a.acao, KINDS[a.kind]?.titulo || a.kind || '', a.registro_id ?? '', a.detalhe || ''])),
     { descricao: 'Últimas 1.000 ações. Guarda os nomes dos campos alterados, nunca os valores.' }));
 }));
+
+perfilRotas.internas(app, { h, exige, auditar, flash, falha, baseUrl });
 
 // eslint-disable-next-line no-unused-vars
 app.use((req, res, next) => next(falha(404, 'Tela não encontrada.')));

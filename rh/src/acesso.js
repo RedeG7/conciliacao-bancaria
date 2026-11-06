@@ -6,11 +6,11 @@
 //
 // Cada campo sensível de src/modelos.js tem uma classe (cl):
 //   salario = remuneração e valores  |  pessoal = documentos, banco, diversidade
-//   saude   = exames, CID e afastamentos
+//   saude   = exames, CID e afastamentos  |  perfil = perfil comportamental
 const PAPEIS = {
-  admin: { rotulo: 'Responsável (acesso total)', edita: true, apaga: true, configura: true, classes: ['salario', 'pessoal', 'saude'] },
-  editor: { rotulo: 'Edita, mas não apaga', edita: true, apaga: false, configura: false, classes: ['salario', 'pessoal', 'saude'] },
-  sem_salario: { rotulo: 'Edita, sem ver salários', edita: true, apaga: false, configura: false, classes: ['pessoal', 'saude'] },
+  admin: { rotulo: 'Responsável (acesso total)', edita: true, apaga: true, configura: true, classes: ['salario', 'pessoal', 'saude', 'perfil'] },
+  editor: { rotulo: 'Edita, mas não apaga', edita: true, apaga: false, configura: false, classes: ['salario', 'pessoal', 'saude', 'perfil'] },
+  sem_salario: { rotulo: 'Edita, sem ver salários', edita: true, apaga: false, configura: false, classes: ['pessoal', 'saude', 'perfil'] },
   leitura: { rotulo: 'Apenas visualização', edita: false, apaga: false, configura: false, classes: [] },
 };
 
