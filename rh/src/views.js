@@ -17,32 +17,70 @@ const n2 = v => Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 
 const dataBr = s => { if (!s) return ''; const d = String(s).slice(0, 10).split('-'); return d.length === 3 ? `${d[2]}/${d[1]}/${d[0]}` : s; };
 const dataHoraBr = s => (s ? new Date(s).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }) : '');
 
-const cad = kind => [`/cad/${KINDS[kind].slug}`, KINDS[kind].titulo, KINDS[kind].icone, KINDS[kind].cl];
+// item do menu: [href, rótulo, classe sensível, ação exigida]
+const cad = (kind, rotulo) => [`/cad/${KINDS[kind].slug}`, rotulo || KINDS[kind].titulo, KINDS[kind].cl];
+const tela = (href, rotulo, cl, acao) => [href, rotulo, cl, acao];
+// aba do menu: tem subitens, que podem ser outras abas
+const aba = (nome, itens, icone) => ({ nome, itens, icone });
 const MENU = [
-  ['Início', [['/dash', 'Painel', '🏠'], ['/aniversariantes', 'Aniversariantes', '🎂']]],
-  ['Pessoas', [cad('colaborador'), cad('ocorrencia'), cad('feedback'), cad('ferias'), cad('banco_horas'), cad('saude'), cad('desligamento'), cad('checklist')]],
-  ['Estrutura', [cad('departamento'), cad('cargo'), cad('filial'), cad('unidade'), cad('motivo_demissao')]],
-  ['Desempenho', [cad('ciclo'), cad('avaliacao'), ['/matriz-potencial', 'Matriz de potencial', '🔲'], ['/performance', 'Análise de performance', '📊'],
-    cad('grupo_competencia'), cad('competencia'), cad('meta'), cad('meta_colaborador'), cad('pdi'), cad('treinamento'), cad('participacao')]],
-  ['Engajamento', [cad('pesquisa'), cad('beneficio'), cad('beneficiario'), ['/cultura', 'Cultura organizacional', '🧭'], cad('faturamento')]],
-  ['Métricas', [['/metricas/colaboradores', 'Métricas de colaboradores', '📈'], ['/metricas/desligamentos', 'Métricas de desligamento', '📉']]],
-  ['Configurações', [['/config/alertas', 'Alertas', '🔔', null, 'configura'], ['/config/usuarios', 'Usuários e papéis', '🔑', null, 'configura'],
-    ['/config/importar', 'Importar colaboradores', '📥', null, 'edita'], ['/config/auditoria', 'Auditoria', '🔍', null, 'configura']]],
+  { ...aba('Home', [], '🏠'), href: '/dash' },
+  aba('Cargos e Salários', [cad('cargo', 'Engenharia de Cargo')], '💼'),
+  aba('Gestão de Talentos', [
+    cad('colaborador'), cad('filial', 'Filiais'), cad('departamento', 'Departamentos'), cad('ferias'), cad('banco_horas'), cad('ocorrencia'), cad('feedback'),
+    cad('checklist', 'Checklists'), tela('/aniversariantes', 'Aniversariantes'), cad('saude', 'Registro de Saúde'), cad('desligamento'),
+    cad('motivo_demissao', 'Motivo de Demissões'), cad('unidade', 'Unidades'), tela('/metricas/colaboradores', 'Métricas do Colaborador'),
+  ], '👥'),
+  aba('Desenv. e Performance', [
+    aba('Competências', [cad('grupo_competencia', 'Grupos de competências'), cad('competencia', 'Competências')]),
+    aba('Avaliação Desemp.', [cad('ciclo', 'Solicitar Avaliação'), cad('avaliacao', 'Relatórios Individuais')]),
+    aba('Gestão de Metas', [cad('meta', 'Cadastro de Metas'), cad('meta_colaborador', 'Controle de Metas')]),
+    tela('/performance', 'Análise de Performance'),
+    aba('Treinamentos', [cad('treinamento', 'Gestão de Treinamentos'), cad('participacao')]),
+    tela('/matriz-potencial', '9box'), cad('pdi'),
+  ], '🎯'),
+  aba('Reten. e Engajamento', [
+    cad('pesquisa'),
+    aba('Gestão de Benefícios', [cad('beneficio', 'Cadastro de Benefícios'), cad('beneficiario')]),
+    tela('/cultura', 'Cultura Organizacional'), cad('faturamento'), tela('/metricas/desligamentos', 'Métricas de Desligamento'),
+  ], '💬'),
+  aba('Configurações', [
+    tela('/config/alertas', 'Alerta', null, 'configura'), tela('/config/usuarios', 'Usuários', null, 'configura'),
+    aba('Importações', [tela('/config/importar', 'Colaboradores', null, 'edita')]),
+    tela('/config/auditoria', 'Auditoria', null, 'configura'),
+  ], '⚙️'),
 ];
 
-// roda antes da primeira pintura, para o grupo minimizado não piscar aberto
-const RESTAURA_MENU = `<script>try{var g=JSON.parse(localStorage.getItem('menuFechado')||'[]');document.querySelectorAll('.lateral .grupo').forEach(function(d){if(g.indexOf(d.dataset.grupo)>=0)d.open=false})}catch(e){}</script>`;
+// roda antes da primeira pintura, para a aba aberta não piscar fechada
+const RESTAURA_MENU = `<script>try{var g=JSON.parse(localStorage.getItem('menuAberto')||'[]');document.querySelectorAll('.lateral .grupo').forEach(function(d){if(g.indexOf(d.dataset.grupo)>=0)d.open=true})}catch(e){}</script>`;
 // muda a cada publicação, para o navegador não usar o JS/CSS antigo do cache
 const VERSAO = Date.now().toString(36);
 
-function layout(req, titulo, corpo, { descricao = '', migalha = '' } = {}) {
-  const u = req.user, atual = req.path, offices = u.is_global ? JSON.parse(u.offices || '[]') : [];
-  const menu = MENU.map(([grupo, itens]) => {
-    const vis = itens.filter(([, , , cl, acao]) => ve(req.papel, cl) && (!acao || pode(req.papel, acao)));
-    return vis.length ? html`<details class="grupo" data-grupo="${grupo}" open><summary>${grupo}</summary>
-      ${vis.map(([href, rot, ic]) => html`<a href="${href}" class="${atual === href || atual.startsWith(href + '/') ? 'ativo' : ''}" data-busca="${rot.toLowerCase()}"><span>${ic}</span>${rot}</a>`)}
-    </details>` : '';
+// abas só aparecem com algum item visível; a aba da tela atual já vem aberta
+function montarMenu(req, itens, caminho = '') {
+  const atual = req.path;
+  const ativo = href => atual === href || atual.startsWith(href + '/');
+  let temAtivo = false;
+  const partes = itens.map(i => {
+    if (i.href) { temAtivo = temAtivo || ativo(i.href); return html`<a href="${i.href}" class="topo-menu ${ativo(i.href) ? 'ativo' : ''}" data-busca="${i.nome.toLowerCase()}"><span>${i.icone}</span>${i.nome}</a>`; }
+    if (i.nome) {
+      const id = caminho + i.nome;
+      const sub = montarMenu(req, i.itens, id + '/');
+      if (!sub.html) return '';
+      temAtivo = temAtivo || sub.temAtivo;
+      return html`<details class="grupo" data-grupo="${id}" ${sub.temAtivo ? 'open' : ''}><summary>${i.icone ? html`<span>${i.icone}</span>` : ''}<b>${i.nome}</b></summary>
+        <div class="subitens">${raw(sub.html)}</div></details>`;
+    }
+    const [href, rot, cl, acao] = i;
+    if (!ve(req.papel, cl) || (acao && !pode(req.papel, acao))) return '';
+    temAtivo = temAtivo || ativo(href);
+    return html`<a href="${href}" class="${ativo(href) ? 'ativo' : ''}" data-busca="${rot.toLowerCase()}">${rot}</a>`;
   });
+  return { html: partes.map(String).join(''), temAtivo };
+}
+
+function layout(req, titulo, corpo, { descricao = '', migalha = '' } = {}) {
+  const u = req.user, offices = u.is_global ? JSON.parse(u.offices || '[]') : [];
+  const menu = raw(montarMenu(req, MENU).html);
   return page(titulo, html`
 <div class="app">
   <aside class="lateral" id="lateral">
@@ -108,4 +146,4 @@ function barras(pares, vazio = 'Sem dados ainda.') {
     <div class="barra"><span style="width:${Math.round((v / maior) * 100)}%"></span></div><span class="valor">${n2(v)}</span></div>`)}</div>`;
 }
 
-module.exports = { esc, raw, html, brl, n2, dataBr, dataHoraBr, layout, page, tabela, select, campo, cartao, barras };
+module.exports = { MENU, esc, raw, html, brl, n2, dataBr, dataHoraBr, layout, page, tabela, select, campo, cartao, barras };
