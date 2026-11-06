@@ -113,6 +113,11 @@ test('perfil comportamental: pontuação, segundo estilo, faixas e aderência', 
   assert.strictEqual(P.nomePerfil(perto), 'Realizador e Conector');
   assert.deepStrictEqual([P.faixa(39), P.faixa(40), P.faixa(70)], ['Baixo', 'Médio', 'Alto']);
   assert.strictEqual(P.aderencia(r.pontos, r.pontos), 100);
+  assert.deepStrictEqual(P.mesesEntre('2026-11', '2027-02'), ['2026-11', '2026-12', '2027-01', '2027-02']);
+  assert.deepStrictEqual(P.histograma([{ pontos: { realizador: 19 } }, { pontos: { realizador: 80 } }, { pontos: { realizador: 100 } }], 'realizador').map(f => f.total), [1, 0, 0, 0, 2]);
+  const geral = P.perfilGeral([{ pontos: { realizador: 90, conector: 80, constante: 30, criterioso: 20 } }]);
+  assert.strictEqual(geral.nome, 'Realizador e Conector');
+  assert.strictEqual(geral.pesos.find(p => p.estilo === 'realizador').peso, 40.9);
   assert.strictEqual(P.aderencia({ realizador: 0, conector: 0, constante: 0, criterioso: 0 }, { realizador: 100, conector: 100, constante: 100, criterioso: 100 }), 0);
 });
 

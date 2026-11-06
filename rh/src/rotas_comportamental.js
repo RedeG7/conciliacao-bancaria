@@ -8,6 +8,7 @@ const { ve, pode } = require('./acesso');
 const { um, csv } = require('./crud');
 const M = require('./metricas');
 const P = require('./comportamental');
+const G = require('./graficos');
 const { hoje } = require('./datas');
 const { html, raw, dataBr, layout, page, tabela, select, campo, cartao, barras } = require('./views');
 
@@ -130,7 +131,41 @@ function internas(app, { h, exige, auditar, flash, falha, baseUrl }) {
   const abasDe = (itens, ativa) => html`<div class="abas">${itens.map(([v, t]) => html`<a href="?aba=${v}" class="${v === ativa ? 'ativo' : ''}">${t}</a>`)}</div>`;
 
   const barrasPontos = pontos => barras(P.CHAVES.map(e => [`${nomeEstilo(e)} (${P.faixa(pontos[e])})`, pontos[e]]), '', { partes: false });
-  const distribuicao = itens => barras(P.CHAVES.map(e => [nomeEstilo(e), itens.filter(p => p.principal === e).length]).filter(x => x[1]));
+
+  // -------------------------------------------------------------- gráficos
+  const SERIES = P.CHAVES.map((e, i) => ({ nome: nomeEstilo(e), cls: `s${i + 1}` }));
+  const cartaoGrafico = (titulo, corpo, nota = '') => html`<div class="card"><h3 class="primeiro">${titulo}</h3>${nota ? html`<p class="desc">${nota}</p>` : ''}${corpo}</div>`;
+  const porEstilo = itens => P.CHAVES.map(e => itens.filter(p => p.principal === e).length);
+  const mesCurto = m => `${['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'][Number(m.slice(5)) - 1]}/${m.slice(2, 4)}`;
+  function graficoMeses(feitos) {
+    if (!feitos.length) return html`<p class="desc">Nenhuma resposta no período.</p>`;
+    const datas = feitos.map(p => p.data_resposta.slice(0, 7)).sort();
+    const meses = P.mesesEntre(datas[0], datas[datas.length - 1]).slice(-12);
+    return G.colunas({ titulo: 'Respostas por mês e estilo principal', series: SERIES, cats: meses.map(m => ({ rotulo: mesCurto(m), valores: porEstilo(feitos.filter(p => p.data_resposta.startsWith(m))) })) });
+  }
+  function porGrupoColab(req, itens, campoId, kind) {
+    const m = new Map();
+    for (const p of itens) {
+      const id = colabDe(req, p)?.[campoId];
+      if (id) m.set(id, [...(m.get(id) || []), p]);
+    }
+    return [...m].map(([id, l]) => ({ rotulo: req.c.nome(kind, id), lista: l })).sort((a, b) => b.lista.length - a.lista.length || a.rotulo.localeCompare(b.rotulo, 'pt-BR'));
+  }
+  // nome do perfil, peso de cada estilo e a composição em uma barra só
+  function painelGeral(itens) {
+    const g = P.perfilGeral(itens);
+    return html`<div class="card vg-geral"><small>Perfil geral</small><h2>${g.nome}</h2>
+      ${G.segmentada(g.pesos.map(x => ({ nome: nomeEstilo(x.estilo), cls: `s${P.CHAVES.indexOf(x.estilo) + 1}`, valor: x.peso })))}
+      <div class="vg-pesos">${g.pesos.map(x => html`<div><i class="vg-s${P.CHAVES.indexOf(x.estilo) + 1}"></i><b>${String(x.peso).replace('.', ',')}%</b><span>${nomeEstilo(x.estilo)}</span><small>${x.peso >= 25 ? 'Dominante' : 'Complementar'}</small></div>`)}</div>
+      <p class="desc">Peso de cada estilo no grupo. Acima de 25% o estilo é dominante.</p></div>`;
+  }
+  const graficosEstilos = itens => html`<div class="grade-2">
+    ${cartaoGrafico('Estilo principal', G.barrasH(P.CHAVES.map((e, i) => ({ rotulo: nomeEstilo(e), valor: porEstilo(itens)[i], texto: `${porEstilo(itens)[i]} (${Math.round((porEstilo(itens)[i] / itens.length) * 100)}%)`, cls: `s${i + 1}` }))), 'Quantas pessoas têm cada estilo como principal.')}
+    ${cartaoGrafico('Média de pontos por estilo', G.barrasH(P.CHAVES.map((e, i) => ({ rotulo: nomeEstilo(e), valor: P.mediaPontos(itens)[e], texto: `${P.mediaPontos(itens)[e]} (${P.faixa(P.mediaPontos(itens)[e])})`, cls: `s${i + 1}` })), { maximo: 100 }), 'Escala de 0 a 100.')}</div>`;
+  const histogramas = itens => html`<div class="vg-multi">${P.CHAVES.map((e, i) => {
+    const h2 = P.histograma(itens, e);
+    return cartaoGrafico(`Distribuição: ${nomeEstilo(e)}`, G.colunas({ titulo: `Pessoas por faixa de pontos em ${nomeEstilo(e)}`, series: [SERIES[i]], cats: h2.map(x => ({ rotulo: x.rotulo, valores: [x.total] })) }));
+  })}</div>`;
 
   // -------------------------------------------------------------- métricas
   const ABAS_METRICAS = [['participacao', 'Participação'], ['empresa', 'Perfil da Empresa'], ['grupos', 'Análise dos Grupos']];
@@ -138,21 +173,38 @@ function internas(app, { h, exige, auditar, flash, falha, baseUrl }) {
     const aba = ABAS_METRICAS.some(a => a[0] === req.query.aba) ? req.query.aba : 'participacao';
     let corpo;
     if (aba === 'participacao') {
-      const itens = filtrar(req, lista(req), 'data_envio'), feitos = respondidos(itens);
-      const porMes = M.contar(feitos, p => p.data_resposta.slice(0, 7)).sort((a, b) => a[0].localeCompare(b[0]));
-      corpo = html`${formFiltros(req, aba)}<div class="cards4">${cartao('Enviados', itens.length)}${cartao('Respondidos', feitos.length)}
-        ${cartao('Aguardando', itens.length - feitos.length)}${cartao('Participação', `${itens.length ? Math.round((feitos.length / itens.length) * 100) : 0}%`)}</div>
-        <div class="card"><h3 class="primeiro">Respostas por mês</h3>${barras(porMes, 'Nenhuma resposta no período.', { partes: false })}</div>`;
+      const itens = filtrar(req, lista(req), 'data_envio'), feitos = respondidos(itens), taxa = itens.length ? Math.round((feitos.length / itens.length) * 100) : 0;
+      const deptos = porGrupoColab(req, itens, 'departamento_id', 'departamento').map(g => {
+        const r = respondidos(g.lista).length;
+        return { rotulo: g.rotulo, valor: Math.round((r / g.lista.length) * 100), texto: `${Math.round((r / g.lista.length) * 100)}% (${r} de ${g.lista.length})` };
+      });
+      corpo = html`${formFiltros(req, aba)}<div class="cards4">${cartao('Enviados', itens.length)}${cartao('Respondidos', feitos.length)}${cartao('Aguardando', itens.length - feitos.length)}</div>
+        <div class="grade-2">${cartaoGrafico('Taxa de participação', G.medidor(taxa, `${feitos.length} de ${itens.length} responderam`))}
+        ${cartaoGrafico('Participação por departamento', G.barrasH(deptos, { maximo: 100, vazio: 'Nenhum colaborador neste filtro.' }))}</div>
+        ${cartaoGrafico('Distribuição de perfis por mês', graficoMeses(feitos), 'Considera a data de resposta.')}`;
     } else if (aba === 'empresa') {
       const itens = filtrar(req, respondidos(lista(req)).filter(p => p.vinculo === 'Colaborador'), 'data_resposta');
-      corpo = html`${formFiltros(req, aba, { vinculo: false })}${itens.length ? html`<div class="grade-2">
-        <div class="card"><h3 class="primeiro">Estilo principal</h3>${distribuicao(itens)}</div>
-        <div class="card"><h3 class="primeiro">Média por estilo</h3>${barrasPontos(P.mediaPontos(itens))}</div>
-        ${P.CHAVES.map(e => html`<div class="card"><h3 class="primeiro">Faixas: ${nomeEstilo(e)}</h3>${barras(P.ORDEM_FAIXAS.map(x => [x, itens.filter(p => P.faixa(p.pontos[e]) === x).length]))}</div>`)}
-      </div>` : html`<div class="aviso alerta">Nenhum colaborador respondeu com esses filtros.</div>`}`;
+      if (!itens.length) corpo = html`${formFiltros(req, aba, { vinculo: false })}<div class="aviso alerta">Nenhum colaborador respondeu com esses filtros.</div>`;
+      else {
+        const ativos = req.c.listar('colaborador').filter(c => c.situacao === 'Ativo');
+        const ehLider = p => ativos.some(c => c.superior_id && c.superior_id === p.colaborador_id);
+        const lideres = itens.filter(ehLider), equipe = itens.filter(p => !ehLider(p));
+        const cargos = porGrupoColab(req, itens, 'cargo_id', 'cargo').map(g => {
+          const c = req.c.listar('cargo').find(x => x.nome === g.rotulo);
+          return c?.perfil_esperado ? { rotulo: g.rotulo, valor: Math.round(M.media(g.lista.map(p => P.aderencia(p.pontos, P.alvo(c.perfil_esperado))))) } : null;
+        }).filter(Boolean).sort((a, b) => b.valor - a.valor).map(x => ({ ...x, texto: `${x.valor}%` }));
+        corpo = html`${formFiltros(req, aba, { vinculo: false })}${painelGeral(itens)}${graficosEstilos(itens)}
+          ${cartaoGrafico('Estilos por departamento', G.barras100(porGrupoColab(req, itens, 'departamento_id', 'departamento').map(g => ({ rotulo: g.rotulo, valores: porEstilo(g.lista) })), SERIES), 'Composição de cada área. O número à direita é o total de pessoas.')}
+          <div class="grade-2">${cartaoGrafico('Liderança x equipe', lideres.length && equipe.length ? G.colunas({ titulo: 'Média de pontos da liderança e da equipe', empilhado: false, topo: 100, series: [{ nome: 'Liderança', cls: 's1' }, { nome: 'Equipe', cls: 's2' }], cats: P.CHAVES.map(e => ({ rotulo: nomeEstilo(e), valores: [P.mediaPontos(lideres)[e], P.mediaPontos(equipe)[e]] })) }) : html`<p class="desc">Preencha o superior direto dos colaboradores para ver esta comparação.</p>`, 'Média de pontos de quem é superior direto e dos demais.')}
+          ${cartaoGrafico('Aderência por cargo', G.barrasH(cargos, { maximo: 100, vazio: 'Defina o perfil esperado em Engenharia de Cargo.' }), 'Média das pessoas do cargo frente ao perfil esperado.')}</div>
+          ${histogramas(itens)}`;
+      }
     } else {
-      const grupos = R.listar(req.office, 'perfil_grupo');
-      corpo = tabela(['Grupo', 'Pessoas', 'Criado por'], grupos.map(g => [html`<a href="/comportamental/grupos?grupo=${g.id}">${g.nome}</a>`, g.perfis.length, g.criado_por]), 'Nenhum grupo salvo. Crie um em Análise de Grupo.');
+      const todos = respondidos(lista(req));
+      const grupos = R.listar(req.office, 'perfil_grupo').map(g => ({ ...g, pessoas: todos.filter(p => g.perfis.includes(p.id)) }));
+      corpo = html`<div class="acoes"><a class="botao" href="/comportamental/grupos">Criar grupo</a></div>
+        ${cartaoGrafico('Composição dos grupos salvos', G.barras100(grupos.filter(g => g.pessoas.length).map(g => ({ rotulo: g.nome, valores: porEstilo(g.pessoas) })), SERIES, { vazio: 'Nenhum grupo salvo. Crie um em Análise de Grupo.' }))}
+        ${tabela(['Grupo', 'Pessoas', 'Perfil geral', 'Criado por'], grupos.map(g => [html`<a href="/comportamental/grupos?grupo=${g.id}">${g.nome}</a>`, g.pessoas.length, g.pessoas.length ? P.perfilGeral(g.pessoas).nome : '', g.criado_por]), 'Nenhum grupo salvo.')}`;
     }
     res.send(layout(req, 'Métricas do Perfil', html`${abasDe(ABAS_METRICAS, aba)}${corpo}`, { migalha: MIGALHA, descricao: 'Participação e distribuição dos perfis da empresa.' }));
   }));
@@ -170,7 +222,7 @@ function internas(app, { h, exige, auditar, flash, falha, baseUrl }) {
       <form method="get" class="card"><input type="hidden" name="aba" value="${ativa}"><div class="grade">
         ${campo('Estilo principal', select('estilo', [['', 'Todos'], ...P.CHAVES.map(e => [e, nomeEstilo(e)])], estilo))}
         ${campo('Vínculo', select('vinculo', [['', 'Todos'], 'Colaborador', 'Candidato'], vinculo))}</div>
-        <div class="acoes"><button class="botao">Filtrar</button>${pode(req.papel, 'edita') ? html`<a class="botao" href="/comportamental/enviar">Enviar questionário</a>` : ''}<a class="botao sec" href="/comportamental/perfis/exportar">Exportar CSV</a></div></form>
+        <div class="acoes"><button class="botao">Filtrar</button>${pode(req.papel, 'edita') ? html`<a class="botao" href="/comportamental/enviar">Enviar questionário</a>` : ''}${pode(req.papel, 'edita') ? html`<a class="botao sec" href="/comportamental/enviar">Importar CSV</a>` : ''}<a class="botao sec" href="/comportamental/perfis/exportar">Exportar CSV</a></div></form>
       ${tabela(['Nome', 'E-mail', 'Vínculo', 'Perfil', 'Envio', 'Resposta', 'Ações'], linhas, 'Nenhum perfil aqui.')}`, { migalha: MIGALHA, descricao: AVISO }));
   }));
   app.get('/comportamental/perfis/exportar', h((req, res) => {
@@ -223,7 +275,8 @@ function internas(app, { h, exige, auditar, flash, falha, baseUrl }) {
     res.send(layout(req, 'Enviar questionário', html`<form method="post" class="card"><h3 class="primeiro">Por lista</h3>
       <p class="desc">Cada pessoa recebe um link próprio. Quem já tem envio aguardando resposta não entra de novo.</p><div class="grade">
       ${campo('Colaboradores', html`<select name="colaboradores" multiple size="8">${colabsAtivos(req).map(c => html`<option value="${c.id}">${c.nome}</option>`)}</select>`)}
-      ${campo('Candidatos (um por linha: Nome;E-mail)', html`<textarea name="candidatos" rows="8" maxlength="50000"></textarea>`)}</div>
+      ${campo('Candidatos (um por linha: Nome;E-mail)', html`<textarea id="candidatos" name="candidatos" rows="8" maxlength="50000"></textarea>`)}
+      ${campo('Importar CSV com Nome e E-mail', html`<input type="file" accept=".csv,text/csv" class="ler-arquivo" data-alvo="candidatos">`)}</div>
       <div class="acoes"><button class="botao">Gerar links</button></div></form>
       <div class="card"><h3 class="primeiro">Link de preenchimento</h3><p class="desc">Um link só, para divulgar. Quem responder por ele entra como candidato.</p>
         <div class="copiar"><input id="linkAberto" value="${link}" readonly aria-label="Link de preenchimento"><button type="button" class="botao sec" data-copiar="linkAberto">Copiar</button></div>
@@ -233,7 +286,8 @@ function internas(app, { h, exige, auditar, flash, falha, baseUrl }) {
   app.post('/comportamental/enviar', exige('edita'), h((req, res) => {
     const pendentes = lista(req).filter(p => p.status === 'Aguardando');
     const ids = [...new Set([].concat(req.body.colaboradores ?? []).map(Number))];
-    const linhas = String(um(req.body.candidatos) || '').split(/\r?\n/).map(l => l.split(/[;,\t]/).map(x => x.trim())).filter(l => l[0]);
+    const linhas = String(um(req.body.candidatos) || '').split(/\r?\n/).map(l => l.replace(/^\ufeff/, '').split(/[;,\t]/).map(x => x.trim())).filter(l => l[0])
+      .filter((l, i) => i > 0 || !/^nome/i.test(l[0])); // cabeçalho do arquivo
     const invalida = linhas.find(l => !emailOk(l[1] || ''));
     if (invalida) { flash(res, `Linha sem e-mail válido: ${invalida[0]}.`, 'erro'); return res.redirect('/comportamental/enviar'); }
     const novos = [];
@@ -350,7 +404,7 @@ function internas(app, { h, exige, auditar, flash, falha, baseUrl }) {
     const sel = pessoas.filter(p => ids.has(p.id));
     const menor = sel.length ? [...P.CHAVES].sort((x, y) => P.mediaPontos(sel)[x] - P.mediaPontos(sel)[y])[0] : null;
     const resultado = sel.length ? html`<div class="cards4">${cartao('Pessoas', sel.length)}${cartao('Estilo mais presente', M.contar(sel, p => nomeEstilo(p.principal))[0][0])}${cartao('Estilo menos presente', nomeEstilo(menor), P.ESTILOS[menor].resumo)}</div>
-      <div class="grade-2"><div class="card"><h3 class="primeiro">Média do grupo</h3>${barrasPontos(P.mediaPontos(sel))}</div><div class="card"><h3 class="primeiro">Estilo principal</h3>${distribuicao(sel)}</div></div>
+      ${painelGeral(sel)}${graficosEstilos(sel)}
       ${pode(req.papel, 'edita') && !salvo ? html`<form method="post" class="card">${[...ids].map(i => html`<input type="hidden" name="ids" value="${i}">`)}${campo('Nome para salvar este grupo', html`<input name="nome" required maxlength="120">`)}<div class="acoes"><button class="botao sec">Salvar grupo</button></div></form>` : ''}
       ${salvo && pode(req.papel, 'apaga') ? html`<form method="post" action="/comportamental/grupos/${salvo.id}/apagar" data-confirmar="Apagar este grupo?"><button class="botao sec">Apagar grupo</button></form>` : ''}` : html`<div class="aviso alerta">Selecione as pessoas e clique em Analisar.</div>`;
     res.send(layout(req, salvo ? `Análise de Grupo: ${salvo.nome}` : 'Análise de Grupo', html`<form method="get" class="card">

@@ -52,7 +52,7 @@ const MENU = [
   ], '💬'),
   aba('Configurações', [
     tela('/config/alertas', 'Alerta', null, 'configura'), tela('/config/usuarios', 'Usuários', null, 'configura'),
-    aba('Importações', [tela('/config/importar', 'Colaboradores', null, 'edita')]),
+    aba('Importações', [tela('/cad/colaboradores/importar', 'Colaboradores', null, 'edita')]),
     tela('/config/auditoria', 'Auditoria', null, 'configura'),
   ], '⚙️'),
 ];

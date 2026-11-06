@@ -169,6 +169,32 @@ ol.guia { list-style: none; padding: 0; margin: 0; }
   body { background: #fff; color: #000; } main { padding: 0; } .card { border: 0; padding: 0; }
   .lista tbody tr[hidden] { display: table-row !important; }
 }
+/* RH: gráficos (src/graficos.js). Cores validadas para daltonismo nos dois temas */
+:root { --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; } }
+:root[data-theme="dark"] { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; }
+.vg-s1 { background: var(--s1); } .vg-s2 { background: var(--s2); } .vg-s3 { background: var(--s3); } .vg-s4 { background: var(--s4); }
+.vg i, .vg-h i, .vg-100 i, .vg-seg i { display: block; }
+.vg-legenda { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 10px; font-size: .85rem; color: var(--suave); } .vg-legenda span { display: inline-flex; align-items: center; gap: 6px; } .vg-legenda i { width: 12px; height: 12px; border-radius: 3px; display: block; }
+.vg-area { padding-left: 32px; } .vg-plot { position: relative; height: 200px; margin-top: 20px; }
+.vg-linha { position: absolute; left: 0; right: 0; border-top: 1px solid var(--borda); } .vg-linha.base { border-top-color: var(--suave); } .vg-linha small { position: absolute; right: 100%; margin-right: 6px; transform: translateY(-50%); font-size: .72rem; color: var(--suave); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.vg-cols { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
+.vg-col { position: relative; height: 100%; }
+.vg-pilha { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); width: min(24px, 72%); display: flex; flex-direction: column-reverse; gap: 2px; } .vg-pilha i { flex-basis: 0; min-height: 2px; cursor: default; } .vg-pilha i:last-child { border-radius: 4px 4px 0 0; }
+.card .vg .vg-topo { position: absolute; left: 0; right: 0; text-align: center; font-size: .8rem; line-height: 1.2; margin: 0 0 3px; }
+.grade-2 + .card, .grade-2 + .grade-2 { margin-top: 16px; } .vg-multi { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 16px; } .vg-multi > .card { margin: 0; }
+.vg-lado { position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-end; gap: 2px; } .vg-lado i { width: min(24px, 36%); border-radius: 4px 4px 0 0; min-height: 1px; }
+.vg-rotulos { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); margin-top: 6px; font-size: .78rem; color: var(--suave); text-align: center; } .vg-rotulos span { overflow-wrap: anywhere; padding: 0 2px; }
+.vg-h, .vg-100 { display: grid; gap: 10px; } .vg-h .item, .vg-100 .item { display: grid; grid-template-columns: minmax(90px, 1fr) 2fr minmax(32px, max-content); gap: 10px; align-items: center; font-size: .9rem; } .vg-h .item { grid-template-columns: minmax(90px, 1fr) 2fr 96px; } .vg-h b, .vg-100 b { min-width: 28px; text-align: right; font-size: .85rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vg-h .trilho { height: 12px; } .vg-h .trilho i { height: 100%; border-radius: 0 4px 4px 0; min-width: 2px; }
+.vg-100 .faixa { display: flex; gap: 2px; height: 16px; } .vg-100 .faixa i { flex-basis: 0; min-width: 2px; } .vg-100 .faixa i:last-child { border-radius: 0 4px 4px 0; }
+.vg-geral h2 { margin: 2px 0 12px; } .vg-seg { display: flex; gap: 2px; height: 20px; } .vg-seg i { flex-basis: 0; } .vg-seg i:first-child { border-radius: 4px 0 0 4px; } .vg-seg i:last-child { border-radius: 0 4px 4px 0; }
+.vg-pesos { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin: 14px 0 8px; } .vg-pesos div { display: grid; grid-template-columns: 12px 1fr; column-gap: 8px; align-items: center; } .vg-pesos i { width: 12px; height: 12px; border-radius: 3px; display: block; } .vg-pesos b { font-size: 1.2rem; } .vg-pesos span, .vg-pesos small { grid-column: 2; } .vg-pesos small { color: var(--suave); }
+.vg-medidor > b { display: block; font-size: 2.2rem; line-height: 1.1; } .vg-medidor .trilho { height: 12px; background: color-mix(in srgb, var(--s1) 22%, transparent); border-radius: 99px; overflow: hidden; margin: 10px 0 6px; } .vg-medidor .trilho i { display: block; height: 100%; background: var(--s1); border-radius: 99px; } .vg-medidor span { color: var(--suave); font-size: .9rem; }
+.vg-dados { margin-top: 12px; font-size: .85rem; } .vg-dados summary { cursor: pointer; color: var(--suave); } .vg-dados table { margin-top: 6px; }
+#dicaGrafico { position: fixed; z-index: 50; pointer-events: none; background: var(--texto); color: var(--card); padding: 5px 9px; border-radius: 6px; font-size: .8rem; max-width: 260px; }
+@media (max-width: 640px) { .vg-h .item, .vg-100 .item { grid-template-columns: 1fr auto; } .vg-h .trilho, .vg-100 .faixa { grid-column: 1 / -1; grid-row: 2; } }
+@media (forced-colors: active), print { .vg-s1, .vg-s2, .vg-s3, .vg-s4 { forced-color-adjust: none; print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
 /* RH: barras de composição, matriz 3x3 e perguntas da pesquisa */
 .aceite { display: flex; gap: 8px; align-items: center; margin: 12px 0; } .aceite input { width: auto; }
 .barras { display: grid; gap: 8px; } .barras .item { display: grid; grid-template-columns: minmax(110px, 1fr) 2fr 56px; gap: 10px; align-items: center; font-size: .9rem; }
