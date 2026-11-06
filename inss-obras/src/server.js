@@ -464,7 +464,7 @@ app.post('/propostas/:id/desativar', h((req, res) => {
 const CAMPOS_CLIENTE = ['tipo', 'nome', 'fantasia', 'documento', 'nascimento', 'email', 'telefone', 'origem', 'obs', 'profissao', 'nacionalidade', 'registro', 'contato',
   'telefone_fixo', 'cep', 'rua', 'numero', 'bairro', 'cidade', 'uf', 'complemento', 'possui_procuracao', 'procuracao_data_assinatura', 'procuracao_data_fim',
   'certificate_id', 's1000_inicio', 's1000_fim', 'class_trib', 'ind_opt_reg_eletron', 'ind_desoneracao', 'pis_pasep', 's1000_recibo'];
-const CLASS_TRIB = [['21', '21 - Empregador doméstico ou empregador PF'], ['22', '22 - Segurado especial'], ['60', '60 - Missão diplomática'], ['70', '70 - Organismo internacional']];
+const CLASS_TRIB = [['21', '21 - Pessoa física, exceto segurado especial'], ['22', '22 - Segurado especial'], ['60', '60 - Missão diplomática'], ['70', '70 - Organismo internacional']];
 
 function formCliente(req, c, acao, completo = false) {
   const inp = (n, attrs = '') => html`<input name="${n}" value="${c[n] ?? ''}" ${raw(attrs)}>`;
@@ -611,6 +611,7 @@ app.get('/esocial/envios/:id', h((req, res) => {
       <ol class="etapas-envio">${ETAPAS_ENVIO.map(([k, t], i) => html`<li data-etapa="${k}" class="${log.status === 'erro' ? (i <= pos ? 'erro' : '') : i < pos || log.status === 'recebido' ? 'feito' : i === pos ? 'atual' : ''}"><span></span>${t}</li>`)}</ol>
       <p class="desc" id="envioEtapa">${log.etapa}${log.protocolo ? ` · protocolo ${log.protocolo}` : ''}</p>
       <div id="envioRecibo" ${log.status === 'recebido' ? '' : 'hidden'} class="aviso">Recibo do ${log.event}: <b id="envioReciboNum">${log.receipt || ''}</b> (já gravado no cadastro do cliente).</div>
+      <p class="desc">Para conferir no portal do eSocial: perfil <b>Procurador de Pessoa Física - CPF</b>, informe o CPF ${cli.documento} e abra o módulo <b>Geral</b>. O envio é feito pelo sistema (webservice), por isso aparece no Geral e não no Simplificado, que é só para empregador doméstico e segurado especial.</p>
       <pre id="envioMensagem" class="${log.status === 'erro' ? 'aviso erro' : 'aviso alerta'}" ${log.mensagem ? '' : 'hidden'}>${log.mensagem || ''}</pre>
       <div class="acoes"><a class="botao sec" href="/clientes/${cli.id}?guia=1">Voltar ao cliente</a>
         <form method="post" action="/esocial/envios/${log.id}/tentar" id="envioTentar" ${log.status === 'erro' ? '' : 'hidden'}><button class="botao">Tentar novamente</button></form></div>
