@@ -27,6 +27,19 @@ const post = (url, cookie, body) => fetch(base + url, { method: 'POST', redirect
 const get = (url, cookie) => fetch(base + url, { redirect: 'manual', headers: cookie ? { cookie } : {} });
 const texto = async (url, cookie) => (await get(url, cookie)).text();
 const CPF = '529.982.247-25';
+// cadastro mínimo válido: cria departamento e cargo no escritório da sessão
+const fixos = new Map();
+async function base_colab(ck) {
+  if (fixos.has(ck)) return fixos.get(ck);
+  await post('/cad/departamentos/novo', ck, { nome: 'Geral' });
+  await post('/cad/cargos/novo', ck, { nome: 'Analista' });
+  const departamento_id = (await texto('/cad/departamentos', ck)).match(/\/cad\/departamentos\/(\d+)/)[1];
+  const cargo_id = (await texto('/cad/cargos', ck)).match(/\/cad\/cargos\/(\d+)/)[1];
+  const b = { nascimento: '1990-05-10', genero: 'Feminino', email: 'pessoa@exemplo.com', data_admissao: '2025-01-10', estrangeiro: '1', departamento_id, cargo_id };
+  fixos.set(ck, b);
+  return b;
+}
+const novoColab = async (ck, extra) => post('/cad/colaboradores/novo', ck, { ...(await base_colab(ck)), ...extra });
 
 test('sem login não entra e o bilhete do Hub funciona uma vez só', async () => {
   assert.strictEqual((await get('/dash')).status, 401);
@@ -43,11 +56,11 @@ test('colaborador: cadastro, ficha, desligamento e recontratação', async () =>
   assert.strictEqual(r.status, 302);
   const dep = (await texto('/cad/departamentos', ck)).match(/\/cad\/departamentos\/(\d+)/)[1];
 
-  r = await post('/cad/colaboradores/novo', ck, { nome: 'Maria', data_admissao: '2025-01-10', cpf: '111.111.111-11' });
+  r = await novoColab(ck, { nome: 'Maria', cpf: '111.111.111-11', estrangeiro: '0' });
   assert.strictEqual(r.status, 422, 'CPF inválido é recusado');
   assert.match(await r.text(), /CPF inválido/);
 
-  r = await post('/cad/colaboradores/novo', ck, { nome: 'Maria <b>', data_admissao: '2025-01-10', cpf: CPF, salario: '3.500,50', departamento_id: dep });
+  r = await novoColab(ck, { nome: 'Maria <b>', cpf: CPF, salario: '3.500,50', departamento_id: dep, estrangeiro: '0' });
   assert.strictEqual(r.status, 302);
   const ficha = r.headers.get('location');
   const id = ficha.match(/\d+/)[0];
@@ -56,7 +69,7 @@ test('colaborador: cadastro, ficha, desligamento e recontratação', async () =>
   assert.match(t, /Maria &lt;b&gt;/, 'nome escapado');
   assert.ok(!t.includes('Maria <b>'));
 
-  r = await post('/cad/colaboradores/novo', ck, { nome: 'Outra', data_admissao: '2025-01-10', cpf: CPF });
+  r = await novoColab(ck, { nome: 'Outra', cpf: CPF, estrangeiro: '0' });
   assert.strictEqual(r.status, 422, 'CPF repetido é recusado');
 
   await post('/cad/motivos-demissao/novo', ck, { nome: 'Nova oportunidade' });
@@ -71,7 +84,7 @@ test('colaborador: cadastro, ficha, desligamento e recontratação', async () =>
 
 test('escritórios não se enxergam, nem por referência', async () => {
   const a = await login('?office=iso-a&u=adm-a'), b = await login('?office=iso-b&u=adm-b');
-  await post('/cad/colaboradores/novo', a, { nome: 'Pessoa A', data_admissao: '2025-01-01' });
+  await novoColab(a, { nome: 'Pessoa A' });
   const id = (await texto('/cad/colaboradores', a)).match(/\/cad\/colaboradores\/(\d+)\/ficha/)[1];
   assert.ok(!(await texto('/cad/colaboradores', b)).includes('Pessoa A'));
   assert.strictEqual((await get(`/cad/colaboradores/${id}/ficha`, b)).status, 404);
@@ -85,7 +98,7 @@ test('papéis: leitura não vê sensível nem altera; sem_salario não apaga o s
   const adm = await login('?office=pap&u=chefe');
   const leitura = await login('?office=pap&admin=0&u=estagio');
   const sem = await login('?office=pap&admin=0&u=analista');
-  await post('/cad/colaboradores/novo', adm, { nome: 'Joao', data_admissao: '2025-01-01', cpf: CPF, salario: '9999' });
+  await novoColab(adm, { nome: 'Joao', cpf: CPF, salario: '9999', estrangeiro: '0' });
   await post('/cad/registro-de-saude/novo', adm, { colaborador_id: '1', tipo_exame: 'Periódico', data: '2026-01-01' });
   const id = (await texto('/cad/colaboradores', adm)).match(/\/cad\/colaboradores\/(\d+)\/ficha/)[1];
 
@@ -99,7 +112,7 @@ test('papéis: leitura não vê sensível nem altera; sem_salario não apaga o s
 
   assert.strictEqual((await post('/config/usuarios', adm, { hub_user: 'analista', papel: 'sem_salario' })).status, 302);
   assert.ok(!(await texto(`/cad/colaboradores/${id}`, sem)).includes('9999'));
-  assert.strictEqual((await post(`/cad/colaboradores/${id}`, sem, { nome: 'Joao Editado', data_admissao: '2025-01-01', cpf: CPF })).status, 302);
+  assert.strictEqual((await post(`/cad/colaboradores/${id}`, sem, { ...(await base_colab(adm)), nome: 'Joao Editado', cpf: CPF, estrangeiro: '0' })).status, 302);
   assert.match(await texto(`/cad/colaboradores/${id}/ficha`, adm), /Joao Editado[\s\S]*9\.999/, 'salário continua lá');
   assert.strictEqual((await post(`/cad/colaboradores/${id}/apagar`, sem, {})).status, 403);
 });
@@ -125,9 +138,12 @@ test('pesquisa anônima: link público, uma resposta, resultado só com 3 ou mai
 
 test('importação cria, atualiza por CPF, cria departamento e aponta erro por linha', async () => {
   const ck = await login('?office=imp&u=adm');
-  const csv = 'Nome completo;CPF;Data de admissão;Departamento;Salário;Coluna X\nAna;529.982.247-25;01/02/2025;Fiscal;2.000,00;a\nSem data;;;Fiscal;;b\nBia;;15/03/2025;fiscal;;c';
+  const cab = 'Nome;CPF;Estrangeiro;Data de Nascimento;Sexo;Email;Data de admissão;Departamento;Cargo;Tipo de contrato;Salário;Estado Civil;CTPS NUM;Coluna X';
+  const csv = `${cab}\nAna;529.982.247-25;não;10/05/1990;feminino;a@x.com;01/02/2025;Fiscal;Analista;clt + comissao;2.000,00;Uniao Estavel;123;a\n`
+    + 'Sem data;;sim;10/05/1990;Feminino;b@x.com;;Fiscal;Analista;CLT;;;;b\n'
+    + 'Bia;;sim;10/05/1990;Feminino;c@x.com;15/03/2025;fiscal;Analista;CLT;;;;c';
   let t = await (await post('/config/importar', ck, { csv })).text();
-  assert.match(t, /Linha 3: Preencha: Data de admissão/);
+  assert.match(t, /Linha 3:.*Data de admissão/);
   assert.match(t, /Coluna X/);
   assert.strictEqual(((await texto('/cad/departamentos', ck)).match(/Fiscal/g) || []).length, 1, 'não duplica departamento');
   assert.match(await texto('/cad/colaboradores', ck), /Ana[\s\S]*Bia/);
@@ -138,8 +154,8 @@ test('importação cria, atualiza por CPF, cria departamento e aponta erro por l
 
 test('vínculo em massa, célula perigosa no CSV e matriz de potencial', async () => {
   const ck = await login('?office=mass&u=adm');
-  await post('/cad/colaboradores/novo', ck, { nome: '=HYPERLINK("x")', data_admissao: '2025-01-01' });
-  await post('/cad/colaboradores/novo', ck, { nome: 'Dois', data_admissao: '2025-01-01' });
+  await novoColab(ck, { nome: '=HYPERLINK("x")' });
+  await novoColab(ck, { nome: 'Dois' });
   assert.match(await texto('/cad/colaboradores/exportar', ck), /"'=HYPERLINK/);
   const ids = [...(await texto('/cad/colaboradores', ck)).matchAll(/\/cad\/colaboradores\/(\d+)\/ficha/g)].map(m => m[1]);
   await post('/cad/beneficios/novo', ck, { nome: 'VR' });
@@ -151,4 +167,19 @@ test('vínculo em massa, célula perigosa no CSV e matriz de potencial', async (
   await post('/cad/avaliacoes/novo', ck, { ciclo_id: ciclo, colaborador_id: ids[1], desempenho: '5', potencial: '5' });
   assert.match(await texto('/matriz-potencial', ck), /Talento de destaque \(1\)/);
   assert.strictEqual((await post('/cad/avaliacoes/novo', ck, { ciclo_id: ciclo, colaborador_id: ids[0], desempenho: '6', potencial: '5' })).status, 422);
+});
+
+test('experiência e contrato pela duração, insalubridade, CPF e opção fora da lista', async () => {
+  const ck = await login('?office=prazo&u=adm');
+  let r = await novoColab(ck, { nome: 'Prazo', data_admissao: '2026-01-01', periodo_experiencia: '45', data_contrato: '2026-01-01', duracao_contrato: '90', percentual_insalubridade: '20%' });
+  assert.strictEqual(r.status, 302);
+  const ficha = r.headers.get('location'), id = ficha.match(/\d+/)[0];
+  const t = await texto(ficha, ck);
+  assert.match(t, /14\/02\/2026/, 'fim da experiência = admissão + 45 dias');
+  assert.match(t, /31\/03\/2026/, 'vencimento = contrato + 90 dias');
+  assert.ok(!t.includes('20%'), 'sem insalubridade não guarda percentual');
+  r = await novoColab(ck, { nome: 'Sem CPF', estrangeiro: '0' });
+  assert.strictEqual(r.status, 422);
+  assert.match(await r.text(), /Preencha: CPF/);
+  assert.strictEqual((await post(`/cad/colaboradores/${id}`, ck, { ...(await base_colab(ck)), nome: 'Prazo', estado_civil: 'Solteiro(a)' })).status, 422, 'opção fora da lista é recusada');
 });

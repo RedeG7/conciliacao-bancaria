@@ -8,6 +8,7 @@ const { dataValida } = require('./datas');
 const { html, raw, brl, n2, dataBr, select, campo } = require('./views');
 
 const um = v => (Array.isArray(v) ? v[0] : v);
+const norm = s => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 const MAX_TEXTO = 5000;
 
 // "1.234,56", "1234,56" e "1234.56" viram 1234.56
@@ -72,8 +73,11 @@ function lerForm(k, body, c, atual = null, { parcial = false } = {}) {
       else if (f.inteiro && !Number.isInteger(v)) erros.push(`${f.r}: use um número inteiro.`);
       else if ((f.min !== undefined && v < f.min) || (f.max !== undefined && v > f.max)) erros.push(`${f.r}: fora do limite permitido.`);
     } else if (f.t === 'opcao') {
+      // a planilha pode vir com outra caixa ou sem acento; o valor antigo do registro continua aceito
       const ok = f.op.map(o => String(Array.isArray(o) ? o[0] : o));
-      if (!ok.includes(bruto)) erros.push(`${f.r}: opção inválida.`);
+      const achado = ok.find(o => norm(o) === norm(bruto));
+      if (achado) v = achado;
+      else if (bruto !== atual?.[f.n]) erros.push(`${f.r}: opção inválida.`);
     } else if (f.t === 'sim') {
       if (bruto !== '1' && bruto !== '0') erros.push(`${f.r}: opção inválida.`);
       v = bruto === '1';
@@ -137,7 +141,10 @@ function opcoesRef(c, f, atual, comVazio = true) {
 function entrada(f, v, c, { multi = false } = {}) {
   const req = f.req ? 'required' : '';
   if (f.t === 'longo') return html`<textarea name="${f.n}" rows="4" ${raw(req)}>${v ?? ''}</textarea>`;
-  if (f.t === 'opcao') return select(f.n, [['', '- selecione -'], ...f.op], v, req);
+  if (f.t === 'opcao') {
+    const antigo = v && !f.op.some(o => String(Array.isArray(o) ? o[0] : o) === String(v)) ? [v] : [];
+    return select(f.n, [['', '- selecione -'], ...f.op, ...antigo], v, req);
+  }
   if (f.t === 'sim') return select(f.n, [['0', 'Não'], ['1', 'Sim']], v === true || v === '1' ? '1' : '0');
   if (f.t === 'ref' && multi) {
     const sel = new Set((Array.isArray(v) ? v : [v]).map(String));
@@ -151,7 +158,7 @@ function entrada(f, v, c, { multi = false } = {}) {
 }
 
 const grade = (campos, d, c, k, novo) => html`<div class="grade">${campos.map(f =>
-  campo(f.r + (f.req ? ' *' : ''), entrada(f, d[f.n], c, { multi: novo && k.multi === f.n }), f.t === 'longo' ? 'largo' : ''))}</div>`;
+  campo(f.r + (f.req || f.obrig ? ' *' : ''), entrada(f, d[f.n], c, { multi: novo && k.multi === f.n }), f.t === 'longo' ? 'largo' : ''))}</div>`;
 
 // formulário do cadastro; só leitura = campos travados, sem botão de salvar
 function formulario(k, d, c, { acao, erros = [], somenteLeitura = false, novo = false, ficha = '' }) {
@@ -185,4 +192,4 @@ function exportar(k, c) {
   return csv(campos.map(f => f.r), ordenar(k, c.listar(k.kind)).map(r => campos.map(f => valor(f, r[f.n], c))));
 }
 
-module.exports = { um, numero, data, contexto, lerForm, mudancas, valor, colunas, ordenar, formulario, csv, exportar, MESES };
+module.exports = { um, norm, numero, data, contexto, lerForm, mudancas, valor, colunas, ordenar, formulario, csv, exportar, MESES };

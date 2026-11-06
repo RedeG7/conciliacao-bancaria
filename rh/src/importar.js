@@ -6,10 +6,8 @@
 // existem são criados pelo nome.
 const R = require('./db');
 const { KINDS, rotulo } = require('./modelos');
-const { lerForm } = require('./crud');
+const { lerForm, norm } = require('./crud');
 const { ve } = require('./acesso');
-
-const norm = s => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 
 // separador detectado na 1ª linha (; ou ,); aspas podem conter o separador e quebra de linha
 function parseCsv(texto) {
@@ -32,7 +30,7 @@ function parseCsv(texto) {
 
 function modelo() {
   const k = KINDS.colaborador;
-  const nomes = ['nome', 'cpf', 'nascimento', 'email', 'data_admissao', 'departamento_id', 'cargo_id', 'unidade_id', 'tipo_contrato', 'salario'];
+  const nomes = ['nome', 'cpf', 'nascimento', 'genero', 'email', 'data_admissao', 'departamento_id', 'cargo_id', 'unidade_id', 'tipo_contrato', 'salario'];
   return `﻿${nomes.map(n => k.campos.find(f => f.n === n).r).join(';')}\r\n`;
 }
 
@@ -41,8 +39,11 @@ function importar(texto, c, usuario) {
   const linhas = parseCsv(texto);
   if (linhas.length < 2) return { criados: 0, atualizados: 0, ignoradas: [], erros: ['A planilha precisa do cabeçalho e de pelo menos uma linha.'] };
   const campos = new Map();
-  for (const f of k.campos) if (!f.interno && ve(c.papel, f.cl)) { campos.set(norm(f.r), f); campos.set(norm(f.n), f); }
-  const cab = linhas[0].map(h => campos.get(norm(h)) || null);
+  for (const f of k.campos) {
+    if (f.interno || !ve(c.papel, f.cl)) continue;
+    for (const nome of [f.r, f.n, ...(f.alias || [])]) campos.set(norm(nome), f);
+  }
+  const cab = linhas[0].map(h => campos.get(norm(h.replace(/^\s*\*\s*/, ''))) || null);
   const ignoradas = linhas[0].filter((h, i) => !cab[i]);
   if (!cab.some(f => f?.n === 'nome') && !cab.some(f => f?.n === 'cpf')) {
     return { criados: 0, atualizados: 0, ignoradas, erros: ['A planilha precisa ter a coluna Nome completo ou CPF.'] };
