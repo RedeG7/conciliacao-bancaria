@@ -35,3 +35,9 @@ honorarioscontrol.com.br, www.honorarioscontrol.com.br {
 {$DOMINIO_INSSOBRAS:inssobras.redeg7.com} {
 	reverse_proxy inssobras:3000
 }
+
+# RH (servico "rh" do docker-compose, pasta rh/). Precisa do registro DNS A
+# "rh" apontando pro VPS.
+{$DOMINIO_RH:rh.redeg7.com} {
+	reverse_proxy rh:3000
+}
