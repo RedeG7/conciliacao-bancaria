@@ -246,3 +246,10 @@ test('modelos de pesquisa, última resposta e comparação sem quebrar o anonima
   assert.ok((await texto('/cad/pesquisas', ck)).includes(hoje), 'coluna última resposta');
   assert.strictEqual((await get('/cad/pesquisas/modelos', await login('?office=mod&admin=0&u=leitor'))).status, 403);
 });
+
+test('menu lateral marca os grupos para lembrar o que foi minimizado', async () => {
+  const h = await texto('/dash', await login());
+  assert.match(h, /<details class="grupo" data-grupo="Pessoas" open>/);
+  assert.ok(h.indexOf('menuFechado') > h.indexOf('</nav>'), 'restaura logo depois do menu, antes de pintar a tela');
+  assert.ok(h.includes('/static/app.js?v='), 'versão no endereço do script');
+});
