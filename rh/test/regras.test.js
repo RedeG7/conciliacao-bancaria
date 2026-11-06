@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const { addMeses, proximoAniversario, anosEntre, dataValida } = require('../src/datas');
 const { alertas, ANTECEDENCIA_PADRAO } = require('../src/alertas');
 const M = require('../src/metricas');
-const { numero, data, csv } = (() => { process.env.DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rh-r-')); return require('../src/crud'); })();
+const { numero, data, csv, horas, hhmm } = (() => { process.env.DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rh-r-')); return require('../src/crud'); })();
 const { parseCsv } = require('../src/importar');
 const { cpfValido } = require('../src/modelos');
 
@@ -26,6 +26,34 @@ test('números, datas e CPF', () => {
   assert.strictEqual(data('31/02/2026'), null);
   assert.ok(cpfValido('529.982.247-25'));
   assert.ok(!cpfValido('529.982.247-26'));
+});
+
+test('horas', () => {
+  assert.strictEqual(horas('8:30'), 8.5);
+  assert.strictEqual(horas('8,5'), 8.5);
+  assert.strictEqual(horas('8:75'), null);
+  assert.strictEqual(hhmm(8.5), '08:30');
+  assert.strictEqual(hhmm(horas('1:20')), '01:20');
+});
+
+test('treinamento: alerta só da conclusão mais recente', () => {
+  const d = { colaboradores: [{ id: 1, nome: 'Ana', situacao: 'Ativo' }, { id: 2, nome: 'Saiu', situacao: 'Inativo' }], ferias: [], pdis: [], ciclos: [],
+    treinamentos: [{ id: 9, titulo: 'NR-35', validade_meses: 12 }],
+    participacoes: [
+      { colaborador_id: 2, treinamento_id: 9, status: 'Concluiu', data_conclusao: '2025-11-20' },
+      { colaborador_id: 1, treinamento_id: 9, status: 'Concluiu', data_conclusao: '2025-11-20' },
+    ] };
+  const a = alertas(d, ANTECEDENCIA_PADRAO, '2026-11-05');
+  assert.deepStrictEqual(a.map(x => [x.tipo, x.data]), [['Treinamento', '2026-11-20']]);
+  d.participacoes.push({ colaborador_id: 1, treinamento_id: 9, status: 'Concluiu', data_conclusao: '2026-10-01' });
+  assert.strictEqual(alertas(d, ANTECEDENCIA_PADRAO, '2026-11-05').length, 0);
+});
+
+test('avaliados sem PDI', () => {
+  const cols = [{ id: 1, nome: 'A', situacao: 'Ativo' }, { id: 2, nome: 'B', situacao: 'Ativo' }, { id: 3, nome: 'C', situacao: 'Inativo' }, { id: 4, nome: 'D', situacao: 'Ativo' }];
+  const av = [{ colaborador_id: 2, desempenho: 2 }, { colaborador_id: 2, desempenho: 5 }, { colaborador_id: 1, desempenho: 4 }, { colaborador_id: 3, desempenho: 1 }, { colaborador_id: 4, desempenho: 1 }];
+  const r = M.avaliadosSemPdi(cols, av, [{ colaborador_id: 4, status: 'Aberto' }, { colaborador_id: 1, status: 'Finalizado' }]);
+  assert.deepStrictEqual(r.map(x => [x.colaborador.nome, x.avaliacao.desempenho]), [['B', 2], ['A', 4]]);
 });
 
 test('CSV: aspas, separador e fórmula', () => {

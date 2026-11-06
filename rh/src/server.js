@@ -182,7 +182,7 @@ app.get('/', (req, res) => res.redirect('/dash'));
 // ---------------------------------------------------------------- painel
 function dadosAlertas(req) {
   return { colaboradores: R.listar(req.office, 'colaborador'), ferias: R.listar(req.office, 'ferias'), pdis: R.listar(req.office, 'pdi'),
-    ciclos: R.listar(req.office, 'ciclo'), saude: ve(req.papel, 'saude') ? R.listar(req.office, 'saude') : null };
+    ciclos: R.listar(req.office, 'ciclo'), treinamentos: R.listar(req.office, 'treinamento'), participacoes: R.listar(req.office, 'participacao'), saude: ve(req.papel, 'saude') ? R.listar(req.office, 'saude') : null };
 }
 
 app.get('/dash', h((req, res) => {
@@ -236,7 +236,8 @@ function telaLista(req, res, k) {
   let abas = '';
   if (k.abas) {
     const ativa = k.abas.valores.includes(req.query.aba) ? req.query.aba : k.abas.padrao || k.abas.valores[0];
-    abas = html`<div class="abas">${k.abas.valores.map(v => html`<a href="?aba=${encodeURIComponent(v)}" class="${v === ativa ? 'ativo' : ''}">${v}<span>${linhas.filter(r => r[k.abas.campo] === v).length}</span></a>`)}</div>`;
+    abas = html`<div class="abas">${k.abas.valores.map(v => html`<a href="?aba=${encodeURIComponent(v)}" class="${v === ativa ? 'ativo' : ''}">${v}<span>${linhas.filter(r => r[k.abas.campo] === v).length}</span></a>`)}
+      ${k.abaExtra ? html`<a href="${k.abaExtra.href}">${k.abaExtra.rotulo}</a>` : ''}</div>`;
     linhas = linhas.filter(r => r[k.abas.campo] === ativa);
   }
   let resumo = '';
@@ -433,6 +434,15 @@ app.get('/performance', h((req, res) => {
     { descricao: 'Alta = desempenho 4 ou 5. Baixa = desempenho 1 ou 2.' }));
 }));
 
+app.get('/cad/pdi/avaliados-sem-pdi', h((req, res) => {
+  const c = req.c, editar = pode(req.papel, 'edita');
+  const lista = M.avaliadosSemPdi(c.listar('colaborador'), c.listar('avaliacao'), c.listar('pdi'));
+  res.send(layout(req, 'Avaliados sem PDI', tabela(['Colaborador', 'Ciclo', 'Desempenho', 'Potencial', 'Ações'], lista.map(({ colaborador: p, avaliacao: a }) => [
+    html`<a href="/cad/colaboradores/${p.id}/ficha">${p.nome}</a>`, c.nome('ciclo', a.ciclo_id), a.desempenho, a.potencial,
+    editar ? html`<a href="/cad/pdi/novo?colaborador_id=${p.id}&ciclo_id=${a.ciclo_id}">Criar PDI</a>` : '',
+  ]), 'Todos os avaliados têm PDI em andamento.'), { migalha: 'PDI', descricao: 'Última avaliação de quem está sem PDI aberto ou em revisão.' }));
+}));
+
 // ---------------------------------------------------------------- pesquisas
 const MIN_RESPOSTAS = 3; // com menos, a média poderia revelar a nota de alguém
 
@@ -492,7 +502,7 @@ app.get('/metricas/desligamentos', h((req, res) => {
 }));
 
 // ---------------------------------------------------------------- configurações
-const ROT_ALERTA = { experiencia: 'Fim de experiência', contrato: 'Fim de contrato', aniversario: 'Aniversário', exame: 'Exame', ferias: 'Férias sem programação', pdi: 'Entrega de PDI', avaliacao: 'Fim de ciclo de avaliação' };
+const ROT_ALERTA = { experiencia: 'Fim de experiência', contrato: 'Fim de contrato', aniversario: 'Aniversário', exame: 'Exame', ferias: 'Férias sem programação', pdi: 'Entrega de PDI', avaliacao: 'Fim de ciclo de avaliação', treinamento: 'Vencimento de treinamento' };
 app.get('/config/alertas', exige('configura'), h((req, res) => {
   const d = R.config(req.office, 'alertas', ANTECEDENCIA_PADRAO);
   res.send(layout(req, 'Alertas', html`<form method="post" class="card"><div class="grade">${Object.entries(ROT_ALERTA).map(([n, r]) => campo(`${r} (dias antes)`, html`<input type="number" name="${n}" min="0" max="365" value="${d[n]}" required>`))}</div>

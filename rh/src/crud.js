@@ -17,6 +17,16 @@ function numero(txt) {
   const n = Number(s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s);
   return Number.isFinite(n) ? n : null;
 }
+// "8:30" e "8,5" viram 8.5 horas
+function horas(txt) {
+  const m = String(txt).trim().match(/^(\d{1,4}):([0-5]\d)$/);
+  const v = m ? Number(m[1]) + Number(m[2]) / 60 : numero(txt);
+  return v === null || v < 0 ? null : v;
+}
+function hhmm(v) {
+  const min = Math.round(Number(v) * 60);
+  return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+}
 // aceita data do formulário (AAAA-MM-DD) e de planilha (DD/MM/AAAA)
 function data(txt) {
   const s = String(txt).trim();
@@ -56,6 +66,13 @@ function lerForm(k, body, c, atual = null, { parcial = false } = {}) {
   const erros = [];
   for (const f of k.campos) {
     if (f.interno || !ve(c.papel, f.cl) || (parcial && !(f.n in body))) continue;
+    if (f.t === 'refs') {
+      const antes = atual?.[f.n] || [];
+      const ids = [...new Set([].concat(body[f.n] ?? []).map(Number))];
+      if (ids.some(id => !antes.includes(id) && !R.obter(c.office, f.ref, id))) erros.push(`${f.r}: registro não encontrado.`);
+      dados[f.n] = ids.length ? ids : null;
+      continue;
+    }
     const bruto = String(um(body[f.n]) ?? '').trim();
     if (!bruto) {
       if (f.req) erros.push(`Preencha: ${f.r}.`);
@@ -72,6 +89,9 @@ function lerForm(k, body, c, atual = null, { parcial = false } = {}) {
       if (v === null) erros.push(`${f.r}: número inválido.`);
       else if (f.inteiro && !Number.isInteger(v)) erros.push(`${f.r}: use um número inteiro.`);
       else if ((f.min !== undefined && v < f.min) || (f.max !== undefined && v > f.max)) erros.push(`${f.r}: fora do limite permitido.`);
+    } else if (f.t === 'horas') {
+      v = horas(bruto);
+      if (v === null) erros.push(`${f.r}: use o formato hh:mm.`);
     } else if (f.t === 'opcao') {
       // a planilha pode vir com outra caixa ou sem acento; o valor antigo do registro continua aceito
       const ok = f.op.map(o => String(Array.isArray(o) ? o[0] : o));
@@ -111,7 +131,9 @@ function valor(f, v, c) {
   if (f.t === 'dinheiro') return brl(v);
   if (f.t === 'numero') return n2(v);
   if (f.t === 'sim') return v ? 'Sim' : 'Não';
+  if (f.t === 'horas') return hhmm(v);
   if (f.t === 'ref') return c.nome(f.ref, v);
+  if (f.t === 'refs') return v.map(id => c.nome(f.ref, id)).join(', ');
   if (f.t === 'opcao' && Array.isArray(f.op[0])) return (f.op.find(o => String(o[0]) === String(v)) || [])[1] || v;
   return v;
 }
@@ -146,6 +168,11 @@ function entrada(f, v, c, { multi = false } = {}) {
     return select(f.n, [['', '- selecione -'], ...f.op, ...antigo], v, req);
   }
   if (f.t === 'sim') return select(f.n, [['0', 'Não'], ['1', 'Sim']], v === true || v === '1' ? '1' : '0');
+  if (f.t === 'refs') {
+    const sel = new Set([].concat(v ?? []).map(String));
+    return html`<select name="${f.n}" multiple size="6">${opcoesRef(c, f, null, false).map(([i, t]) => html`<option value="${i}" ${sel.has(String(i)) ? 'selected' : ''}>${t}</option>`)}</select>`;
+  }
+  if (f.t === 'horas') return html`<input name="${f.n}" value="${typeof v === 'number' ? hhmm(v) : v ?? ''}" placeholder="00:00" inputmode="numeric" ${raw(req)}>`;
   if (f.t === 'ref' && multi) {
     const sel = new Set((Array.isArray(v) ? v : [v]).map(String));
     return html`<select name="${f.n}" multiple size="8" required>${opcoesRef(c, f, null, false).map(([i, t]) => html`<option value="${i}" ${sel.has(String(i)) ? 'selected' : ''}>${t}</option>`)}</select>`;
@@ -192,4 +219,4 @@ function exportar(k, c) {
   return csv(campos.map(f => f.r), ordenar(k, c.listar(k.kind)).map(r => campos.map(f => valor(f, r[f.n], c))));
 }
 
-module.exports = { um, norm, numero, data, contexto, lerForm, mudancas, valor, colunas, ordenar, formulario, csv, exportar, MESES };
+module.exports = { um, norm, numero, horas, hhmm, data, contexto, lerForm, mudancas, valor, colunas, ordenar, formulario, csv, exportar, MESES };
