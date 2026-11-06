@@ -83,8 +83,29 @@ const alvo = estilo => Object.fromEntries(CHAVES.map(e => [e, e === estilo ? 80 
 function aderencia(a, b) {
   return Math.round(100 - CHAVES.reduce((s, e) => s + Math.abs(a[e] - b[e]), 0) / CHAVES.length);
 }
+// em cinco faixas de pontos, para o histograma de cada estilo
+const FAIXAS_PONTOS = [[0, 19], [20, 39], [40, 59], [60, 79], [80, 100]];
+const histograma = (lista, estilo) => FAIXAS_PONTOS.map(([de, ate]) => ({ rotulo: `${de} a ${ate}`, total: lista.filter(p => p.pontos[estilo] >= de && p.pontos[estilo] <= ate).length }));
+// meses de AAAA-MM a AAAA-MM, inclusive
+function mesesEntre(de, ate) {
+  const out = [];
+  let [a, m] = de.split('-').map(Number);
+  const [fa, fm] = ate.split('-').map(Number);
+  while (a < fa || (a === fa && m <= fm)) {
+    out.push(`${a}-${String(m).padStart(2, '0')}`);
+    m++; if (m > 12) { m = 1; a++; }
+  }
+  return out;
+}
+// o perfil do grupo: peso de cada estilo na soma das médias; acima de 25% é dominante
+function perfilGeral(lista) {
+  const medias = mediaPontos(lista), soma = CHAVES.reduce((s, e) => s + medias[e], 0) || 1;
+  const pesos = CHAVES.map(e => ({ estilo: e, peso: Math.round((medias[e] / soma) * 1000) / 10 }));
+  const dominantes = [...pesos].sort((a, b) => b.peso - a.peso).filter((p, i) => i === 0 || p.peso >= 25).slice(0, 2).map(p => ESTILOS[p.estilo].nome);
+  return { pesos, nome: dominantes.join(' e ') };
+}
 function mediaPontos(lista) {
   return Object.fromEntries(CHAVES.map(e => [e, lista.length ? Math.round(lista.reduce((s, p) => s + p.pontos[e], 0) / lista.length) : 0]));
 }
 
-module.exports = { ESTILOS, CHAVES, QUESTOES, ESCALA, ORDEM_FAIXAS, faixa, pontuar, nomePerfil, alvo, aderencia, mediaPontos };
+module.exports = { ESTILOS, CHAVES, QUESTOES, ESCALA, ORDEM_FAIXAS, faixa, pontuar, nomePerfil, alvo, aderencia, mediaPontos, histograma, mesesEntre, perfilGeral };

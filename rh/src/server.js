@@ -207,7 +207,7 @@ app.get('/dash', h((req, res) => {
         <div class="card"><h3 class="primeiro">Desligamentos nos últimos 12 meses</h3><div class="info">
           <div><small>Total</small><b>${dsl.total}</b></div><div><small>Com menos de 1 ano de casa</small><b>${dsl.menosDeUmAno}</b></div>
           <div><small>Rotatividade</small><b>${n2(dsl.taxa)}%</b></div></div><p><a href="/metricas/desligamentos">Ver métricas</a></p></div>
-        <div class="card"><h3 class="primeiro">Ativos por departamento</h3>${barras(porDep, 'Nenhum colaborador ativo. Comece por Importar colaboradores ou cadastre o primeiro.')}</div>
+        <div class="card"><h3 class="primeiro">Ativos por departamento</h3>${barras(porDep, 'Nenhum colaborador ativo. Comece por Importar CSV em Colaboradores ou cadastre o primeiro.')}</div>
       </div>
     </div>`, { descricao: req.officeRow.name }));
 }));
@@ -261,6 +261,7 @@ function telaLista(req, res, k) {
   res.send(layout(req, k.titulo, html`${resumo}${abas}
     <div class="acoes">${editar && !k.novoBloqueado ? html`<a class="botao" href="${k.novoHref || `/cad/${k.slug}/novo`}">Adicionar</a>` : ''}
       ${(k.acoesLista || []).map(([href, t]) => html`<a class="botao sec" href="${href}">${t}</a>`)}
+      ${editar && !k.novoBloqueado ? html`<a class="botao sec" href="/cad/${k.slug}/importar">Importar CSV</a>` : ''}
       <a class="botao sec" href="/cad/${k.slug}/exportar">Exportar CSV</a></div>
     ${tabela([...cols.map(x => x.rotulo), 'Ações'], corpo)}`, { descricao: k.desc }));
 }
@@ -301,6 +302,33 @@ app.get('/cad/:slug/exportar', h((req, res) => {
   const k = carregarKind(req);
   auditar(req, 'Exportou', k.kind);
   res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${k.slug}.csv"` }).send(exportar(k, req.c));
+}));
+function carregarImportavel(req) {
+  const k = carregarKind(req);
+  if (k.novoBloqueado) throw falha(404, 'Este cadastro não aceita importação.');
+  return k;
+}
+app.get('/cad/:slug/importar', exige('edita'), h((req, res) => {
+  const k = carregarImportavel(req), aviso = k.kind === 'colaborador'
+    ? 'CPF já cadastrado atualiza só as colunas da planilha. Departamento, cargo, filial e unidade novos são criados pelo nome.'
+    : 'Aceita o arquivo de Exportar CSV. Registro já existente é atualizado, e linha repetida não duplica; os demais viram cadastro novo. Pessoas e outros cadastros citados precisam já existir, pelo nome.';
+  res.send(layout(req, `Importar: ${k.titulo}`, html`<form method="post" class="card">
+    ${campo('Arquivo CSV', html`<input type="file" accept=".csv,text/csv" class="ler-arquivo" data-alvo="csv">`)}
+    ${campo('Conteúdo', html`<textarea id="csv" name="csv" rows="10" required></textarea>`)}
+    <div class="acoes"><button class="botao">Importar</button><a class="botao sec" href="/cad/${k.slug}/importar/modelo">Baixar modelo</a><a class="botao sec" href="/cad/${k.slug}">Voltar</a></div></form>`, { migalha: k.titulo, descricao: aviso }));
+}));
+app.get('/cad/:slug/importar/modelo', exige('edita'), h((req, res) => {
+  const k = carregarImportavel(req);
+  res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="modelo-${k.slug}.csv"` }).send(imp.modelo(k, req.c));
+}));
+app.post('/cad/:slug/importar', exige('edita'), h((req, res) => {
+  const k = carregarImportavel(req);
+  const r = imp.importar(String(um(req.body.csv) || ''), req.c, req.user.name, k);
+  auditar(req, 'Importou', k.kind, null, `${r.criados} novos, ${r.atualizados} atualizados, ${r.erros.length} erros`);
+  res.send(layout(req, 'Importação concluída', html`<div class="cards4">${cartao('Novos', r.criados)}${cartao('Atualizados', r.atualizados)}${cartao('Com erro', r.erros.length)}</div>
+    ${r.erros.length ? html`<div class="aviso erro"><ul>${r.erros.slice(0, 100).map(e => html`<li>${e}</li>`)}</ul></div>` : ''}
+    ${r.ignoradas.length ? html`<div class="aviso alerta">Colunas não reconhecidas (ignoradas): ${r.ignoradas.join(', ')}</div>` : ''}
+    <div class="acoes"><a class="botao" href="/cad/${k.slug}">Ver ${k.titulo.toLowerCase()}</a><a class="botao sec" href="/cad/${k.slug}/importar">Importar outra</a></div>`, { migalha: k.titulo }));
 }));
 app.get('/cad/:slug/novo', exige('edita'), h((req, res) => {
   const k = carregarKind(req);
@@ -623,24 +651,8 @@ app.post('/config/usuarios', exige('configura'), h((req, res) => {
   res.redirect('/config/usuarios');
 }));
 
-app.get('/config/importar', exige('edita'), h((req, res) => {
-  res.send(layout(req, 'Importar colaboradores', html`<form method="post" class="card">
-    ${campo('Arquivo CSV', html`<input type="file" accept=".csv,text/csv" class="ler-arquivo" data-alvo="csv">`)}
-    ${campo('Conteúdo', html`<textarea id="csv" name="csv" rows="10" required placeholder="Nome completo;CPF;Data de admissão&#10;Maria Silva;000.000.000-00;01/02/2025"></textarea>`)}
-    <div class="acoes"><button class="botao">Importar</button><a class="botao sec" href="/config/importar/modelo">Baixar modelo</a></div></form>`,
-  { descricao: 'CPF já cadastrado atualiza só as colunas da planilha. Departamento, cargo, filial e unidade novos são criados pelo nome.' }));
-}));
-app.get('/config/importar/modelo', exige('edita'), h((req, res) => {
-  res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="modelo-colaboradores.csv"' }).send(imp.modelo());
-}));
-app.post('/config/importar', exige('edita'), h((req, res) => {
-  const r = imp.importar(String(um(req.body.csv) || ''), req.c, req.user.name);
-  auditar(req, 'Importou', 'colaborador', null, `${r.criados} novos, ${r.atualizados} atualizados, ${r.erros.length} erros`);
-  res.send(layout(req, 'Importação concluída', html`<div class="cards4">${cartao('Novos', r.criados)}${cartao('Atualizados', r.atualizados)}${cartao('Com erro', r.erros.length)}</div>
-    ${r.erros.length ? html`<div class="aviso erro"><ul>${r.erros.slice(0, 100).map(e => html`<li>${e}</li>`)}</ul></div>` : ''}
-    ${r.ignoradas.length ? html`<div class="aviso alerta">Colunas não reconhecidas (ignoradas): ${r.ignoradas.join(', ')}</div>` : ''}
-    <div class="acoes"><a class="botao" href="/cad/colaboradores">Ver colaboradores</a><a class="botao sec" href="/config/importar">Importar outra</a></div>`));
-}));
+// mesmo fluxo de /cad/:slug/importar, mantido no menu de Configurações
+app.get('/config/importar', exige('edita'), (req, res) => res.redirect('/cad/colaboradores/importar'));
 
 app.get('/config/auditoria', exige('configura'), h((req, res) => {
   const lista = db.prepare('SELECT * FROM auditoria WHERE office = ? ORDER BY id DESC LIMIT 1000').all(req.office);

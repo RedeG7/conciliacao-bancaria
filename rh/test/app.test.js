@@ -142,12 +142,12 @@ test('importação cria, atualiza por CPF, cria departamento e aponta erro por l
   const csv = `${cab}\nAna;529.982.247-25;não;10/05/1990;feminino;a@x.com;01/02/2025;Fiscal;Analista;clt + comissao;2.000,00;Uniao Estavel;123;a\n`
     + 'Sem data;;sim;10/05/1990;Feminino;b@x.com;;Fiscal;Analista;CLT;;;;b\n'
     + 'Bia;;sim;10/05/1990;Feminino;c@x.com;15/03/2025;fiscal;Analista;CLT;;;;c';
-  let t = await (await post('/config/importar', ck, { csv })).text();
+  let t = await (await post('/cad/colaboradores/importar', ck, { csv })).text();
   assert.match(t, /Linha 3:.*Data de admissão/);
   assert.match(t, /Coluna X/);
   assert.strictEqual(((await texto('/cad/departamentos', ck)).match(/Fiscal/g) || []).length, 1, 'não duplica departamento');
   assert.match(await texto('/cad/colaboradores', ck), /Ana[\s\S]*Bia/);
-  t = await (await post('/config/importar', ck, { csv: 'CPF;Salário\n52998224725;3000' })).text();
+  t = await (await post('/cad/colaboradores/importar', ck, { csv: 'CPF;Salário\n52998224725;3000' })).text();
   assert.match(t, /Atualizados<\/small><b>1/);
   assert.match(await texto('/cad/colaboradores/exportar', ck), /Ana;.*R\$\s*3\.000,00/);
 });
@@ -262,6 +262,44 @@ test('menu em abas e subabas: abre a aba da tela atual e não perde nenhuma tela
   for (const url of todas) assert.strictEqual((await get(url, ck)).status, 200, url);
 });
 
+test('importar: todo cadastro aceita o arquivo que ele mesmo exporta', async () => {
+  const ck = await login('?office=imp');
+  await novoColab(ck, { nome: 'Pessoa Banco' });
+  const colab = (await texto('/cad/colaboradores', ck)).match(/\/cad\/colaboradores\/(\d+)\/ficha/)[1];
+  await post('/cad/banco-de-horas/novo', ck, { colaborador_id: colab, data: '2026-01-10', tipo: 'Crédito', horas: '2,5' });
+  const lista = await texto('/cad/banco-de-horas', ck);
+  assert.match(lista, /\/cad\/banco-de-horas\/importar/, 'botão ao lado de Exportar');
+  const csvBanco = await texto('/cad/banco-de-horas/exportar', ck);
+  let t = await (await post('/cad/banco-de-horas/importar', ck, { csv: csvBanco })).text();
+  assert.match(t, /Novos<\/small><b>0</, 'reimportar o mesmo arquivo não duplica');
+  assert.match(t, /Atualizados<\/small><b>1</);
+  t = await (await post('/cad/banco-de-horas/importar', ck, { csv: csvBanco.replace('2,5', '3,5') })).text();
+  assert.match(t, /Novos<\/small><b>1</, 'linha diferente entra');
+
+  t = await (await post('/cad/banco-de-horas/importar', ck, { csv: 'Colaborador;Data;Tipo;Horas\nNinguém Assim;10/01/2026;Crédito;01:00' })).text();
+  assert.match(t, /não encontrado/, 'referência precisa existir');
+
+  await post('/cad/departamentos/importar', ck, { csv: 'Nome\nFinanceiro\nfinanceiro' });
+  assert.strictEqual([...(await texto('/cad/departamentos', ck)).matchAll(/>financeiro</gi)].length, 1, 'mesmo nome não duplica');
+
+  const leitor = await login('?office=imp&u=leitor2&admin=0');
+  assert.doesNotMatch(await texto('/cad/departamentos', leitor), /Importar CSV/);
+  assert.strictEqual((await post('/cad/departamentos/importar', leitor, { csv: 'Nome\nX' })).status, 403);
+  assert.strictEqual((await get('/cad/desligamentos/importar', ck)).status, 404, 'desligamento não entra por planilha');
+  assert.strictEqual((await get('/config/importar', ck)).status, 302);
+});
+
+test('importar colaboradores: superior direto pelo nome, mesmo em linha abaixo', async () => {
+  const ck = await login('?office=sup');
+  const b = await base_colab(ck);
+  const csv = `Nome completo;Data de nascimento;Gênero;E-mail;Data de admissão;Departamento;Cargo;Superior direto;Estrangeiro\nPessoa Sub;10/05/1990;Feminino;a@exemplo.com;10/01/2025;Geral;Analista;Pessoa Chefe;Sim\nPessoa Chefe;10/05/1980;Feminino;b@exemplo.com;10/01/2020;Geral;Analista;;Sim`;
+  assert.ok(b);
+  const t = await (await post('/cad/colaboradores/importar', ck, { csv })).text();
+  assert.match(t, /Novos<\/small><b>2</, 'duas pessoas novas');
+  const id = (await texto('/cad/colaboradores', ck)).match(/\/cad\/colaboradores\/(\d+)\/ficha">Pessoa Sub/)[1];
+  assert.match(await texto(`/cad/colaboradores/${id}/ficha`, ck), /Pessoa Chefe/);
+});
+
 test('perfil comportamental: link individual, link geral, permissões e isolamento', async () => {
   const ck = await login('?office=pc');
   await novoColab(ck, { nome: 'Pessoa Perfil' });
@@ -294,7 +332,12 @@ test('perfil comportamental: link individual, link geral, permissões e isolamen
   await post('/comportamental/enviar/novo-link', ck, {});
   assert.strictEqual((await get(`/perfil-aberto/${aberto}`)).status, 404, 'link trocado para de funcionar');
 
-  assert.match(await texto('/comportamental/metricas?aba=empresa', ck), /Média por estilo/);
+  const empresa = await texto('/comportamental/metricas?aba=empresa', ck);
+  assert.match(empresa, /Perfil geral/);
+  assert.match(empresa, /Estilos por departamento/);
+  assert.match(empresa, /Aderência por cargo/);
+  assert.match(empresa, /data-dica=/);
+  assert.match(empresa, /Ver dados/);
   assert.match(await texto('/comportamental/metricas?aba=participacao', ck), /Participação/);
   assert.match(await texto('/comportamental/busca?tipo=estilo&estilo=realizador&buscar=1', ck), /Pessoa Perfil/);
   assert.match(await texto(`/comportamental/busca?tipo=cargo&cargo=${cargo}&buscar=1`, ck), /Pessoa Perfil/);
@@ -302,7 +345,7 @@ test('perfil comportamental: link individual, link geral, permissões e isolamen
   assert.match(await texto(`/comportamental/comparar?a=p${id}&b=c${cargo}`, ck), /Cargo: Analista/);
   assert.match(await texto(`/comportamental/grupos?ids=${id}`, ck), /Estilo mais presente/);
   await post('/comportamental/grupos', ck, { nome: 'Time A', ids: id });
-  assert.match(await texto('/comportamental/metricas?aba=grupos', ck), /Time A/);
+  assert.match(await texto('/comportamental/metricas?aba=grupos', ck), /Composição dos grupos salvos[\s\S]*Time A/);
   assert.match(await texto('/comportamental/extrato', ck), /Resposta/);
 
   const leitor = await login('?office=pc&u=leitor&admin=0');

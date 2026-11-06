@@ -87,6 +87,19 @@
     if (p && p.hidden) abrirAba(p.dataset.painel);
   }, true);
 
+  // dica dos gráficos, ao passar o mouse ou tocar
+  let dica;
+  const mostraDica = e => {
+    const alvo = e.target.closest?.('[data-dica]');
+    if (!alvo) { if (dica) dica.hidden = true; return; }
+    if (!dica) { dica = document.createElement('div'); dica.id = 'dicaGrafico'; document.body.append(dica); }
+    dica.hidden = false; dica.textContent = alvo.dataset.dica;
+    dica.style.left = `${Math.min(e.clientX + 12, innerWidth - dica.offsetWidth - 8)}px`;
+    dica.style.top = `${Math.max(e.clientY - dica.offsetHeight - 10, 8)}px`;
+  };
+  document.addEventListener('pointermove', mostraDica);
+  document.addEventListener('pointerdown', mostraDica);
+
   $$('.ler-arquivo').forEach(inp => inp.addEventListener('change', () => {
     const f = inp.files[0];
     if (!f) return;
