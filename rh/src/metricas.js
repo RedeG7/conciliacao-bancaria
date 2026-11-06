@@ -62,4 +62,15 @@ function enps(notas) {
   return Math.round(((prom - det) / notas.length) * 100);
 }
 
-module.exports = { contar, media, resumoQuadro, resumoDesligamentos, matriz, enps };
+// avaliados sem PDI em andamento, do menor desempenho para o maior; as listas
+// vêm do registro mais novo para o mais antigo, então vale a última avaliação
+function avaliadosSemPdi(colaboradores, avaliacoes, pdis) {
+  const comPdi = new Set(pdis.filter(p => p.status !== 'Finalizado').map(p => p.colaborador_id));
+  const ultima = new Map();
+  for (const a of avaliacoes) if (!ultima.has(a.colaborador_id)) ultima.set(a.colaborador_id, a);
+  return colaboradores.filter(c => c.situacao !== 'Inativo' && ultima.has(c.id) && !comPdi.has(c.id))
+    .map(colaborador => ({ colaborador, avaliacao: ultima.get(colaborador.id) }))
+    .sort((a, b) => a.avaliacao.desempenho - b.avaliacao.desempenho);
+}
+
+module.exports = { avaliadosSemPdi, contar, media, resumoQuadro, resumoDesligamentos, matriz, enps };

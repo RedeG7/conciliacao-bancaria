@@ -2,8 +2,9 @@
 // Avisos do Painel. Função pura: recebe os dados e a data de hoje, para os
 // testes não dependerem do relógio.
 const { addDias, addMeses, anosEntre, proximoAniversario } = require('./datas');
+const { vencimentoTreinamento } = require('./modelos');
 
-const ANTECEDENCIA_PADRAO = { experiencia: 15, contrato: 30, aniversario: 7, exame: 30, ferias: 60, pdi: 15, avaliacao: 15 };
+const ANTECEDENCIA_PADRAO = { experiencia: 15, contrato: 30, aniversario: 7, exame: 30, ferias: 60, pdi: 15, avaliacao: 15, treinamento: 30 };
 
 function alertas(d, dias, hoje) {
   const saida = [];
@@ -39,6 +40,15 @@ function alertas(d, dias, hoje) {
   }
   for (const p of d.pdis) if (p.status !== 'Finalizado' && ids.has(p.colaborador_id) && janela(p.entrega, dias.pdi)) add('PDI', p.entrega, `PDI "${p.titulo}" de ${nome(p.colaborador_id)}`, `/cad/pdi/${p.id}`);
   for (const a of d.ciclos) if (a.status === 'Aberto' && janela(a.fim, dias.avaliacao)) add('Avaliação', a.fim, `Fim do ciclo "${a.titulo}"`, `/cad/ciclos-avaliacao/${a.id}`);
+  // só a conclusão mais recente de cada pessoa em cada treinamento conta
+  const ultimo = new Map();
+  for (const p of d.participacoes || []) {
+    const t = (d.treinamentos || []).find(x => x.id === p.treinamento_id);
+    const venc = vencimentoTreinamento(p, t);
+    const chave = `${p.colaborador_id}-${p.treinamento_id}`;
+    if (venc && ids.has(p.colaborador_id) && (!ultimo.has(chave) || venc > ultimo.get(chave).venc)) ultimo.set(chave, { venc, t, id: p.colaborador_id });
+  }
+  for (const { venc, t, id } of ultimo.values()) if (janela(venc, dias.treinamento)) add('Treinamento', venc, `"${t.titulo}" de ${nome(id)}`, `/cad/colaboradores/${id}/ficha`);
   return saida.sort((a, b) => a.data.localeCompare(b.data));
 }
 

@@ -3,16 +3,23 @@
 // telas (lista, formulário, exportação) saem daqui, em src/crud.js.
 //
 // Campo: F(nome, rótulo, tipo, opções). Tipos: texto, longo, data, numero,
-// dinheiro, email, tel, opcao (op: lista), sim (Sim/Não), ref (ref: outro kind).
+// dinheiro, email, tel, horas (hh:mm), opcao (op: lista), sim (Sim/Não), ref (ref:
+// outro kind), refs (vários registros de outro kind).
 // Opções: req (obrigatório), cl (classe sensível, ver src/acesso.js), s (seção
 // do formulário), min/max, interno (não aparece no formulário), obrig (obrigatório
 // conferido em validar), alias (outros nomes de coluna aceitos na importação).
-const { addDias } = require('./datas');
+const { addDias, addMeses } = require('./datas');
 
 const F = (n, r, t = 'texto', o = {}) => ({ n, r, t, ...o });
 
 const MESES = [['1', 'Janeiro'], ['2', 'Fevereiro'], ['3', 'Março'], ['4', 'Abril'], ['5', 'Maio'], ['6', 'Junho'], ['7', 'Julho'], ['8', 'Agosto'], ['9', 'Setembro'], ['10', 'Outubro'], ['11', 'Novembro'], ['12', 'Dezembro']];
 const UFS = ['AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
+// data em que a participação no treinamento vence (conclusão + validade do treinamento)
+function vencimentoTreinamento(participacao, treinamento) {
+  if (participacao.status !== 'Concluiu' || !participacao.data_conclusao || !treinamento?.validade_meses) return null;
+  return addMeses(participacao.data_conclusao, treinamento.validade_meses);
+}
+const dataTexto = s => (s ? s.split('-').reverse().join('/') : '');
 const ENPS_PADRAO = 'De 0 a 10, o quanto você recomendaria esta empresa como um bom lugar para trabalhar?';
 
 function cpfValido(cpf) {
@@ -199,22 +206,26 @@ const KINDS_LISTA = [
   {
     kind: 'pdi', slug: 'pdi', titulo: 'PDI', singular: 'PDI', icone: '🌱', abas: { campo: 'status', valores: ['Aberto', 'Em revisão', 'Finalizado'] },
     desc: 'Plano de desenvolvimento individual.',
-    campos: [colab(), F('titulo', 'Título', 'texto', { req: true }), F('superior_id', 'Superior', 'ref', { ref: 'colaborador' }), F('inicio', 'Início', 'data', { req: true }), F('entrega', 'Entrega', 'data', { req: true }),
+    campos: [colab(), F('titulo', 'Título', 'texto', { req: true }), F('superior_id', 'Superior', 'ref', { ref: 'colaborador' }), F('ciclo_id', 'Ciclo de avaliação', 'ref', { ref: 'ciclo' }), F('inicio', 'Início', 'data', { req: true }), F('entrega', 'Entrega', 'data', { req: true }),
       F('progresso', 'Progresso (%)', 'numero', { min: 0, max: 100, inteiro: true }), F('status', 'Status', 'opcao', { req: true, op: ['Aberto', 'Em revisão', 'Finalizado'] }), F('acoes', 'Ações combinadas', 'longo')],
-    colunas: ['colaborador_id', 'titulo', 'superior_id', 'inicio', 'entrega', 'progresso'],
+    colunas: ['colaborador_id', 'titulo', 'superior_id', 'ciclo_id', 'inicio', 'entrega', 'progresso'],
+    abaExtra: { rotulo: 'Avaliados sem PDI', href: '/cad/pdi/avaliados-sem-pdi' },
   },
   {
     kind: 'treinamento', slug: 'treinamentos', titulo: 'Treinamentos', singular: 'treinamento', icone: '🎓',
-    campos: [F('titulo', 'Título', 'texto', { req: true }), F('categoria', 'Categoria'), F('modalidade', 'Modalidade', 'opcao', { op: ['Presencial', 'On-line', 'Híbrido'] }), F('instrutor', 'Instrutor'),
-      F('inicio', 'Início', 'data'), F('fim', 'Fim', 'data'), F('carga_horaria', 'Carga horária', 'numero', { min: 0 }), F('investimento', 'Investimento', 'dinheiro', { min: 0, cl: 'salario' }),
+    campos: [F('titulo', 'Título', 'texto', { req: true }), F('conteudo', 'Conteúdo', 'longo', { req: true }), F('objetivos', 'Objetivos', 'longo', { req: true }),
+      F('categoria', 'Categoria'), F('modalidade', 'Modalidade', 'opcao', { op: ['Presencial', 'On-line', 'Híbrido'] }), F('instrutor', 'Instrutor'),
+      F('inicio', 'Início', 'data'), F('fim', 'Fim', 'data'), F('carga_horaria', 'Carga horária (hh:mm)', 'horas', { req: true }), F('validade_meses', 'Validade (meses)', 'numero', { min: 0, max: 600, inteiro: true }),
+      F('competencias', 'Competências', 'refs', { ref: 'competencia' }), F('investimento', 'Investimento', 'dinheiro', { min: 0, cl: 'salario' }),
       F('status', 'Status', 'opcao', { req: true, op: ['Planejado', 'Em andamento', 'Concluído', 'Cancelado'] })],
-    colunas: ['titulo', 'categoria', 'inicio', 'carga_horaria', 'investimento', 'status'],
+    colunas: ['titulo', 'categoria', 'inicio', 'carga_horaria', 'validade_meses', 'investimento', 'status'],
   },
   {
     kind: 'participacao', slug: 'participantes-treinamento', titulo: 'Participantes', singular: 'participante', icone: '🙋', multi: 'colaborador_id', unico: ['treinamento_id', 'colaborador_id'],
     desc: 'Quem fez cada treinamento.',
-    campos: [F('treinamento_id', 'Treinamento', 'ref', { ref: 'treinamento', req: true }), colab(), F('status', 'Status', 'opcao', { req: true, op: ['Inscrito', 'Concluiu', 'Faltou'] }), F('nota', 'Nota', 'numero', { min: 0, max: 10 })],
-    colunas: ['treinamento_id', 'colaborador_id', 'status', 'nota'],
+    campos: [F('treinamento_id', 'Treinamento', 'ref', { ref: 'treinamento', req: true }), colab(), F('status', 'Status', 'opcao', { req: true, op: ['Inscrito', 'Concluiu', 'Faltou'] }), F('data_conclusao', 'Data de conclusão', 'data'), F('nota', 'Nota', 'numero', { min: 0, max: 10 })],
+    colunas: ['treinamento_id', 'colaborador_id', 'status', 'data_conclusao', 'nota',
+      { r: 'Vencimento', v: (r, c) => dataTexto(vencimentoTreinamento(r, c.registro('treinamento', r.treinamento_id))) }],
   },
   {
     kind: 'pesquisa', slug: 'pesquisas', titulo: 'Pesquisas', singular: 'pesquisa', icone: '📋',
@@ -261,4 +272,4 @@ const rotulo = (k, r) => (k.rotulo ? k.rotulo(r) : r.nome || r.titulo || `#${r.i
 // abas da ficha do colaborador
 const HISTORICO = ['ocorrencia', 'feedback', 'ferias', 'banco_horas', 'saude', 'dependente', 'avaliacao', 'meta_colaborador', 'pdi', 'participacao', 'beneficiario', 'desligamento'];
 
-module.exports = { KINDS, KINDS_LISTA, porSlug, rotulo, HISTORICO, MESES, ENPS_PADRAO, cpfValido, formataCpf };
+module.exports = { KINDS, KINDS_LISTA, porSlug, rotulo, HISTORICO, MESES, ENPS_PADRAO, cpfValido, formataCpf, vencimentoTreinamento };

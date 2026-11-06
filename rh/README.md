@@ -29,7 +29,7 @@ daquela plataforma.
 | Início | Painel com alertas, aniversariantes | ✅ |
 | Pessoas | Colaboradores (ficha com histórico, bloquear, desligar, recontratar), registros, feedbacks, férias, banco de horas, saúde, desligamentos, checklists, dependentes | ✅ |
 | Estrutura | Departamentos, cargos, filiais, unidades, motivos de demissão | ✅ |
-| Desempenho | Ciclos, avaliações, matriz de potencial, análise de performance, competências, metas, PDI, treinamentos | ✅ |
+| Desempenho | Ciclos, avaliações, matriz de potencial, análise de performance, competências, metas, PDI com avaliados sem PDI, treinamentos com validade e alerta de vencimento | ✅ |
 | Engajamento | Pesquisas por link anônimo com eNPS, benefícios, beneficiários, cultura, faturamentos | ✅ |
 | Métricas | Colaboradores e desligamentos | ✅ |
 | Configurações | Alertas, usuários e papéis, importação CSV, auditoria | ✅ |

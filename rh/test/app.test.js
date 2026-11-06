@@ -183,3 +183,38 @@ test('experiência e contrato pela duração, insalubridade, CPF e opção fora 
   assert.match(await r.text(), /Preencha: CPF/);
   assert.strictEqual((await post(`/cad/colaboradores/${id}`, ck, { ...(await base_colab(ck)), nome: 'Prazo', estado_civil: 'Solteiro(a)' })).status, 422, 'opção fora da lista é recusada');
 });
+
+test('treinamento com horas e competências; PDI a partir de quem foi avaliado', async () => {
+  const ck = await login('?office=treino&u=adm'), outro = await login('?office=treino2&u=adm2');
+  await post('/cad/competencias/novo', ck, { nome: 'Comunicação' });
+  await post('/cad/competencias/novo', ck, { nome: 'Liderança' });
+  await post('/cad/competencias/novo', outro, { nome: 'De outro escritório' });
+  const comp = [...(await texto('/cad/competencias', ck)).matchAll(/\/cad\/competencias\/(\d+)"/g)].map(m => m[1]);
+  const alheia = (await texto('/cad/competencias', outro)).match(/\/cad\/competencias\/(\d+)"/)[1];
+  const base = { titulo: 'NR-35', conteudo: 'Altura', objetivos: 'Segurança', carga_horaria: '8:30', status: 'Concluído', validade_meses: '12' };
+  assert.strictEqual((await post('/cad/treinamentos/novo', ck, { ...base, competencias: [comp[0], alheia] })).status, 422, 'competência de outro escritório');
+  assert.strictEqual((await post('/cad/treinamentos/novo', ck, { ...base, carga_horaria: '8:99' })).status, 422);
+  assert.strictEqual((await post('/cad/treinamentos/novo', ck, { ...base, competencias: comp })).status, 302);
+  assert.match(await texto('/cad/treinamentos', ck), /08:30/);
+  const tid = (await texto('/cad/treinamentos', ck)).match(/\/cad\/treinamentos\/(\d+)/)[1];
+  const form = await texto(`/cad/treinamentos/${tid}`, ck);
+  assert.match(form, /value="08:30"/);
+  assert.strictEqual((form.match(/<option value="\d+" selected>/g) || []).length, 2, 'competências continuam marcadas');
+
+  await novoColab(ck, { nome: 'Avaliada' });
+  const id = (await texto('/cad/colaboradores', ck)).match(/\/cad\/colaboradores\/(\d+)\/ficha/)[1];
+  await post('/cad/participantes-treinamento/novo', ck, { treinamento_id: tid, colaborador_id: id, status: 'Concluiu', data_conclusao: '2025-06-10' });
+  assert.match(await texto('/cad/participantes-treinamento', ck), /10\/06\/2026/, 'vencimento = conclusão + 12 meses');
+
+  await post('/cad/ciclos-avaliacao/novo', ck, { titulo: 'Ciclo A', inicio: '2026-01-01', fim: '2026-12-31', status: 'Aberto' });
+  const ciclo = (await texto('/cad/ciclos-avaliacao', ck)).match(/\/cad\/ciclos-avaliacao\/(\d+)/)[1];
+  await post('/cad/avaliacoes/novo', ck, { ciclo_id: ciclo, colaborador_id: id, desempenho: '2', potencial: '3' });
+  const sem = await texto('/cad/pdi/avaliados-sem-pdi', ck);
+  assert.match(sem, /Avaliada/);
+  assert.ok(sem.includes(`/cad/pdi/novo?colaborador_id=${id}&ciclo_id=${ciclo}`));
+  assert.match(await texto(`/cad/pdi/novo?colaborador_id=${id}&ciclo_id=${ciclo}`, ck), new RegExp(`<option value="${ciclo}" selected>`));
+  assert.match(await texto('/cad/pdi', ck), /Avaliados sem PDI/);
+  await post('/cad/pdi/novo', ck, { colaborador_id: id, ciclo_id: ciclo, titulo: 'Plano', inicio: '2026-01-01', entrega: '2026-06-01', status: 'Aberto' });
+  assert.ok(!(await texto('/cad/pdi/avaliados-sem-pdi', ck)).includes('Avaliada'));
+  assert.match(await texto('/cad/pdi', ck), /Ciclo A/);
+});
