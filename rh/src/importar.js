@@ -10,6 +10,7 @@ const R = require('./db');
 const { KINDS, rotulo } = require('./modelos');
 const { lerForm, norm } = require('./crud');
 const { ve } = require('./acesso');
+const { quadrante } = require('./metricas');
 
 const CRIA_PELO_NOME = ['departamento', 'cargo', 'filial', 'unidade', 'grupo_competencia'];
 
@@ -137,7 +138,9 @@ function importar(texto, c, usuario, k = KINDS.colaborador) {
 
 // ---------------------------------------------------------------- avaliações da Sólides
 // Uma linha por competência avaliada. Vira uma avaliação por pessoa no ciclo do
-// ano, com a média ponderada em Desempenho e as notas guardadas em itens.
+// ano, com as notas guardadas em itens. Competências técnicas formam o Desempenho
+// e as comportamentais o Comportamento, os dois eixos do 9box; sem esses grupos,
+// Desempenho é a média ponderada de todas as notas.
 const coluna = (cab, nome) => cab.findIndex(h => norm(h) === norm(nome));
 const ehAvaliacaoSolides = texto => {
   const cab = parseCsv(String(texto).split(/\r?\n/, 1)[0])[0] || [];
@@ -172,16 +175,49 @@ function importarAvaliacoes(texto, c, usuario) {
       const achados = colabs.filter(p => norm(p.nome) === n);
       if (achados.length !== 1) { res.erros.push(`${ls[0][col.avaliado]}: ${achados.length ? 'há mais de um cadastro' : 'não está em Colaboradores'}.`); continue; }
       const itens = ls.map(l => ({ grupo: l[col.grupo].trim(), competencia: l[col.competencia].trim(), peso: Number(l[col.peso]) || 1, nota: Number(l[col.nota]), comentario: l[col.comentario].trim().replace(/^-$/, '') }));
-      const pesos = itens.reduce((s, i) => s + i.peso, 0);
-      const media = Math.round((itens.reduce((s, i) => s + i.nota * i.peso, 0) / pesos) * 100) / 100;
+      const mediaDe = l => (l.length ? Math.round((l.reduce((s, i) => s + i.nota * i.peso, 0) / l.reduce((s, i) => s + i.peso, 0)) * 100) / 100 : null);
+      const doGrupo = re => mediaDe(itens.filter(i => re.test(norm(i.grupo))));
       const atual = avaliacoes.find(a => a.ciclo_id === cicloId && a.colaborador_id === achados[0].id);
-      const dados = { ...(atual ? R.soDados(atual) : { potencial: null }), ciclo_id: cicloId, colaborador_id: achados[0].id, desempenho: media,
+      const dados = { ...(atual ? R.soDados(atual) : { potencial: null }), ciclo_id: cicloId, colaborador_id: achados[0].id, desempenho: doGrupo(/tecnic/) ?? mediaDe(itens),
         avaliador: [...new Set(ls.map(l => l[col.avaliador].trim()))].join(', '), data_resposta: ls.map(l => dataIso(l[iResp])).filter(Boolean).sort().pop() || null,
         comentario: (ls[0][col.geral] || '').trim() || null, itens };
+      dados.potencial = doGrupo(/comportament/) ?? dados.potencial;
       if (atual) { R.atualizar(c.office, 'avaliacao', atual.id, dados); res.atualizados++; } else { R.criar(c.office, 'avaliacao', dados, usuario); res.criados++; }
     }
   });
   return res;
 }
 
-module.exports = { parseCsv, importar, modelo, ehAvaliacaoSolides, importarAvaliacoes };
+// ---------------------------------------------------------------- 9box da Sólides
+// Uma linha por pessoa, com os dois eixos de 0 a 100. Completa a avaliação mais
+// recente de cada uma, que precisa já existir: o arquivo não traz as datas do ciclo.
+const singular = s => norm(s).replace(/s$/, '');
+const ehNoveBoxSolides = texto => {
+  const cab = parseCsv(String(texto).split(/\r?\n/, 1)[0])[0] || [];
+  return ['Nome do Avaliado', 'Comportamento', 'Desempenho', 'Quadrante'].every(n => coluna(cab, n) >= 0);
+};
+
+function importarNoveBox(texto, c) {
+  const [cab, ...linhas] = parseCsv(texto);
+  const col = n => coluna(cab, n);
+  const res = { criados: 0, atualizados: 0, ignoradas: [], erros: [], destino: 'avaliacoes' };
+  const colabs = R.listar(c.office, 'colaborador'), avaliacoes = R.listar(c.office, 'avaliacao');
+  R.tx(() => {
+    for (const l of linhas) {
+      const nome = l[col('Nome do Avaliado')].trim();
+      const [comportamento, desempenho] = ['Comportamento', 'Desempenho'].map(n => Math.round((Number(l[col(n)]) / 20) * 100) / 100);
+      if (!(comportamento >= 1 && comportamento <= 5 && desempenho >= 1 && desempenho <= 5)) { res.erros.push(`${nome}: notas fora da escala de 0 a 100.`); continue; }
+      const achados = colabs.filter(p => norm(p.nome) === norm(nome));
+      if (achados.length !== 1) { res.erros.push(`${nome}: ${achados.length ? 'há mais de um cadastro' : 'não está em Colaboradores'}.`); continue; }
+      const atual = avaliacoes.find(a => a.colaborador_id === achados[0].id);
+      if (!atual) { res.erros.push(`${nome}: importe antes o arquivo de notas da avaliação.`); continue; }
+      R.atualizar(c.office, 'avaliacao', atual.id, { ...R.soDados(atual), desempenho, potencial: comportamento });
+      res.atualizados++;
+      const noArquivo = l[col('Quadrante')].trim(), noRh = quadrante(comportamento, desempenho);
+      if (singular(noArquivo) !== singular(noRh)) res.erros.push(`${nome}: salvo, mas o arquivo diz "${noArquivo}" e o RH calculou "${noRh}".`);
+    }
+  });
+  return res;
+}
+
+module.exports = { parseCsv, importar, modelo, ehAvaliacaoSolides, importarAvaliacoes, ehNoveBoxSolides, importarNoveBox };

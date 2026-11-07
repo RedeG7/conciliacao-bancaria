@@ -121,11 +121,15 @@ test('perfil comportamental: pontuação, segundo estilo, faixas e aderência', 
   assert.strictEqual(P.aderencia({ realizador: 0, conector: 0, constante: 0, criterioso: 0 }, { realizador: 100, conector: 100, constante: 100, criterioso: 100 }), 0);
 });
 
-test('matriz aceita média decimal e deixa de fora quem não tem potencial', () => {
-  const m = M.matriz([{ desempenho: 3.4, potencial: 2 }, { desempenho: 3.5, potencial: 5 }, { desempenho: 4 }]);
-  assert.strictEqual(m[2][1].itens.length, 1, '3,4 fica na faixa média');
-  assert.strictEqual(m[0][2].itens.length, 1, '3,5 fica na faixa alta');
-  assert.strictEqual(m.flat().reduce((s, q) => s + q.itens.length, 0), 2);
+test('matriz aceita média decimal e deixa de fora quem não tem comportamento', () => {
+  const m = M.matriz([{ desempenho: 4, potencial: 2 }, { desempenho: 4.17, potencial: 4.5 }, { desempenho: 2.4, potencial: 2.5 }, { desempenho: 4 }]);
+  assert.strictEqual(m[2][1].itens.length, 1, '4 ainda é faixa média');
+  assert.strictEqual(m[0][2].itens.length, 1, 'acima de 4 é faixa alta');
+  assert.strictEqual(m[1][0].itens.length, 1, 'abaixo de 2,5 é baixo; 2,5 já é médio');
+  assert.strictEqual(m.flat().reduce((s, q) => s + q.itens.length, 0), 3);
+  assert.strictEqual(M.quadrante(4.5, 4.17), 'Destaques');
+  assert.strictEqual(M.quadrante(3.5, 4), 'Aprimorar comportamento e técnica');
+  assert.strictEqual(M.quadrante(2.17, 2), 'Insuficientes');
 });
 
 test('visão geral: situação do PDI, pendentes da AVD e médias por grupo', () => {

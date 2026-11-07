@@ -36,7 +36,7 @@ A tela Visão Geral (`/desenvolvimento`), em Desenv. e Performance, reúne AVD, 
 | Início | Painel com alertas, aniversariantes | ✅ |
 | Pessoas | Colaboradores (ficha com histórico, bloquear, desligar, recontratar), registros, feedbacks, férias, banco de horas, saúde, desligamentos, checklists, dependentes | ✅ |
 | Estrutura | Departamentos, cargos, filiais, unidades, motivos de demissão | ✅ |
-| Desempenho | Ciclos, avaliações, matriz de potencial, análise de performance, competências, metas, PDI com avaliados sem PDI, treinamentos com validade e alerta de vencimento | ✅ |
+| Desempenho | Ciclos, avaliações, 9box, análise de performance, competências, metas, PDI com avaliados sem PDI, treinamentos com validade e alerta de vencimento | ✅ |
 | Engajamento | Pesquisas por link anônimo com modelos (Clima, eNPS, Personalizada) e comparação, benefícios, beneficiários, cultura, faturamentos | ✅ |
 | Métricas | Colaboradores e desligamentos | ✅ |
 | Perfil comportamental | Questionário próprio por link (lista, link geral ou presencial), perfis, métricas, perfil esperado do cargo, busca, comparação, análise de grupo e extrato de envios | ✅ |

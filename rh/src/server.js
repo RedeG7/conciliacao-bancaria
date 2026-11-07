@@ -326,7 +326,10 @@ app.get('/cad/:slug/importar/modelo', exige('edita'), h((req, res) => {
 app.post('/cad/:slug/importar', exige('edita'), h((req, res) => {
   const k = carregarImportavel(req);
   const csvTexto = String(um(req.body.csv) || '');
-  const r = ['ciclo', 'avaliacao'].includes(k.kind) && imp.ehAvaliacaoSolides(csvTexto) ? imp.importarAvaliacoes(csvTexto, req.c, req.user.name) : imp.importar(csvTexto, req.c, req.user.name, k);
+  const daAvaliacao = ['ciclo', 'avaliacao'].includes(k.kind);
+  const r = daAvaliacao && imp.ehNoveBoxSolides(csvTexto) ? imp.importarNoveBox(csvTexto, req.c)
+    : daAvaliacao && imp.ehAvaliacaoSolides(csvTexto) ? imp.importarAvaliacoes(csvTexto, req.c, req.user.name)
+      : imp.importar(csvTexto, req.c, req.user.name, k);
   auditar(req, 'Importou', k.kind, null, `${r.criados} novos, ${r.atualizados} atualizados, ${r.erros.length} erros`);
   res.send(layout(req, 'Importação concluída', html`<div class="cards4">${cartao('Novos', r.criados)}${cartao('Atualizados', r.atualizados)}${cartao('Com erro', r.erros.length)}</div>
     ${r.erros.length ? html`<div class="aviso erro"><ul>${r.erros.slice(0, 100).map(e => html`<li>${e}</li>`)}</ul></div>` : ''}
@@ -454,10 +457,10 @@ const formCiclo = (ciclos, atual) => html`<form class="acoes" method="get">${sel
 
 app.get('/matriz-potencial', h((req, res) => {
   const { ciclos, atual, avaliacoes } = seletorCiclo(req);
-  if (!atual) return res.send(layout(req, 'Matriz de potencial', html`<div class="aviso alerta">Crie um ciclo em <a href="/cad/ciclos-avaliacao">Ciclos de avaliação</a> e lance as avaliações.</div>`));
-  res.send(layout(req, 'Matriz de potencial', html`${formCiclo(ciclos, atual)}<div class="card"><p class="eixo">↑ Potencial</p><div class="nove">
+  if (!atual) return res.send(layout(req, '9box', html`<div class="aviso alerta">Crie um ciclo em <a href="/cad/ciclos-avaliacao">Ciclos de avaliação</a> e lance as avaliações.</div>`));
+  res.send(layout(req, '9box', html`${formCiclo(ciclos, atual)}<div class="card"><p class="eixo">↑ Comportamento</p><div class="nove">
     ${M.matriz(avaliacoes).flat().map(q => html`<div><h4>${q.nome} (${q.itens.length})</h4><ul>${q.itens.map(a => html`<li><a href="/cad/colaboradores/${a.colaborador_id}/ficha">${req.c.nome('colaborador', a.colaborador_id)}</a></li>`)}</ul></div>`)}
-  </div><p class="eixo">Desempenho →</p></div>`, { descricao: 'Nota 1-2 = baixo, 3 = médio, 4-5 = alto.' }));
+  </div><p class="eixo">Desempenho →</p></div>`, { descricao: 'Nos dois eixos: abaixo de 2,5 = baixo, de 2,5 a 4 = médio, acima de 4 = alto.' }));
 }));
 
 app.get('/avaliacoes/:id(\\d+)', h((req, res) => {
@@ -466,7 +469,7 @@ app.get('/avaliacoes/:id(\\d+)', h((req, res) => {
   if (!a) throw falha(404, 'Avaliação não encontrada.');
   const c = req.c, itens = a.itens || [];
   const porGrupo = [...new Set(itens.map(i => i.grupo))].map(g => [g, M.media(itens.filter(i => i.grupo === g).map(i => i.nota))]);
-  res.send(layout(req, c.nome('colaborador', a.colaborador_id), html`<div class="cards4">${cartao('Desempenho', n2(a.desempenho))}${cartao('Potencial', a.potencial ?? 'Não avaliado')}${cartao('Ciclo', c.nome('ciclo', a.ciclo_id))}${cartao('Avaliador', a.avaliador || '-', dataBr(a.data_resposta))}</div>
+  res.send(layout(req, c.nome('colaborador', a.colaborador_id), html`<div class="cards4">${cartao('Desempenho', n2(a.desempenho))}${cartao('Comportamento', a.potencial == null ? 'Não avaliado' : n2(a.potencial))}${cartao('Ciclo', c.nome('ciclo', a.ciclo_id))}${cartao('Avaliador', a.avaliador || '-', dataBr(a.data_resposta))}</div>
     ${porGrupo.length ? html`<div class="card"><h3 class="primeiro">Média por grupo</h3>${barras(porGrupo, '', { partes: false })}</div>` : ''}
     ${a.comentario ? html`<div class="card"><h3 class="primeiro">Comentário geral</h3><p style="white-space:pre-line">${a.comentario}</p></div>` : ''}
     ${itens.length ? tabela(['Competência', 'Grupo', 'Peso', 'Nota', 'Comentário'], itens.map(i => [i.competencia, i.grupo, i.peso, i.nota, i.comentario])) : ''}
@@ -510,7 +513,7 @@ function visaoAvd(req) {
       <a href="${url(por, 'top')}" class="fim ${todos ? '' : 'ativo'}">Top 5</a><a href="${url(por, 'todos')}" class="${todos ? 'ativo' : ''}">Todos</a></div>
     <div class="card">${barras(todos ? medias : medias.slice(0, 5), `Nenhuma avaliação por ${rotulo.toLowerCase()} neste ciclo.`, { partes: false })}</div>
     <h3>Avaliações do ciclo</h3>
-    ${tabela(['Avaliado', 'Avaliador', 'Cargo', 'Status', 'Desempenho', 'Potencial'], linhas, 'Nenhuma avaliação neste ciclo.')}
+    ${tabela(['Avaliado', 'Avaliador', 'Cargo', 'Status', 'Desempenho', 'Comportamento'], linhas, 'Nenhuma avaliação neste ciclo.')}
     <a class="botao sec" href="/cad/avaliacoes">Ver todas as avaliações</a>`;
 }
 
@@ -541,7 +544,7 @@ app.get('/desenvolvimento', h((req, res) => {
 app.get('/cad/pdi/avaliados-sem-pdi', h((req, res) => {
   const c = req.c, editar = pode(req.papel, 'edita');
   const lista = M.avaliadosSemPdi(c.listar('colaborador'), c.listar('avaliacao'), c.listar('pdi'));
-  res.send(layout(req, 'Avaliados sem PDI', tabela(['Colaborador', 'Ciclo', 'Desempenho', 'Potencial', 'Ações'], lista.map(({ colaborador: p, avaliacao: a }) => [
+  res.send(layout(req, 'Avaliados sem PDI', tabela(['Colaborador', 'Ciclo', 'Desempenho', 'Comportamento', 'Ações'], lista.map(({ colaborador: p, avaliacao: a }) => [
     html`<a href="/cad/colaboradores/${p.id}/ficha">${p.nome}</a>`, c.nome('ciclo', a.ciclo_id), a.desempenho, a.potencial,
     editar ? html`<a href="/cad/pdi/novo?colaborador_id=${p.id}&ciclo_id=${a.ciclo_id}">Criar PDI</a>` : '',
   ]), 'Todos os avaliados têm PDI em andamento.'), { migalha: 'PDI', descricao: 'Última avaliação de quem está sem PDI aberto ou em revisão.' }));
