@@ -18,6 +18,7 @@ const imp = require('./importar');
 const perfilRotas = require('./rotas_comportamental');
 const { hoje, addMeses } = require('./datas');
 const V = require('./views');
+const G = require('./graficos');
 const { html, raw, brl, n2, dataBr, dataHoraBr, layout, page, tabela, select, campo, cartao, barras } = V;
 
 const app = express();
@@ -458,9 +459,17 @@ const formCiclo = (ciclos, atual) => html`<form class="acoes" method="get">${sel
 app.get('/matriz-potencial', h((req, res) => {
   const { ciclos, atual, avaliacoes } = seletorCiclo(req);
   if (!atual) return res.send(layout(req, '9box', html`<div class="aviso alerta">Crie um ciclo em <a href="/cad/ciclos-avaliacao">Ciclos de avaliação</a> e lance as avaliações.</div>`));
-  res.send(layout(req, '9box', html`${formCiclo(ciclos, atual)}<div class="card"><p class="eixo">↑ Comportamento</p><div class="nove">
-    ${M.matriz(avaliacoes).flat().map(q => html`<div><h4>${q.nome} (${q.itens.length})</h4><ul>${q.itens.map(a => html`<li><a href="/cad/colaboradores/${a.colaborador_id}/ficha">${req.c.nome('colaborador', a.colaborador_id)}</a></li>`)}</ul></div>`)}
-  </div><p class="eixo">Desempenho →</p></div>`, { descricao: 'Nos dois eixos: abaixo de 2,5 = baixo, de 2,5 a 4 = médio, acima de 4 = alto.' }));
+  const c = req.c, relatorio = ve(req.papel, 'pessoal'), editar = pode(req.papel, 'edita');
+  const pessoaDoBox = a => {
+    const p = c.registro('colaborador', a.colaborador_id) || {};
+    return {
+      nome: c.nome('colaborador', a.colaborador_id), cargo: c.nome('cargo', p.cargo_id) || 'Sem cargo', departamento: c.nome('departamento', p.departamento_id) || 'Sem departamento',
+      comportamento: a.potencial, desempenho: a.desempenho, ficha: `/cad/colaboradores/${a.colaborador_id}/ficha`,
+      relatorio: relatorio ? `/avaliacoes/${a.id}` : '', pdi: editar ? `/cad/pdi/novo?colaborador_id=${a.colaborador_id}&ciclo_id=${a.ciclo_id}` : '',
+    };
+  };
+  const quadros = M.matriz(avaliacoes).map(l => l.map(q => ({ ...q, pessoas: q.itens.map(pessoaDoBox).sort((x, y) => y.comportamento + y.desempenho - x.comportamento - x.desempenho) })));
+  res.send(layout(req, '9box', html`${formCiclo(ciclos, atual)}${G.noveBox(quadros, { semNota: avaliacoes.filter(a => a.potencial == null).length })}`, { descricao: 'Nos dois eixos: abaixo de 2,5 = baixo, de 2,5 a 4 = médio, acima de 4 = alto.' }));
 }));
 
 app.get('/avaliacoes/:id(\\d+)', h((req, res) => {

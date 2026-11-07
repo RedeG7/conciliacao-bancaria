@@ -130,6 +130,8 @@ test('matriz aceita média decimal e deixa de fora quem não tem comportamento',
   assert.strictEqual(M.quadrante(4.5, 4.17), 'Destaques');
   assert.strictEqual(M.quadrante(3.5, 4), 'Aprimorar comportamento e técnica');
   assert.strictEqual(M.quadrante(2.17, 2), 'Insuficientes');
+  assert.deepStrictEqual(m.map(l => l.map(q => q.tom)), [[2, 3, 4], [1, 2, 3], [0, 1, 2]]);
+  assert.strictEqual(require('../src/graficos').iniciais('Ana dos Santos de Lima'), 'AL');
 });
 
 test('visão geral: situação do PDI, pendentes da AVD e médias por grupo', () => {
