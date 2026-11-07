@@ -165,7 +165,7 @@ test('vínculo em massa, célula perigosa no CSV e matriz de potencial', async (
   await post('/cad/ciclos-avaliacao/novo', ck, { titulo: '2026', inicio: '2026-01-01', fim: '2026-12-31', status: 'Aberto' });
   const ciclo = (await texto('/cad/ciclos-avaliacao', ck)).match(/\/cad\/ciclos-avaliacao\/(\d+)/)[1];
   await post('/cad/avaliacoes/novo', ck, { ciclo_id: ciclo, colaborador_id: ids[1], desempenho: '5', potencial: '5' });
-  assert.match(await texto('/matriz-potencial', ck), /Destaques \(1\)/);
+  assert.match(await texto('/matriz-potencial', ck), /data-q="Destaques" data-total="1"/);
   assert.strictEqual((await post('/cad/avaliacoes/novo', ck, { ciclo_id: ciclo, colaborador_id: ids[0], desempenho: '6', potencial: '5' })).status, 422);
 });
 
@@ -322,8 +322,14 @@ test('importar 9box da Sólides: eixos vindos do arquivo e dos grupos de compet�
   assert.match(t, /Pessoa Sem Nota: importe antes o arquivo de notas/);
   assert.match(t, /Pessoa Fora: não está em Colaboradores/);
   const box = await texto('/matriz-potencial', ck);
-  assert.match(box, /Destaques \(1\)/);
-  assert.match(box, /↑ Comportamento/);
+  assert.match(box, /data-q="Destaques" data-total="1"/);
+  assert.match(box, /<b>Comportamento<\/b>/);
+  assert.match(box, /data-nome="Pessoa Alta"/);
+  assert.match(box, /data-relatorio="\/avaliacoes\/\d+"/);
+  assert.match(box, /data-pdi="\/cad\/pdi\/novo\?colaborador_id=\d+&amp;ciclo_id=\d+"/);
+  const leitor = await texto('/matriz-potencial', await login('?office=box&u=leitor9&admin=0'));
+  assert.match(leitor, /data-nome="Pessoa Alta"/, 'quem só lê também vê o quadro');
+  assert.doesNotMatch(leitor, /data-relatorio="\/avaliacoes/, 'sem o link do relatório individual');
   lista = await texto('/cad/avaliacoes', ck);
   assert.match(lista, /4,17/, 'desempenho do arquivo convertido para a escala de 1 a 5');
   const dif = await (await post('/cad/avaliacoes/importar', ck, { csv: `${cab}1,AVD,Pessoa Alta,X,70.0,70.0,Destaque\n` })).text();

@@ -53,7 +53,8 @@ const QUADRANTES = [ // linha = comportamento (de cima para baixo: alto, médio,
 ];
 const quadrante = (comportamento, desempenho) => QUADRANTES[2 - faixa(comportamento)][faixa(desempenho)];
 function matriz(avaliacoes) {
-  const m = QUADRANTES.map(l => l.map(nome => ({ nome, itens: [] })));
+  // tom: 0 (comportamento e desempenho baixos) a 4 (os dois altos)
+  const m = QUADRANTES.map((l, i) => l.map((nome, j) => ({ nome, tom: 2 - i + j, itens: [] })));
   for (const a of avaliacoes.filter(x => x.potencial != null)) m[2 - faixa(a.potencial)][faixa(a.desempenho)].itens.push(a);
   return m;
 }
