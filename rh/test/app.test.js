@@ -165,7 +165,7 @@ test('vínculo em massa, célula perigosa no CSV e matriz de potencial', async (
   await post('/cad/ciclos-avaliacao/novo', ck, { titulo: '2026', inicio: '2026-01-01', fim: '2026-12-31', status: 'Aberto' });
   const ciclo = (await texto('/cad/ciclos-avaliacao', ck)).match(/\/cad\/ciclos-avaliacao\/(\d+)/)[1];
   await post('/cad/avaliacoes/novo', ck, { ciclo_id: ciclo, colaborador_id: ids[1], desempenho: '5', potencial: '5' });
-  assert.match(await texto('/matriz-potencial', ck), /Talento de destaque \(1\)/);
+  assert.match(await texto('/matriz-potencial', ck), /Destaques \(1\)/);
   assert.strictEqual((await post('/cad/avaliacoes/novo', ck, { ciclo_id: ciclo, colaborador_id: ids[0], desempenho: '6', potencial: '5' })).status, 422);
 });
 
@@ -306,6 +306,30 @@ test('importar competências: arquivo da Sólides com cargos separados por barra
   assert.match(await (await post('/cad/competencias/importar', ck, { csv: exportado })).text(), /Atualizados<\/small><b>2</, 'aceita o próprio arquivo exportado');
 });
 
+test('importar 9box da Sólides: eixos vindos do arquivo e dos grupos de competências', async () => {
+  const ck = await login('?office=box');
+  await novoColab(ck, { nome: 'Pessoa Alta' });
+  await novoColab(ck, { nome: 'Pessoa Sem Nota' });
+  const notas = 'Nome avaliado,Nome avaliador,Data da avaliação,Grupo de competência,Competência,Peso da competência,Nota,Auto avaliação,Comentário por competência,Comentário geral,Data da avaliação\n'
+    + 'Pessoa Alta,Chefe,30/06/2026,Competências Técnicas,A,1,3,Não,-,,17/09/2026\nPessoa Alta,Chefe,30/06/2026,Competências Comportamentais,B,1,5,Não,-,,17/09/2026\n';
+  await post('/cad/ciclos-avaliacao/importar', ck, { csv: notas });
+  let lista = await texto('/cad/avaliacoes', ck);
+  assert.match(await texto(`/avaliacoes/${lista.match(/\/avaliacoes\/(\d+)/)[1]}`, ck), /Comportamento<\/small><b>5</);
+  const cab = 'ID da Solicitação,Nome da Solicitação,Nome do Avaliado,Departamento,Comportamento,Desempenho,Quadrante\n';
+  const csv = cab + '1,AVD,Pessoa Alta,"Geral, Tudo",90.0,83.33333333333334,Destaque\n1,AVD,Pessoa Sem Nota,X,50.0,50.0,Aprimorar comportamento e técnica\n1,AVD,Pessoa Fora,X,50.0,50.0,Insuficiente\n';
+  const t = await (await post('/cad/avaliacoes/importar', ck, { csv })).text();
+  assert.match(t, /Atualizados<\/small><b>1</);
+  assert.match(t, /Pessoa Sem Nota: importe antes o arquivo de notas/);
+  assert.match(t, /Pessoa Fora: não está em Colaboradores/);
+  const box = await texto('/matriz-potencial', ck);
+  assert.match(box, /Destaques \(1\)/);
+  assert.match(box, /↑ Comportamento/);
+  lista = await texto('/cad/avaliacoes', ck);
+  assert.match(lista, /4,17/, 'desempenho do arquivo convertido para a escala de 1 a 5');
+  const dif = await (await post('/cad/avaliacoes/importar', ck, { csv: `${cab}1,AVD,Pessoa Alta,X,70.0,70.0,Destaque\n` })).text();
+  assert.match(dif, /salvo, mas o arquivo diz &quot;Destaque&quot;|salvo, mas o arquivo diz "Destaque"/);
+});
+
 test('importar avaliação da Sólides: ciclo do ano, média e relatório individual', async () => {
   const ck = await login('?office=avs');
   await novoColab(ck, { nome: 'Pessoa Um' });
@@ -326,7 +350,7 @@ test('importar avaliação da Sólides: ciclo do ano, média e relatório indivi
   assert.match(rel, /Chefe Um/);
   t = await (await post('/cad/ciclos-avaliacao/importar', ck, { csv })).text();
   assert.match(t, /Atualizados<\/small><b>1</, 'reimportar não duplica');
-  assert.strictEqual((await get('/matriz-potencial', ck)).status, 200, 'sem potencial a matriz ainda abre');
+  assert.strictEqual((await get('/matriz-potencial', ck)).status, 200, 'sem comportamento a matriz ainda abre');
   const leitor = await login('?office=avs&u=leitor3&admin=0');
   assert.strictEqual((await get(`/avaliacoes/${id}`, leitor)).status, 403);
 });

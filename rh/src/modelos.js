@@ -194,7 +194,7 @@ const KINDS_LISTA = [
     colunas: ['nome', 'parentesco', 'nascimento'],
   },
   simples('checklist', 'checklists', 'Checklists', 'tópico', '✅', [F('titulo', 'Tópico', 'texto', { req: true }), F('etapa', 'Etapa', 'opcao', { req: true, op: ['Contratação', 'Demissão'] })]),
-  simples('grupo_competencia', 'grupos-competencias', 'Grupos de competências', 'grupo', '🧠', [F('nome', 'Nome', 'texto', { req: true }), F('categoria', 'Eixo na matriz', 'opcao', { op: ['Desempenho', 'Potencial'] })]),
+  simples('grupo_competencia', 'grupos-competencias', 'Grupos de competências', 'grupo', '🧠', [F('nome', 'Nome', 'texto', { req: true }), F('categoria', 'Eixo na matriz', 'opcao', { op: ['Desempenho', 'Comportamento'] })]),
   simples('competencia', 'competencias', 'Competências', 'competência', '🎯', [F('nome', 'Nome', 'texto', { req: true, alias: ['Competência'] }), F('grupo_id', 'Grupo', 'ref', { ref: 'grupo_competencia', alias: ['Grupo de competência', 'Grupo de competências'] }), F('peso', 'Peso', 'numero', { min: 0 }), F('tipo_avaliacao', 'Tipo de avaliação', 'opcao', { op: ['Desempenho', 'Potencial'] }), F('descricao', 'Descrição', 'longo'), F('cargos', 'Cargos', 'refs', { ref: 'cargo', alias: ['Cargo'] })], { colunas: ['nome', 'grupo_id', 'tipo_avaliacao', 'peso'] }),
   {
     kind: 'ciclo', slug: 'ciclos-avaliacao', titulo: 'Ciclos de avaliação', singular: 'ciclo', icone: '🔄',
@@ -204,10 +204,10 @@ const KINDS_LISTA = [
   },
   {
     kind: 'avaliacao', slug: 'avaliacoes', titulo: 'Avaliações', singular: 'avaliação', icone: '⭐', unico: ['ciclo_id', 'colaborador_id'],
-    desc: 'Notas de 1 a 5, que alimentam a matriz de potencial e a análise de performance.',
+    desc: 'Notas de 1 a 5, que alimentam o 9box e a análise de performance.',
     acoes: r => [[`/avaliacoes/${r.id}`, 'Relatório']],
     campos: [F('ciclo_id', 'Ciclo', 'ref', { ref: 'ciclo', req: true }), colab(),
-      F('desempenho', 'Desempenho (1 a 5)', 'numero', { req: true, min: 1, max: 5 }), F('potencial', 'Potencial (1 a 5)', 'numero', { min: 1, max: 5, inteiro: true }),
+      F('desempenho', 'Desempenho (1 a 5)', 'numero', { req: true, min: 1, max: 5 }), F('potencial', 'Comportamento (1 a 5)', 'numero', { min: 1, max: 5, alias: ['Comportamento', 'Potencial', 'Potencial (1 a 5)'] }),
       F('avaliador', 'Avaliador'), F('data_resposta', 'Data da resposta', 'data'), F('comentario', 'Comentário', 'longo', { cl: 'pessoal' }),
       F('itens', 'Notas por competência', 'texto', { interno: true })],
     colunas: ['ciclo_id', 'colaborador_id', 'desempenho', 'potencial'],
