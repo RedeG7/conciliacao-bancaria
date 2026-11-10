@@ -1,7 +1,8 @@
 'use strict';
 // RH (rh.redeg7.com) - servidor HTTP (Express) com páginas renderizadas aqui
-// mesmo (src/views.js). Login só pelo Hub (/sso, ver src/sso.js). A única página
-// sem login é a resposta anônima de pesquisa (/pesquisa/:token).
+// mesmo (src/views.js). Login só pelo Hub (/sso, ver src/sso.js). Sem login, só a
+// resposta anônima de pesquisa (/pesquisa/:token) e o questionário de perfil
+// comportamental (/perfil/:token e /perfil-aberto/:token).
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
@@ -14,8 +15,10 @@ const { um, contexto, lerForm, mudancas, colunas, ordenar, formulario, csv, expo
 const { alertas, ANTECEDENCIA_PADRAO } = require('./alertas');
 const M = require('./metricas');
 const imp = require('./importar');
+const perfilRotas = require('./rotas_comportamental');
 const { hoje, addMeses } = require('./datas');
 const V = require('./views');
+const G = require('./graficos');
 const { html, raw, brl, n2, dataBr, dataHoraBr, layout, page, tabela, select, campo, cartao, barras } = V;
 
 const app = express();
@@ -150,6 +153,8 @@ app.post('/pesquisa/:token', h((req, res) => {
   telaPesquisa(res, p, 'Resposta registrada. Obrigado por participar!');
 }));
 
+perfilRotas.publicas(app, { h, excedeuLimite, telaErro });
+
 // ---------------------------------------------------------------- sessão
 app.use(h((req, res, next) => {
   const t = cookies(req)[COOKIE];
@@ -203,7 +208,7 @@ app.get('/dash', h((req, res) => {
         <div class="card"><h3 class="primeiro">Desligamentos nos últimos 12 meses</h3><div class="info">
           <div><small>Total</small><b>${dsl.total}</b></div><div><small>Com menos de 1 ano de casa</small><b>${dsl.menosDeUmAno}</b></div>
           <div><small>Rotatividade</small><b>${n2(dsl.taxa)}%</b></div></div><p><a href="/metricas/desligamentos">Ver métricas</a></p></div>
-        <div class="card"><h3 class="primeiro">Ativos por departamento</h3>${barras(porDep, 'Nenhum colaborador ativo. Comece por Importar colaboradores ou cadastre o primeiro.')}</div>
+        <div class="card"><h3 class="primeiro">Ativos por departamento</h3>${barras(porDep, 'Nenhum colaborador ativo. Comece por Importar CSV em Colaboradores ou cadastre o primeiro.')}</div>
       </div>
     </div>`, { descricao: req.officeRow.name }));
 }));
@@ -257,6 +262,7 @@ function telaLista(req, res, k) {
   res.send(layout(req, k.titulo, html`${resumo}${abas}
     <div class="acoes">${editar && !k.novoBloqueado ? html`<a class="botao" href="${k.novoHref || `/cad/${k.slug}/novo`}">Adicionar</a>` : ''}
       ${(k.acoesLista || []).map(([href, t]) => html`<a class="botao sec" href="${href}">${t}</a>`)}
+      ${editar && !k.novoBloqueado ? html`<a class="botao sec" href="/cad/${k.slug}/importar">Importar CSV</a>` : ''}
       <a class="botao sec" href="/cad/${k.slug}/exportar">Exportar CSV</a></div>
     ${tabela([...cols.map(x => x.rotulo), 'Ações'], corpo)}`, { descricao: k.desc }));
 }
@@ -297,6 +303,39 @@ app.get('/cad/:slug/exportar', h((req, res) => {
   const k = carregarKind(req);
   auditar(req, 'Exportou', k.kind);
   res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${k.slug}.csv"` }).send(exportar(k, req.c));
+}));
+function carregarImportavel(req) {
+  const k = carregarKind(req);
+  if (k.novoBloqueado) throw falha(404, 'Este cadastro não aceita importação.');
+  return k;
+}
+app.get('/cad/:slug/importar', exige('edita'), h((req, res) => {
+  const k = carregarImportavel(req), aviso = ['ciclo', 'avaliacao'].includes(k.kind)
+    ? 'Aceita o arquivo de resultados de avaliação da Sólides: cria o ciclo do ano e uma avaliação por pessoa, com a média e as notas por competência.'
+    : k.kind === 'colaborador'
+    ? 'CPF já cadastrado atualiza só as colunas da planilha. Departamento, cargo, filial e unidade novos são criados pelo nome.'
+    : 'Aceita o arquivo de Exportar CSV. Registro já existente é atualizado, e linha repetida não duplica; os demais viram cadastro novo. Pessoas e outros cadastros citados precisam já existir, pelo nome; departamento, cargo, filial, unidade e grupo de competências são criados.';
+  res.send(layout(req, `Importar: ${k.titulo}`, html`<form method="post" class="card">
+    ${campo('Arquivo CSV', html`<input type="file" accept=".csv,text/csv" class="ler-arquivo" data-alvo="csv">`)}
+    ${campo('Conteúdo', html`<textarea id="csv" name="csv" rows="10" required></textarea>`)}
+    <div class="acoes"><button class="botao">Importar</button><a class="botao sec" href="/cad/${k.slug}/importar/modelo">Baixar modelo</a><a class="botao sec" href="/cad/${k.slug}">Voltar</a></div></form>`, { migalha: k.titulo, descricao: aviso }));
+}));
+app.get('/cad/:slug/importar/modelo', exige('edita'), h((req, res) => {
+  const k = carregarImportavel(req);
+  res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="modelo-${k.slug}.csv"` }).send(imp.modelo(k, req.c));
+}));
+app.post('/cad/:slug/importar', exige('edita'), h((req, res) => {
+  const k = carregarImportavel(req);
+  const csvTexto = String(um(req.body.csv) || '');
+  const daAvaliacao = ['ciclo', 'avaliacao'].includes(k.kind);
+  const r = daAvaliacao && imp.ehNoveBoxSolides(csvTexto) ? imp.importarNoveBox(csvTexto, req.c)
+    : daAvaliacao && imp.ehAvaliacaoSolides(csvTexto) ? imp.importarAvaliacoes(csvTexto, req.c, req.user.name)
+      : imp.importar(csvTexto, req.c, req.user.name, k);
+  auditar(req, 'Importou', k.kind, null, `${r.criados} novos, ${r.atualizados} atualizados, ${r.erros.length} erros`);
+  res.send(layout(req, 'Importação concluída', html`<div class="cards4">${cartao('Novos', r.criados)}${cartao('Atualizados', r.atualizados)}${cartao('Com erro', r.erros.length)}</div>
+    ${r.erros.length ? html`<div class="aviso erro"><ul>${r.erros.slice(0, 100).map(e => html`<li>${e}</li>`)}</ul></div>` : ''}
+    ${r.ignoradas.length ? html`<div class="aviso alerta">Colunas não reconhecidas (ignoradas): ${r.ignoradas.join(', ')}</div>` : ''}
+    <div class="acoes"><a class="botao" href="/cad/${r.destino || k.slug}">Ver ${r.destino ? 'relatórios individuais' : k.titulo.toLowerCase()}</a><a class="botao sec" href="/cad/${k.slug}/importar">Importar outra</a></div>`, { migalha: k.titulo }));
 }));
 app.get('/cad/:slug/novo', exige('edita'), h((req, res) => {
   const k = carregarKind(req);
@@ -419,10 +458,31 @@ const formCiclo = (ciclos, atual) => html`<form class="acoes" method="get">${sel
 
 app.get('/matriz-potencial', h((req, res) => {
   const { ciclos, atual, avaliacoes } = seletorCiclo(req);
-  if (!atual) return res.send(layout(req, 'Matriz de potencial', html`<div class="aviso alerta">Crie um ciclo em <a href="/cad/ciclos-avaliacao">Ciclos de avaliação</a> e lance as avaliações.</div>`));
-  res.send(layout(req, 'Matriz de potencial', html`${formCiclo(ciclos, atual)}<div class="card"><p class="eixo">↑ Potencial</p><div class="nove">
-    ${M.matriz(avaliacoes).flat().map(q => html`<div><h4>${q.nome} (${q.itens.length})</h4><ul>${q.itens.map(a => html`<li><a href="/cad/colaboradores/${a.colaborador_id}/ficha">${req.c.nome('colaborador', a.colaborador_id)}</a></li>`)}</ul></div>`)}
-  </div><p class="eixo">Desempenho →</p></div>`, { descricao: 'Nota 1-2 = baixo, 3 = médio, 4-5 = alto.' }));
+  if (!atual) return res.send(layout(req, '9box', html`<div class="aviso alerta">Crie um ciclo em <a href="/cad/ciclos-avaliacao">Ciclos de avaliação</a> e lance as avaliações.</div>`));
+  const c = req.c, relatorio = ve(req.papel, 'pessoal'), editar = pode(req.papel, 'edita');
+  const pessoaDoBox = a => {
+    const p = c.registro('colaborador', a.colaborador_id) || {};
+    return {
+      nome: c.nome('colaborador', a.colaborador_id), cargo: c.nome('cargo', p.cargo_id) || 'Sem cargo', departamento: c.nome('departamento', p.departamento_id) || 'Sem departamento',
+      comportamento: a.potencial, desempenho: a.desempenho, ficha: `/cad/colaboradores/${a.colaborador_id}/ficha`,
+      relatorio: relatorio ? `/avaliacoes/${a.id}` : '', pdi: editar ? `/cad/pdi/novo?colaborador_id=${a.colaborador_id}&ciclo_id=${a.ciclo_id}` : '',
+    };
+  };
+  const quadros = M.matriz(avaliacoes).map(l => l.map(q => ({ ...q, pessoas: q.itens.map(pessoaDoBox).sort((x, y) => y.comportamento + y.desempenho - x.comportamento - x.desempenho) })));
+  res.send(layout(req, '9box', html`${formCiclo(ciclos, atual)}${G.noveBox(quadros, { semNota: avaliacoes.filter(a => a.potencial == null).length })}`, { descricao: 'Nos dois eixos: abaixo de 2,5 = baixo, de 2,5 a 4 = médio, acima de 4 = alto.' }));
+}));
+
+app.get('/avaliacoes/:id(\\d+)', h((req, res) => {
+  if (!ve(req.papel, 'pessoal')) throw falha(403, 'Seu papel não permite ver o relatório individual.');
+  const a = R.obter(req.office, 'avaliacao', req.params.id);
+  if (!a) throw falha(404, 'Avaliação não encontrada.');
+  const c = req.c, itens = a.itens || [];
+  const porGrupo = [...new Set(itens.map(i => i.grupo))].map(g => [g, M.media(itens.filter(i => i.grupo === g).map(i => i.nota))]);
+  res.send(layout(req, c.nome('colaborador', a.colaborador_id), html`<div class="cards4">${cartao('Desempenho', n2(a.desempenho))}${cartao('Comportamento', a.potencial == null ? 'Não avaliado' : n2(a.potencial))}${cartao('Ciclo', c.nome('ciclo', a.ciclo_id))}${cartao('Avaliador', a.avaliador || '-', dataBr(a.data_resposta))}</div>
+    ${porGrupo.length ? html`<div class="card"><h3 class="primeiro">Média por grupo</h3>${barras(porGrupo, '', { partes: false })}</div>` : ''}
+    ${a.comentario ? html`<div class="card"><h3 class="primeiro">Comentário geral</h3><p style="white-space:pre-line">${a.comentario}</p></div>` : ''}
+    ${itens.length ? tabela(['Competência', 'Grupo', 'Peso', 'Nota', 'Comentário'], itens.map(i => [i.competencia, i.grupo, i.peso, i.nota, i.comentario])) : ''}
+    <div class="acoes nao-imprime"><button type="button" class="botao sec" onclick="window.print()">Imprimir ou salvar PDF</button><a class="botao sec" href="/cad/avaliacoes">Voltar</a></div>`, { migalha: 'Relatórios Individuais' }));
 }));
 
 app.get('/performance', h((req, res) => {
@@ -462,7 +522,7 @@ function visaoAvd(req) {
       <a href="${url(por, 'top')}" class="fim ${todos ? '' : 'ativo'}">Top 5</a><a href="${url(por, 'todos')}" class="${todos ? 'ativo' : ''}">Todos</a></div>
     <div class="card">${barras(todos ? medias : medias.slice(0, 5), `Nenhuma avaliação por ${rotulo.toLowerCase()} neste ciclo.`, { partes: false })}</div>
     <h3>Avaliações do ciclo</h3>
-    ${tabela(['Avaliado', 'Avaliador', 'Cargo', 'Status', 'Desempenho', 'Potencial'], linhas, 'Nenhuma avaliação neste ciclo.')}
+    ${tabela(['Avaliado', 'Avaliador', 'Cargo', 'Status', 'Desempenho', 'Comportamento'], linhas, 'Nenhuma avaliação neste ciclo.')}
     <a class="botao sec" href="/cad/avaliacoes">Ver todas as avaliações</a>`;
 }
 
@@ -493,7 +553,7 @@ app.get('/desenvolvimento', h((req, res) => {
 app.get('/cad/pdi/avaliados-sem-pdi', h((req, res) => {
   const c = req.c, editar = pode(req.papel, 'edita');
   const lista = M.avaliadosSemPdi(c.listar('colaborador'), c.listar('avaliacao'), c.listar('pdi'));
-  res.send(layout(req, 'Avaliados sem PDI', tabela(['Colaborador', 'Ciclo', 'Desempenho', 'Potencial', 'Ações'], lista.map(({ colaborador: p, avaliacao: a }) => [
+  res.send(layout(req, 'Avaliados sem PDI', tabela(['Colaborador', 'Ciclo', 'Desempenho', 'Comportamento', 'Ações'], lista.map(({ colaborador: p, avaliacao: a }) => [
     html`<a href="/cad/colaboradores/${p.id}/ficha">${p.nome}</a>`, c.nome('ciclo', a.ciclo_id), a.desempenho, a.potencial,
     editar ? html`<a href="/cad/pdi/novo?colaborador_id=${p.id}&ciclo_id=${a.ciclo_id}">Criar PDI</a>` : '',
   ]), 'Todos os avaliados têm PDI em andamento.'), { migalha: 'PDI', descricao: 'Última avaliação de quem está sem PDI aberto ou em revisão.' }));
@@ -619,30 +679,16 @@ app.post('/config/usuarios', exige('configura'), h((req, res) => {
   res.redirect('/config/usuarios');
 }));
 
-app.get('/config/importar', exige('edita'), h((req, res) => {
-  res.send(layout(req, 'Importar colaboradores', html`<form method="post" class="card">
-    ${campo('Arquivo CSV', html`<input type="file" accept=".csv,text/csv" class="ler-arquivo" data-alvo="csv">`)}
-    ${campo('Conteúdo', html`<textarea id="csv" name="csv" rows="10" required placeholder="Nome completo;CPF;Data de admissão&#10;Maria Silva;000.000.000-00;01/02/2025"></textarea>`)}
-    <div class="acoes"><button class="botao">Importar</button><a class="botao sec" href="/config/importar/modelo">Baixar modelo</a></div></form>`,
-  { descricao: 'CPF já cadastrado atualiza só as colunas da planilha. Departamento, cargo, filial e unidade novos são criados pelo nome.' }));
-}));
-app.get('/config/importar/modelo', exige('edita'), h((req, res) => {
-  res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="modelo-colaboradores.csv"' }).send(imp.modelo());
-}));
-app.post('/config/importar', exige('edita'), h((req, res) => {
-  const r = imp.importar(String(um(req.body.csv) || ''), req.c, req.user.name);
-  auditar(req, 'Importou', 'colaborador', null, `${r.criados} novos, ${r.atualizados} atualizados, ${r.erros.length} erros`);
-  res.send(layout(req, 'Importação concluída', html`<div class="cards4">${cartao('Novos', r.criados)}${cartao('Atualizados', r.atualizados)}${cartao('Com erro', r.erros.length)}</div>
-    ${r.erros.length ? html`<div class="aviso erro"><ul>${r.erros.slice(0, 100).map(e => html`<li>${e}</li>`)}</ul></div>` : ''}
-    ${r.ignoradas.length ? html`<div class="aviso alerta">Colunas não reconhecidas (ignoradas): ${r.ignoradas.join(', ')}</div>` : ''}
-    <div class="acoes"><a class="botao" href="/cad/colaboradores">Ver colaboradores</a><a class="botao sec" href="/config/importar">Importar outra</a></div>`));
-}));
+// mesmo fluxo de /cad/:slug/importar, mantido no menu de Configurações
+app.get('/config/importar', exige('edita'), (req, res) => res.redirect('/cad/colaboradores/importar'));
 
 app.get('/config/auditoria', exige('configura'), h((req, res) => {
   const lista = db.prepare('SELECT * FROM auditoria WHERE office = ? ORDER BY id DESC LIMIT 1000').all(req.office);
   res.send(layout(req, 'Auditoria', tabela(['Quando', 'Usuário', 'Ação', 'Cadastro', 'Registro', 'Detalhe'], lista.map(a => [dataHoraBr(a.em), a.usuario, a.acao, KINDS[a.kind]?.titulo || a.kind || '', a.registro_id ?? '', a.detalhe || ''])),
     { descricao: 'Últimas 1.000 ações. Guarda os nomes dos campos alterados, nunca os valores.' }));
 }));
+
+perfilRotas.internas(app, { h, exige, auditar, flash, falha, baseUrl });
 
 // eslint-disable-next-line no-unused-vars
 app.use((req, res, next) => next(falha(404, 'Tela não encontrada.')));

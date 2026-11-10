@@ -87,6 +87,66 @@
     if (p && p.hidden) abrirAba(p.dataset.painel);
   }, true);
 
+  // dica dos gráficos, ao passar o mouse ou tocar
+  let dica;
+  const mostraDica = e => {
+    const alvo = e.target.closest?.('[data-dica]');
+    if (!alvo) { if (dica) dica.hidden = true; return; }
+    if (!dica) { dica = document.createElement('div'); dica.id = 'dicaGrafico'; document.body.append(dica); }
+    dica.hidden = false; dica.textContent = alvo.dataset.dica;
+    dica.style.left = `${Math.min(e.clientX + 12, innerWidth - dica.offsetWidth - 8)}px`;
+    dica.style.top = `${Math.max(e.clientY - dica.offsetHeight - 10, 8)}px`;
+  };
+  document.addEventListener('pointermove', mostraDica);
+  document.addEventListener('pointerdown', mostraDica);
+
+  // 9box: busca, departamento e quadrante escolhido filtram o quadro e os números
+  $$('[data-box9]').forEach(box => {
+    const busca = $('.box9-busca', box), depto = $('.box9-depto', box), limpar = $('.box9-limpar', box), status = $('.box9-status', box);
+    const quadros = $$('.box9-q', box), pessoas = $$('.box9-pessoa', box), linhas = $$('tbody tr[data-q]', box), dlg = $('dialog', box);
+    const num = v => Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+    const simples = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const ATENCAO = ['Insuficientes', 'Verificar situação', 'Trabalhar valores'];
+    let escolhido = '';
+    const render = () => {
+      const q = simples(busca.value.trim()), d = depto.value;
+      const passa = el => (!q || simples(el.dataset.nome).includes(q)) && (!d || el.dataset.depto === d);
+      const visiveis = [];
+      quadros.forEach(sec => {
+        const noQuadro = $$('.box9-pessoa', sec).filter(b => { const ok = passa(b); b.parentElement.hidden = !ok; return ok; });
+        $('.box9-conta', sec).textContent = noQuadro.length;
+        $('.box9-vazio', sec).hidden = noQuadro.length > 0;
+        sec.classList.toggle('apagado', Boolean(escolhido) && sec.dataset.q !== escolhido);
+        $('.box9-titulo', sec).setAttribute('aria-pressed', String(sec.dataset.q === escolhido));
+        if (!escolhido || sec.dataset.q === escolhido) visiveis.push(...noQuadro);
+      });
+      linhas.forEach(tr => { tr.hidden = !passa(tr) || (Boolean(escolhido) && tr.dataset.q !== escolhido); });
+      const n = visiveis.length, conta = f => visiveis.filter(f).length;
+      const media = k => (n ? num(visiveis.reduce((s, b) => s + Number(b.dataset[k]), 0) / n) : '-');
+      const valores = { total: n, destaques: conta(b => b.dataset.quadrante === 'Destaques'), atencao: conta(b => ATENCAO.includes(b.dataset.quadrante)), medias: `${media('c')} · ${media('d')}` };
+      $$('[data-box9-n]', box).forEach(el => { el.textContent = valores[el.dataset.box9N]; });
+      limpar.hidden = !q && !d && !escolhido;
+      status.textContent = `${n} de ${pessoas.length} ${pessoas.length === 1 ? 'pessoa' : 'pessoas'}${escolhido ? ` em ${escolhido}` : ''}`;
+    };
+    busca.addEventListener('input', render);
+    depto.addEventListener('change', render);
+    limpar.addEventListener('click', () => { busca.value = ''; depto.value = ''; escolhido = ''; render(); });
+    box.addEventListener('click', e => {
+      const t = e.target.closest('.box9-titulo');
+      if (t) { const q = t.closest('.box9-q').dataset.q; escolhido = escolhido === q ? '' : q; render(); return; }
+      const b = e.target.closest('.box9-pessoa');
+      if (!b) return;
+      const d = b.dataset, campo = (k, v) => { $(`[data-campo="${k}"]`, dlg).textContent = v; };
+      campo('iniciais', $('i', b).textContent); campo('nome', d.nome); campo('funcao', `${d.cargo} · ${d.depto}`); campo('quadrante', d.quadrante); campo('c', num(d.c)); campo('d', num(d.d));
+      ['c', 'd'].forEach(k => { $(`[data-barra="${k}"]`, dlg).style.width = `${(Number(d[k]) / 5) * 100}%`; });
+      $$('a[data-link]', dlg).forEach(a => { const u = d[a.dataset.link]; a.hidden = !u; if (u) a.href = u; });
+      dlg.showModal();
+    });
+    $('.box9-fechar', dlg).addEventListener('click', () => dlg.close());
+    dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
+    render();
+  });
+
   $$('.ler-arquivo').forEach(inp => inp.addEventListener('change', () => {
     const f = inp.files[0];
     if (!f) return;

@@ -98,6 +98,42 @@ test('métricas', () => {
   assert.strictEqual(r.valorRescisao, 100);
 });
 
+test('perfil comportamental: pontuação, segundo estilo, faixas e aderência', () => {
+  const P = require('../src/comportamental');
+  assert.strictEqual(P.QUESTOES.length, 24);
+  for (const e of P.CHAVES) assert.strictEqual(P.QUESTOES.filter(q => q.estilo === e).length, 6, e);
+  assert.strictEqual(P.pontuar([1, 2]), null, 'faltando resposta');
+  assert.strictEqual(P.pontuar(Array(24).fill(6)), null, 'fora da escala');
+  const r = P.pontuar(P.QUESTOES.map(q => (q.estilo === 'realizador' ? 5 : q.estilo === 'conector' ? 4 : 1)));
+  assert.deepStrictEqual(r.pontos, { realizador: 100, conector: 75, constante: 0, criterioso: 0 });
+  assert.strictEqual(r.principal, 'realizador');
+  assert.strictEqual(r.secundario, null, '25 pontos de distância não contam como 2º estilo');
+  const perto = P.pontuar(P.QUESTOES.map((q, i) => (q.estilo === 'realizador' ? 5 : q.estilo === 'conector' ? (i === 1 ? 3 : 5) : 1)));
+  assert.strictEqual(perto.secundario, 'conector');
+  assert.strictEqual(P.nomePerfil(perto), 'Realizador e Conector');
+  assert.deepStrictEqual([P.faixa(39), P.faixa(40), P.faixa(70)], ['Baixo', 'Médio', 'Alto']);
+  assert.strictEqual(P.aderencia(r.pontos, r.pontos), 100);
+  assert.deepStrictEqual(P.mesesEntre('2026-11', '2027-02'), ['2026-11', '2026-12', '2027-01', '2027-02']);
+  assert.deepStrictEqual(P.histograma([{ pontos: { realizador: 19 } }, { pontos: { realizador: 80 } }, { pontos: { realizador: 100 } }], 'realizador').map(f => f.total), [1, 0, 0, 0, 2]);
+  const geral = P.perfilGeral([{ pontos: { realizador: 90, conector: 80, constante: 30, criterioso: 20 } }]);
+  assert.strictEqual(geral.nome, 'Realizador e Conector');
+  assert.strictEqual(geral.pesos.find(p => p.estilo === 'realizador').peso, 40.9);
+  assert.strictEqual(P.aderencia({ realizador: 0, conector: 0, constante: 0, criterioso: 0 }, { realizador: 100, conector: 100, constante: 100, criterioso: 100 }), 0);
+});
+
+test('matriz aceita média decimal e deixa de fora quem não tem comportamento', () => {
+  const m = M.matriz([{ desempenho: 4, potencial: 2 }, { desempenho: 4.17, potencial: 4.5 }, { desempenho: 2.4, potencial: 2.5 }, { desempenho: 4 }]);
+  assert.strictEqual(m[2][1].itens.length, 1, '4 ainda é faixa média');
+  assert.strictEqual(m[0][2].itens.length, 1, 'acima de 4 é faixa alta');
+  assert.strictEqual(m[1][0].itens.length, 1, 'abaixo de 2,5 é baixo; 2,5 já é médio');
+  assert.strictEqual(m.flat().reduce((s, q) => s + q.itens.length, 0), 3);
+  assert.strictEqual(M.quadrante(4.5, 4.17), 'Destaques');
+  assert.strictEqual(M.quadrante(3.5, 4), 'Aprimorar comportamento e técnica');
+  assert.strictEqual(M.quadrante(2.17, 2), 'Insuficientes');
+  assert.deepStrictEqual(m.map(l => l.map(q => q.tom)), [[2, 3, 4], [1, 2, 3], [0, 1, 2]]);
+  assert.strictEqual(require('../src/graficos').iniciais('Ana dos Santos de Lima'), 'AL');
+});
+
 test('visão geral: situação do PDI, pendentes da AVD e médias por grupo', () => {
   const dia = '2026-11-06';
   assert.strictEqual(M.situacaoPdi({ status: 'Finalizado', entrega: '2026-01-01' }, dia), 'Concluídos');

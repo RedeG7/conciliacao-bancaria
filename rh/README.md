@@ -19,7 +19,10 @@ daquela plataforma.
 | `src/crud.js` | Lê e valida formulários, monta telas e exportação a partir dos modelos |
 | `src/acesso.js` | Papéis e classes de dados sensíveis |
 | `src/alertas.js`, `src/metricas.js`, `src/datas.js` | Regras puras, testadas sem banco |
-| `src/importar.js` | Importação de colaboradores por CSV |
+| `src/importar.js` | Importação por CSV de qualquer cadastro e dos resultados de avaliação da Sólides |
+| `src/graficos.js` | Gráficos em HTML e CSS |
+| `src/comportamental.js` | Questionário próprio de perfil comportamental e cálculo |
+| `src/rotas_comportamental.js` | Telas e links do perfil comportamental |
 | `src/server.js` | Rotas e telas que não são cadastro simples |
 
 ## Escopo
@@ -33,14 +36,14 @@ A tela Visão Geral (`/desenvolvimento`), em Desenv. e Performance, reúne AVD, 
 | Início | Painel com alertas, aniversariantes | ✅ |
 | Pessoas | Colaboradores (ficha com histórico, bloquear, desligar, recontratar), registros, feedbacks, férias, banco de horas, saúde, desligamentos, checklists, dependentes | ✅ |
 | Estrutura | Departamentos, cargos, filiais, unidades, motivos de demissão | ✅ |
-| Desempenho | Ciclos, avaliações, matriz de potencial, análise de performance, competências, metas, PDI com avaliados sem PDI, treinamentos com validade e alerta de vencimento | ✅ |
+| Desempenho | Ciclos, avaliações, 9box, análise de performance, competências, metas, PDI com avaliados sem PDI, treinamentos com validade e alerta de vencimento | ✅ |
 | Engajamento | Pesquisas por link anônimo com modelos (Clima, eNPS, Personalizada) e comparação, benefícios, beneficiários, cultura, faturamentos | ✅ |
 | Métricas | Colaboradores e desligamentos | ✅ |
-| Configurações | Alertas, usuários e papéis, importação CSV, auditoria | ✅ |
+| Perfil comportamental | Questionário próprio por link (lista, link geral ou presencial), perfis, métricas, perfil esperado do cargo, busca, comparação, análise de grupo e extrato de envios | ✅ |
+| Configurações | Alertas, usuários e papéis, importação CSV em todos os cadastros, auditoria | ✅ |
 | Portal do colaborador | Holerites, informes, publicações, arquivos, onboarding | próxima fase |
 | Alertas por e-mail, API e webhooks | - | próxima fase |
 | Ponto eletrônico | - | fora: continua no sistema de ponto atual |
-| Perfil comportamental | - | fora: teste proprietário, exigiria instrumento próprio |
 | Recrutamento e seleção | - | fora: módulo não contratado hoje |
 
 ## Papéis

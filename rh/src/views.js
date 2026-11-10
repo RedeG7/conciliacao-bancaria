@@ -24,6 +24,12 @@ const tela = (href, rotulo, cl, acao) => [href, rotulo, cl, acao];
 const aba = (nome, itens, icone) => ({ nome, itens, icone });
 const MENU = [
   { ...aba('Home', [], '🏠'), href: '/dash' },
+  aba('Perfil Comportamental', [
+    tela('/comportamental/metricas', 'Métricas do Perfil', 'perfil'), tela('/comportamental/perfis', 'Perfis', 'perfil'),
+    tela('/comportamental/cargos', 'Engenharia de Cargo', 'perfil'), tela('/comportamental/responder', 'Responder Perfil', 'perfil', 'edita'),
+    tela('/comportamental/busca', 'Busca de Perfil', 'perfil'), tela('/comportamental/comparar', 'Comparar Perfis', 'perfil'),
+    tela('/comportamental/grupos', 'Análise de Grupo', 'perfil'), tela('/comportamental/extrato', 'Extrato de Envios', 'perfil'),
+  ], '🧠'),
   aba('Cargos e Salários', [cad('cargo', 'Engenharia de Cargo')], '💼'),
   aba('Gestão de Talentos', [
     cad('colaborador'), cad('filial', 'Filiais'), cad('departamento', 'Departamentos'), cad('ferias'), cad('banco_horas'), cad('ocorrencia'), cad('feedback'),
@@ -46,7 +52,7 @@ const MENU = [
   ], '💬'),
   aba('Configurações', [
     tela('/config/alertas', 'Alerta', null, 'configura'), tela('/config/usuarios', 'Usuários', null, 'configura'),
-    aba('Importações', [tela('/config/importar', 'Colaboradores', null, 'edita')]),
+    aba('Importações', [tela('/cad/colaboradores/importar', 'Colaboradores', null, 'edita')]),
     tela('/config/auditoria', 'Auditoria', null, 'configura'),
   ], '⚙️'),
 ];

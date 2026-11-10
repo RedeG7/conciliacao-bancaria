@@ -42,16 +42,20 @@ function resumoDesligamentos(desligamentos, colaboradores, hoje, meses = 12) {
   };
 }
 
-// matriz 3x3: nota 1-2 = baixo, 3 = médio, 4-5 = alto
-const faixa = n => (n <= 2 ? 0 : n === 3 ? 1 : 2);
-const QUADRANTES = [ // linha = potencial (de cima para baixo: alto, médio, baixo), coluna = desempenho
-  ['Enigma', 'Crescimento', 'Talento de destaque'],
-  ['Atenção', 'Base consistente', 'Alto desempenho'],
-  ['Risco', 'Eficaz no limite', 'Especialista'],
+// 9box: abaixo de 2,5 = baixo; de 2,5 a 4 = médio; acima de 4 = alto. São os cortes
+// que reproduzem os quadrantes da Sólides (50% e 80% da nota máxima). O comportamento
+// fica guardado no campo potencial, que era o eixo vertical da matriz.
+const faixa = n => (n < 2.5 ? 0 : n <= 4 ? 1 : 2);
+const QUADRANTES = [ // linha = comportamento (de cima para baixo: alto, médio, baixo), coluna = desempenho
+  ['Desenvolver técnica', 'Aprimorar técnica', 'Destaques'],
+  ['Verificar situação', 'Aprimorar comportamento e técnica', 'Aprimorar comportamento'],
+  ['Insuficientes', 'Trabalhar valores', 'Desenvolver comportamento'],
 ];
+const quadrante = (comportamento, desempenho) => QUADRANTES[2 - faixa(comportamento)][faixa(desempenho)];
 function matriz(avaliacoes) {
-  const m = QUADRANTES.map(l => l.map(nome => ({ nome, itens: [] })));
-  for (const a of avaliacoes) m[2 - faixa(a.potencial)][faixa(a.desempenho)].itens.push(a);
+  // tom: 0 (comportamento e desempenho baixos) a 4 (os dois altos)
+  const m = QUADRANTES.map((l, i) => l.map((nome, j) => ({ nome, tom: 2 - i + j, itens: [] })));
+  for (const a of avaliacoes.filter(x => x.potencial != null)) m[2 - faixa(a.potencial)][faixa(a.desempenho)].itens.push(a);
   return m;
 }
 
@@ -96,4 +100,4 @@ function mediasPor(avaliacoes, grupoDe) {
   return [...grupos].map(([g, n]) => [g, media(n)]).sort((x, y) => y[1] - x[1] || String(x[0]).localeCompare(String(y[0])));
 }
 
-module.exports = { avaliadosSemPdi, contar, media, resumoQuadro, resumoDesligamentos, matriz, enps, PDI_SITUACOES, situacaoPdi, pendentesAvd, mediasPor };
+module.exports = { avaliadosSemPdi, contar, media, resumoQuadro, resumoDesligamentos, matriz, quadrante, enps, PDI_SITUACOES, situacaoPdi, pendentesAvd, mediasPor };

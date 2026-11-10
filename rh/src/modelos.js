@@ -9,6 +9,7 @@
 // do formulário), min/max, interno (não aparece no formulário), obrig (obrigatório
 // conferido em validar), alias (outros nomes de coluna aceitos na importação).
 const { addDias, addMeses } = require('./datas');
+const { ESTILOS } = require('./comportamental');
 
 const F = (n, r, t = 'texto', o = {}) => ({ n, r, t, ...o });
 
@@ -136,7 +137,7 @@ const colab = (o = {}) => F('colaborador_id', 'Colaborador', 'ref', { ref: 'cola
 const KINDS_LISTA = [
   colaborador,
   simples('departamento', 'departamentos', 'Departamentos', 'departamento', '🏬', [F('nome', 'Nome', 'texto', { req: true }), F('localizacao', 'Localização'), F('telefone', 'Telefone', 'tel')]),
-  simples('cargo', 'cargos', 'Cargos', 'cargo', '🧩', [F('nome', 'Nome', 'texto', { req: true }), F('senioridade', 'Senioridade', 'opcao', { op: ['Estagiário', 'Assistente', 'Júnior', 'Pleno', 'Sênior', 'Coordenação', 'Gerência', 'Diretoria'] }), F('cbo', 'CBO'), F('piso', 'Piso salarial', 'dinheiro', { cl: 'salario', min: 0 })]),
+  simples('cargo', 'cargos', 'Cargos', 'cargo', '🧩', [F('nome', 'Nome', 'texto', { req: true }), F('senioridade', 'Senioridade', 'opcao', { op: ['Estagiário', 'Assistente', 'Júnior', 'Pleno', 'Sênior', 'Coordenação', 'Gerência', 'Diretoria'] }), F('cbo', 'CBO'), F('piso', 'Piso salarial', 'dinheiro', { cl: 'salario', min: 0 }), F('perfil_esperado', 'Perfil esperado', 'opcao', { op: Object.entries(ESTILOS).map(([v, e]) => [v, e.nome]) })]),
   simples('filial', 'filiais', 'Filiais', 'filial', '🏢', [F('nome', 'Nome', 'texto', { req: true }), F('cnpj', 'CNPJ')]),
   simples('unidade', 'unidades', 'Unidades', 'unidade', '📍', [F('nome', 'Nome', 'texto', { req: true })]),
   simples('motivo_demissao', 'motivos-demissao', 'Motivos de demissão', 'motivo', '📝', [F('nome', 'Motivo', 'texto', { req: true })]),
@@ -193,8 +194,8 @@ const KINDS_LISTA = [
     colunas: ['nome', 'parentesco', 'nascimento'],
   },
   simples('checklist', 'checklists', 'Checklists', 'tópico', '✅', [F('titulo', 'Tópico', 'texto', { req: true }), F('etapa', 'Etapa', 'opcao', { req: true, op: ['Contratação', 'Demissão'] })]),
-  simples('grupo_competencia', 'grupos-competencias', 'Grupos de competências', 'grupo', '🧠', [F('nome', 'Nome', 'texto', { req: true }), F('categoria', 'Eixo na matriz', 'opcao', { op: ['Desempenho', 'Potencial'] })]),
-  simples('competencia', 'competencias', 'Competências', 'competência', '🎯', [F('nome', 'Nome', 'texto', { req: true }), F('grupo_id', 'Grupo', 'ref', { ref: 'grupo_competencia' }), F('peso', 'Peso', 'numero', { min: 0 }), F('descricao', 'Descrição', 'longo')], { colunas: ['nome', 'grupo_id', 'peso'] }),
+  simples('grupo_competencia', 'grupos-competencias', 'Grupos de competências', 'grupo', '🧠', [F('nome', 'Nome', 'texto', { req: true }), F('categoria', 'Eixo na matriz', 'opcao', { op: ['Desempenho', 'Comportamento'] })]),
+  simples('competencia', 'competencias', 'Competências', 'competência', '🎯', [F('nome', 'Nome', 'texto', { req: true, alias: ['Competência'] }), F('grupo_id', 'Grupo', 'ref', { ref: 'grupo_competencia', alias: ['Grupo de competência', 'Grupo de competências'] }), F('peso', 'Peso', 'numero', { min: 0 }), F('tipo_avaliacao', 'Tipo de avaliação', 'opcao', { op: ['Desempenho', 'Potencial'] }), F('descricao', 'Descrição', 'longo'), F('cargos', 'Cargos', 'refs', { ref: 'cargo', alias: ['Cargo'] })], { colunas: ['nome', 'grupo_id', 'tipo_avaliacao', 'peso'] }),
   {
     kind: 'ciclo', slug: 'ciclos-avaliacao', titulo: 'Ciclos de avaliação', singular: 'ciclo', icone: '🔄',
     campos: [F('titulo', 'Título', 'texto', { req: true }), F('inicio', 'Início', 'data', { req: true }), F('fim', 'Fim', 'data', { req: true }), F('status', 'Status', 'opcao', { req: true, op: ['Aberto', 'Encerrado'] })],
@@ -203,10 +204,12 @@ const KINDS_LISTA = [
   },
   {
     kind: 'avaliacao', slug: 'avaliacoes', titulo: 'Avaliações', singular: 'avaliação', icone: '⭐', unico: ['ciclo_id', 'colaborador_id'],
-    desc: 'Notas de 1 a 5, que alimentam a matriz de potencial e a análise de performance.',
+    desc: 'Notas de 1 a 5, que alimentam o 9box e a análise de performance.',
+    acoes: r => [[`/avaliacoes/${r.id}`, 'Relatório']],
     campos: [F('ciclo_id', 'Ciclo', 'ref', { ref: 'ciclo', req: true }), colab(),
-      F('desempenho', 'Desempenho (1 a 5)', 'numero', { req: true, min: 1, max: 5, inteiro: true }), F('potencial', 'Potencial (1 a 5)', 'numero', { req: true, min: 1, max: 5, inteiro: true }),
-      F('comentario', 'Comentário', 'longo')],
+      F('desempenho', 'Desempenho (1 a 5)', 'numero', { req: true, min: 1, max: 5 }), F('potencial', 'Comportamento (1 a 5)', 'numero', { min: 1, max: 5, alias: ['Comportamento', 'Potencial', 'Potencial (1 a 5)'] }),
+      F('avaliador', 'Avaliador'), F('data_resposta', 'Data da resposta', 'data'), F('comentario', 'Comentário', 'longo', { cl: 'pessoal' }),
+      F('itens', 'Notas por competência', 'texto', { interno: true })],
     colunas: ['ciclo_id', 'colaborador_id', 'desempenho', 'potencial'],
   },
   {
