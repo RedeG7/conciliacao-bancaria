@@ -54,7 +54,10 @@ const TABELAS = {
     seed: [['Residência unifamiliar | 1000', 89], ['Residência unifamiliar | 999999999', 85],
       ['Comercial | 3000', 86], ['Comercial | 999999999', 83],
       ['Casa popular | 999999999', 98],
-      ['Edifício de garagens | 3000', 86], ['Edifício de garagens | 999999999', 83]],
+      ['Edifício de garagens | 3000', 86], ['Edifício de garagens | 999999999', 83],
+      ['Residência multifamiliar | 999999999', 90]],
+    // linhas incluídas depois da primeira versão: entram uma vez em bancos já existentes
+    seedNovos: { 'v2-multifamiliar': [['Residência multifamiliar | 999999999', 90]] },
   },
   area_complementar: {
     titulo: '% de equivalência das áreas complementares', unidade: '% da área', colunas: ['chave'], rotuloChave: 'Área | coberta/descoberta',

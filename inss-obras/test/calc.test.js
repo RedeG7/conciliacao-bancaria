@@ -106,3 +106,15 @@ test('fator de redução de equivalência: caso real (sistema anterior = R$ 11.6
   const galpao = calc.predial({ uf: 'GO', tipo_responsavel: 'PJ', destinacoes: [{ destinacao: 'Galpão industrial', tipo_obra: 'Alvenaria', categoria: 'Obra nova', area: 100 }] }, PR);
   assert.strictEqual(galpao.linhas[0].fator_eq, 100);
 });
+
+test('fator de equivalência multifamiliar 90%: caso real (sistema anterior = R$ 20.937,77)', () => {
+  const linhasEq = [{ tabela: 'reducao_equivalencia', uf: '', chave: 'Residência multifamiliar | 999999999', valor: 90 },
+    ...[['100', 20], ['200', 40], ['300', 55], ['400', 70], ['999999999', 90]].map(([chave, valor]) => ({ tabela: 'fator_social', uf: '', chave, valor }))];
+  const aliqReal = [['Patronal', 20], ['GILRAT', 3], ['Terceiros', 5.8], ['Segurados', 8]].map(([chave, valor]) => ({ tabela: 'aliquota', uf: '', chave, valor }));
+  const todas = [...rows.filter(r => r.tabela !== 'aliquota' && r.tabela !== 'fator_social'), ...aliqReal, ...linhasEq];
+  const PR = { ...P, list: t => todas.filter(r => r.tabela === t), vau: () => ({ valor: 2393.62, vigencia: '2026-11' }) };
+  const r = calc.predial({ uf: 'GO', tipo_responsavel: 'PF', destinacoes: [{ destinacao: 'Residência multifamiliar', tipo_obra: 'Alvenaria', categoria: 'Obra nova', area: 240.1 }] }, PR);
+  assert.strictEqual(r.cod_total, 517237.35);
+  assert.strictEqual(r.rmt, 56896.11);
+  assert.strictEqual(r.inss, 20937.77);
+});
