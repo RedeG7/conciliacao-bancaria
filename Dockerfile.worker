@@ -8,6 +8,10 @@ FROM python:3.11-slim
 WORKDIR /app
 
 COPY requirements-worker.txt .
+# libatomic1: o node embutido no Playwright 1.65+ precisa dela e a imagem
+# slim não traz ("libatomic.so.1: cannot open shared object file").
+RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r requirements-worker.txt \
     && playwright install --with-deps chromium
 
