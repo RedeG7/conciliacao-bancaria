@@ -163,6 +163,22 @@ for (const [tabela, def] of Object.entries(TABELAS)) {
   }
 }
 
+// linhas novas de semente (seedNovos): gravadas uma única vez no padrão da
+// plataforma, sem sobrescrever o que já existir com a mesma chave
+for (const [tabela, def] of Object.entries(TABELAS)) {
+  for (const [versao, rows] of Object.entries(def.seedNovos || {})) {
+    const marca = `seed:${tabela}:${versao}`;
+    if (setting(marca)) continue;
+    for (const row of rows) {
+      const [uf, chave, valor] = row.length === 3 ? row : ['', row[0], row[1]];
+      if (db.prepare("SELECT 1 FROM params WHERE tabela = ? AND office = '' AND uf = ? AND chave = ?").get(tabela, uf, chave)) continue;
+      db.prepare('INSERT INTO params (tabela, uf, chave, valor, obs, updated_at, updated_by) VALUES (?,?,?,?,?,?,?)')
+        .run(tabela, uf, chave, valor, def.obsSeed || VALIDAR, nowIso(), 'sistema');
+    }
+    db.prepare('INSERT OR REPLACE INTO settings (chave, valor, updated_at, updated_by) VALUES (?,?,?,?)').run(marca, '1', nowIso(), 'sistema');
+  }
+}
+
 function tx(fn) {
   db.exec('BEGIN');
   try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
