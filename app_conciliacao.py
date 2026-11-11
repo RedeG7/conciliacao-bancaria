@@ -1672,7 +1672,8 @@ def _bloco_programa_nfgo(escritorio_id: str) -> None:
 
 
 def _tela_rpa_hub(modulos: list | None = None, titulo: str = "Hub de RPAs", icone: str = "🤖",
-                  subtitulo: str = "Fechamento mensal de REST e DMS no ISS Web.") -> None:
+                  subtitulo: str = "Fechamento mensal de REST e DMS no ISS Web.",
+                  pai: tuple | None = None) -> None:
     """Hub de RPAs do escritório: cadastro de credenciais de procurador,
     upload de planilha e acompanhamento das execuções, por módulo (ISS Web
     é o primeiro — novos módulos só entram em rpa/registry.py, esta tela
@@ -1688,7 +1689,7 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "Hub de RPAs", icon
     super_admin_global tem o seletor pra escolher QUALQUER escritório
     (mesmo padrão de _tela_historico/_tela_gerenciar_clientes), pra poder
     dar suporte sem precisar logar como o cliente."""
-    _cabecalho_app(icone, titulo, subtitulo)
+    _cabecalho_app(icone, titulo, subtitulo, pai=pai)
 
     eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
     if eh_global:
@@ -1966,6 +1967,7 @@ _APPS_HOME = [
         "descricao": "Fechamento mensal de REST e DMS no ISS Web.",
         "departamento": "Fiscal",
         "tela": "rpa_hub",
+        "grupo": "rpa_fiscal",
     },
     {
         "id": "rpa_folha",
@@ -1982,6 +1984,7 @@ _APPS_HOME = [
         "descricao": "Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO.",
         "departamento": "Fiscal",
         "tela": "rpa_nfgo",
+        "grupo": "rpa_fiscal",
     },
     {
         "id": "marketing",
@@ -2036,6 +2039,45 @@ _APPS_HOME = [
 
 
 _CARDS_POR_LINHA = 3
+
+# Grupos de apps: na tela inicial aparece UM card por grupo, que abre um menu
+# com os apps filhos (os de _APPS_HOME com "grupo": <id>). Um RPA novo do
+# Fiscal so precisa de uma entrada em _APPS_HOME com "grupo": "rpa_fiscal" -
+# a permissao continua por app (o grupo aparece se o usuario tiver ao menos
+# um filho liberado).
+_GRUPOS_APPS = {
+    "rpa_fiscal": {
+        "icone": "🧾",
+        "titulo": "RPA Fiscal",
+        "departamento": "Fiscal",
+        "tela": "rpa_fiscal",
+        "subtitulo": "Escolha qual automação do Fiscal você quer usar.",
+    },
+}
+
+
+def _filhos_do_grupo(grupo_id: str, apps_visiveis: list) -> list:
+    return [a for a in apps_visiveis if a.get("grupo") == grupo_id]
+
+
+def _apps_para_home(apps_visiveis: list) -> list:
+    """Apps da tela inicial: os sem grupo + um card por grupo que tenha ao
+    menos um filho liberado (na posicao do primeiro filho)."""
+    saida, vistos = [], set()
+    for a in apps_visiveis:
+        g = a.get("grupo")
+        if not g:
+            saida.append(a)
+        elif g not in vistos and g in _GRUPOS_APPS:
+            vistos.add(g)
+            info = _GRUPOS_APPS[g]
+            filhos = _filhos_do_grupo(g, apps_visiveis)
+            saida.append({
+                "id": g, "icone": info["icone"], "titulo": info["titulo"],
+                "descricao": " · ".join(f["titulo"].replace("RPA — ", "").replace("RPA ", "") for f in filhos),
+                "departamento": info["departamento"], "tela": info["tela"], "eh_grupo": True,
+            })
+    return saida
 
 
 def _apps_permitidos_efetivos(escritorio_id: str, usuario: str) -> set:
@@ -2211,7 +2253,7 @@ def _iniciais(nome: str) -> str:
     return (partes[0][0] + partes[-1][0]).upper()
 
 
-_TELAS_APPS = {"conciliacao", "rpa_hub", "rpa_nfgo", "historico", "gerenciar_clientes"}
+_TELAS_APPS = {"conciliacao", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "historico", "gerenciar_clientes"}
 
 
 def _sidebar_hub(papel_usuario: str) -> None:
@@ -2276,13 +2318,19 @@ def _chip_usuario_html() -> str:
             f'<div class="p">{html.escape(_PAPEL_ROTULO.get(papel, papel or ""))}</div></div></div>')
 
 
-def _cabecalho_app(icone: str, titulo: str, subtitulo: str = "") -> None:
+def _cabecalho_app(icone: str, titulo: str, subtitulo: str = "", pai: tuple | None = None) -> None:
     """Cabecalho padrao das telas do Hub (mesmo visual da tela inicial):
-    caminho Inicio › tela, icone, titulo, subtitulo e o usuario logado."""
+    caminho Inicio › tela, icone, titulo, subtitulo e o usuario logado.
+    `pai` = (rotulo, tela) quando a tela fica dentro de um grupo (ex.: RPA
+    Fiscal): entra no caminho e ganha um botao de voltar."""
+    if pai and st.button(f"← {pai[0]}", key=f"voltar_{pai[1]}"):
+        st.session_state["tela"] = pai[1]
+        st.rerun()
+    caminho = f"Início &nbsp;›&nbsp; {html.escape(pai[0])} &nbsp;›&nbsp; " if pai else "Início &nbsp;›&nbsp; "
     c_tit, c_user = st.columns([3, 1.1])
     with c_tit:
         st.markdown(
-            f'<div class="hh-crumb">Início &nbsp;›&nbsp; {html.escape(titulo)}</div>'
+            f'<div class="hh-crumb">{caminho}{html.escape(titulo)}</div>'
             f'<div class="hh-page"><div class="hh-page-ic">{icone}</div>'
             f'<div><div class="hh-page-t">{html.escape(titulo)}</div>'
             + (f'<div class="hh-sub">{html.escape(subtitulo)}</div>' if subtitulo else "")
@@ -2339,6 +2387,8 @@ def _tela_home() -> None:
     )
 
     favoritos = set(auth.carregar_usuarios().get(usuario, {}).get("apps_favoritos") or [])
+    # quem favoritou um app que agora mora dentro de um grupo mantem o favorito no card do grupo
+    favoritos |= {a["grupo"] for a in _APPS_HOME if a.get("grupo") and a["id"] in favoritos}
     so_favoritos = st.session_state.get("home_filtro") == "favoritos"
 
     c_tit, c_busca, c_depto = st.columns([2.6, 1.3, 1.1], vertical_alignment="bottom")
@@ -2357,7 +2407,7 @@ def _tela_home() -> None:
 
     termo = (busca or "").strip().lower()
     apps = [
-        a for a in _apps_visiveis
+        a for a in _apps_para_home(_apps_visiveis)
         if (not so_favoritos or a["id"] in favoritos)
         and (depto == _FILTRO_TODOS_DEPTOS or a["departamento"] == depto)
         and (not termo or termo in (a["titulo"] + " " + a["descricao"]).lower())
@@ -2382,7 +2432,7 @@ def _tela_home() -> None:
                 unsafe_allow_html=True)
 
 
-def _card_app(coluna, app: dict, usuario: str, favoritos: set) -> None:
+def _card_app(coluna, app: dict, usuario: str, favoritos: set, com_favorito: bool = True) -> None:
     """Um card da tela inicial: icone, titulo, status, descricao,
     departamento, estrela de favorito e botao Acessar/Em breve."""
     depto = _DEPARTAMENTOS.get(app["departamento"], {"icone": "•", "cor": "#64748b"})
@@ -2398,14 +2448,18 @@ def _card_app(coluna, app: dict, usuario: str, favoritos: set) -> None:
                 f'<div class="hh-desc">{html.escape(app["descricao"])}</div></div></div>',
                 unsafe_allow_html=True,
             )
-            c_chip, c_fav, c_btn = st.columns([1.5, 0.4, 2.3], vertical_alignment="center")
+            if com_favorito:
+                c_chip, c_fav, c_btn = st.columns([1.5, 0.4, 2.3], vertical_alignment="center")
+            else:
+                c_chip, c_btn = st.columns([1.5, 2.7], vertical_alignment="center")
+                c_fav = None
             c_chip.markdown(
                 f'<span class="hh-chip" style="background:{cor}26;color:{cor};border:1px solid {cor}55">'
                 f'{depto["icone"]} {html.escape(depto.get("chip", app["departamento"]))}</span>',
                 unsafe_allow_html=True,
             )
             eh_fav = app["id"] in favoritos
-            if c_fav.button("★" if eh_fav else "☆", key=f"fav_{app['id']}",
+            if c_fav is not None and c_fav.button("★" if eh_fav else "☆", key=f"fav_{app['id']}",
                             help="Tirar dos favoritos" if eh_fav else "Adicionar aos favoritos"):
                 novos = (favoritos - {app["id"]}) if eh_fav else (favoritos | {app["id"]})
                 auth.definir_favoritos(usuario, sorted(novos))
@@ -2423,6 +2477,28 @@ def _card_app(coluna, app: dict, usuario: str, favoritos: set) -> None:
                     with st.container(key=f"embreve_{app['id']}"):
                         st.button("Em breve", key=f"home_em_breve_{app['id']}",
                                   use_container_width=True, disabled=True)
+
+
+_PAI_RPA_FISCAL = ("RPA Fiscal", "rpa_fiscal")
+
+
+def _tela_grupo_apps(grupo_id: str) -> None:
+    """Menu de um grupo de apps (ex.: RPA Fiscal): um card por app filho
+    que o usuario pode usar. Sem nenhum liberado, volta pra tela inicial."""
+    info = _GRUPOS_APPS[grupo_id]
+    ids = _apps_permitidos_efetivos(st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado"))
+    filhos = _filhos_do_grupo(grupo_id, [a for a in _APPS_HOME if a["id"] in ids])
+    if not filhos:
+        st.session_state["tela"] = "home"
+        st.rerun()
+    if st.button("← Início", key=f"voltar_home_{grupo_id}"):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    _cabecalho_app(info["icone"], info["titulo"], info["subtitulo"])
+    for inicio in range(0, len(filhos), _CARDS_POR_LINHA):
+        colunas = st.columns(_CARDS_POR_LINHA)
+        for coluna, app in zip(colunas, filhos[inicio:inicio + _CARDS_POR_LINHA]):
+            _card_app(coluna, app, st.session_state.get("usuario_logado"), set(), com_favorito=False)
 
 
 def _tela_logs_acesso() -> None:
@@ -2508,7 +2584,7 @@ if st.session_state.get("mostrar_trocar_senha"):
 
 # tela atual também na URL (?tela=...): F5 ou uma sessão nova do Streamlit
 # (reconexão, Hub reiniciado no deploy) voltava sempre pra tela inicial
-_TELAS_URL = {"home", "rpa_hub", "rpa_nfgo", "conciliacao", "historico", "gerenciar_clientes",
+_TELAS_URL = {"home", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "conciliacao", "historico", "gerenciar_clientes",
               "gerenciar_escritorios", "gerenciar_usuarios", "logs_acesso"}
 if "tela" not in st.session_state:
     _tela_url = st.query_params.get("tela", "home")
@@ -2554,13 +2630,17 @@ if st.session_state.get("tela") == "gerenciar_clientes":
     _tela_gerenciar_clientes()
     st.stop()
 
+if st.session_state.get("tela") == "rpa_fiscal":
+    _tela_grupo_apps("rpa_fiscal")
+    st.stop()
+
 if st.session_state.get("tela") == "rpa_hub":
     if "rpa_hub" not in _apps_permitidos_efetivos(
         st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
     ):
         st.session_state["tela"] = "home"
         st.rerun()
-    _tela_rpa_hub()
+    _tela_rpa_hub(titulo="RPA — Fechamento REST/DMS", pai=_PAI_RPA_FISCAL)
     st.stop()
 
 if st.session_state.get("tela") == "rpa_nfgo":
@@ -2573,6 +2653,7 @@ if st.session_state.get("tela") == "rpa_nfgo":
         modulos=[m for m, info in rpa_registry.MODULOS.items() if info.get("app_home") == "rpa_nfgo"],
         titulo="RPA NF GO", icone="🧾",
         subtitulo="Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO.",
+        pai=_PAI_RPA_FISCAL,
     )
     st.stop()
 
