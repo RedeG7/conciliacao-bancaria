@@ -2956,33 +2956,43 @@ else:
 # ---------------------------------------------------------------------------
 
 
+def _versao_arquivo(caminho: str) -> tuple:
+    """(mtime, tamanho) do arquivo, usado como parte da CHAVE dos caches. O
+    upload sempre grava no mesmo caminho (extrato.pdf, balancete.pdf...); se
+    esse valor nao entrar na chave - parametro com "_" na frente NAO entra no
+    Streamlit - trocar de extrato reaproveita a analise, a conta banco e a
+    conciliacao do extrato anterior."""
+    info = Path(caminho).stat()
+    return (info.st_mtime_ns, info.st_size)
+
+
 @st.cache_data(show_spinner=False)
-def _parse_balancete_cached(path: str, _mtime: float):
+def _parse_balancete_cached(path: str, versao: tuple):
     return cb.parse_balancete(path)
 
 
 @st.cache_data(show_spinner=False)
-def _detectar_conta_banco_cached(extrato_path: str, _extrato_mtime: float,
-                                  balancete_path: str, _balancete_mtime: float):
-    contas = _parse_balancete_cached(balancete_path, _balancete_mtime)
+def _detectar_conta_banco_cached(extrato_path: str, extrato_versao: tuple,
+                                  balancete_path: str, balancete_versao: tuple):
+    contas = _parse_balancete_cached(balancete_path, balancete_versao)
     return cb.detectar_conta_banco(extrato_path, contas)
 
 
 @st.cache_data(show_spinner=False)
-def _analisar_extrato_cached(extrato_path: str, _extrato_mtime: float):
+def _analisar_extrato_cached(extrato_path: str, extrato_versao: tuple):
     return cb.analisar_extrato(extrato_path)
 
 
 @st.cache_data(show_spinner=False)
-def _diagnostico_conta_cached(extrato_path: str, _extrato_mtime: float,
-                              balancete_path: str, _balancete_mtime: float):
-    contas = _parse_balancete_cached(balancete_path, _balancete_mtime)
+def _diagnostico_conta_cached(extrato_path: str, extrato_versao: tuple,
+                              balancete_path: str, balancete_versao: tuple):
+    contas = _parse_balancete_cached(balancete_path, balancete_versao)
     return cb.diagnosticar_conta_banco(extrato_path, contas)
 
 
 def _mostrar_analise_extrato(caminho: str) -> None:
     try:
-        a = _analisar_extrato_cached(caminho, Path(caminho).stat().st_mtime)
+        a = _analisar_extrato_cached(caminho, _versao_arquivo(caminho))
     except Exception as exc:
         st.warning(f"Não consegui ler o extrato para analisar: {exc}")
         return
@@ -3011,7 +3021,7 @@ if extrato_path:
 
 if balancete_path:
     try:
-        contas_balancete = _parse_balancete_cached(balancete_path, Path(balancete_path).stat().st_mtime)
+        contas_balancete = _parse_balancete_cached(balancete_path, _versao_arquivo(balancete_path))
     except Exception as exc:
         st.error(f"Erro ao ler o balancete: {exc}")
         contas_balancete = []
@@ -3035,8 +3045,8 @@ if balancete_path:
         conta_auto = None
         if extrato_path:
             conta_auto = _detectar_conta_banco_cached(
-                extrato_path, Path(extrato_path).stat().st_mtime,
-                balancete_path, Path(balancete_path).stat().st_mtime,
+                extrato_path, _versao_arquivo(extrato_path),
+                balancete_path, _versao_arquivo(balancete_path),
             )
 
         _assinatura_extrato = Path(extrato_path).stat().st_size if extrato_path else None
@@ -3061,8 +3071,8 @@ if balancete_path:
                             "confirme qual é, abaixo (o balancete continua sendo a fonte de verdade).")
                 try:
                     st.info(_diagnostico_conta_cached(
-                        extrato_path, Path(extrato_path).stat().st_mtime,
-                        balancete_path, Path(balancete_path).stat().st_mtime,
+                        extrato_path, _versao_arquivo(extrato_path),
+                        balancete_path, _versao_arquivo(balancete_path),
                     ))
                 except Exception:
                     pass
@@ -3100,14 +3110,14 @@ if not pronto:
 
 if pronto:
 
-    def _mtime(path: Optional[str]) -> float:
-        return Path(path).stat().st_mtime if path else 0.0
+    def _mtime(path: Optional[str]) -> tuple:
+        return _versao_arquivo(path) if path else (0, 0)
 
     @st.cache_data(show_spinner=False)
     def _processar_cached(
         extrato_path, razao_path, balancete_path, conta_contabil, competencia,
         saldo_inicial_razao, saldo_inicial_extrato, dias_tolerancia,
-        _extrato_mtime, _razao_mtime, _balancete_mtime, usar_sugestoes=True,
+        extrato_versao, razao_versao, balancete_versao, usar_sugestoes=True,
     ):
         log = []
         _print_original = print
