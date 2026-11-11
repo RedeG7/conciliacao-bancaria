@@ -2640,7 +2640,7 @@ if st.session_state.get("tela") == "rpa_hub":
     ):
         st.session_state["tela"] = "home"
         st.rerun()
-    _tela_rpa_hub(pai=_PAI_RPA_FISCAL)
+    _tela_rpa_hub(titulo="RPA — Fechamento REST/DMS", pai=_PAI_RPA_FISCAL)
     st.stop()
 
 if st.session_state.get("tela") == "rpa_nfgo":
