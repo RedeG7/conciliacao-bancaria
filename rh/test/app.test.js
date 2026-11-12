@@ -164,9 +164,9 @@ test('vínculo em massa, célula perigosa no CSV e matriz de potencial', async (
   assert.strictEqual((await post('/cad/beneficiarios/novo', ck, { beneficio_id: ben, colaborador_id: ids[0] })).status, 422, 'não repete');
   await post('/cad/ciclos-avaliacao/novo', ck, { titulo: '2026', inicio: '2026-01-01', fim: '2026-12-31', status: 'Aberto' });
   const ciclo = (await texto('/cad/ciclos-avaliacao', ck)).match(/\/cad\/ciclos-avaliacao\/(\d+)/)[1];
-  await post('/cad/avaliacoes/novo', ck, { ciclo_id: ciclo, colaborador_id: ids[1], desempenho: '5', potencial: '5' });
+  await post('/cad/avaliacoes/novo', ck, { ciclo_id: ciclo, colaborador_id: ids[1], desempenho: '10', potencial: '9,5' });
   assert.match(await texto('/matriz-potencial', ck), /data-q="Destaques" data-total="1"/);
-  assert.strictEqual((await post('/cad/avaliacoes/novo', ck, { ciclo_id: ciclo, colaborador_id: ids[0], desempenho: '6', potencial: '5' })).status, 422);
+  assert.strictEqual((await post('/cad/avaliacoes/novo', ck, { ciclo_id: ciclo, colaborador_id: ids[0], desempenho: '11', potencial: '5' })).status, 422);
 });
 
 test('experiência e contrato pela duração, insalubridade, CPF e opção fora da lista', async () => {
@@ -314,7 +314,7 @@ test('importar 9box da Sólides: eixos vindos do arquivo e dos grupos de compet�
     + 'Pessoa Alta,Chefe,30/06/2026,Competências Técnicas,A,1,3,Não,-,,17/09/2026\nPessoa Alta,Chefe,30/06/2026,Competências Comportamentais,B,1,5,Não,-,,17/09/2026\n';
   await post('/cad/ciclos-avaliacao/importar', ck, { csv: notas });
   let lista = await texto('/cad/avaliacoes', ck);
-  assert.match(await texto(`/avaliacoes/${lista.match(/\/avaliacoes\/(\d+)/)[1]}`, ck), /Comportamento<\/small><b>5</);
+  assert.match(await texto(`/avaliacoes/${lista.match(/\/avaliacoes\/(\d+)/)[1]}`, ck), /Comportamento<\/small><b>10</);
   const cab = 'ID da Solicitação,Nome da Solicitação,Nome do Avaliado,Departamento,Comportamento,Desempenho,Quadrante\n';
   const csv = cab + '1,AVD,Pessoa Alta,"Geral, Tudo",90.0,83.33333333333334,Destaque\n1,AVD,Pessoa Sem Nota,X,50.0,50.0,Aprimorar comportamento e técnica\n1,AVD,Pessoa Fora,X,50.0,50.0,Insuficiente\n';
   const t = await (await post('/cad/avaliacoes/importar', ck, { csv })).text();
@@ -331,7 +331,7 @@ test('importar 9box da Sólides: eixos vindos do arquivo e dos grupos de compet�
   assert.match(leitor, /data-nome="Pessoa Alta"/, 'quem só lê também vê o quadro');
   assert.doesNotMatch(leitor, /data-relatorio="\/avaliacoes/, 'sem o link do relatório individual');
   lista = await texto('/cad/avaliacoes', ck);
-  assert.match(lista, /4,17/, 'desempenho do arquivo convertido para a escala de 1 a 5');
+  assert.match(lista, /8,33/, 'desempenho do arquivo convertido para a escala de 0 a 10');
   const dif = await (await post('/cad/avaliacoes/importar', ck, { csv: `${cab}1,AVD,Pessoa Alta,X,70.0,70.0,Destaque\n` })).text();
   assert.match(dif, /salvo, mas o arquivo diz &quot;Destaque&quot;|salvo, mas o arquivo diz "Destaque"/);
 });
@@ -347,7 +347,7 @@ test('importar avaliação da Sólides: ciclo do ano, média e relatório indivi
   assert.match(t, /Pessoa Fora: não está em Colaboradores/);
   assert.match(await texto('/cad/ciclos-avaliacao', ck), /Avaliação de Desempenho 2026/);
   const lista = await texto('/cad/avaliacoes', ck);
-  assert.match(lista, /3,5/, 'média ponderada, sem a autoavaliação');
+  assert.match(lista, />7</, 'média ponderada, sem a autoavaliação, de 0 a 10');
   const id = lista.match(/\/avaliacoes\/(\d+)/)[1];
   const rel = await texto(`/avaliacoes/${id}`, ck);
   assert.match(rel, /Comenta B/);
@@ -388,9 +388,9 @@ test('perfil comportamental: link individual, link geral, permissões e isolamen
   const id = lista.match(/\/comportamental\/perfis\/(\d+)">Pessoa Perfil/)[1];
   const token = (await texto(`/comportamental/perfis/${id}`, ck)).match(/\/perfil\/([\w-]+)/)[1];
 
-  const respostas = Object.fromEntries(Array.from({ length: 24 }, (_, i) => [`q${i}`, i % 4 === 0 ? '5' : '2']));
+  const respostas = Object.fromEntries(Array.from({ length: 24 }, (_, i) => [`q${i}`, i % 4 === 0 ? '9' : '2']));
   assert.match(await texto(`/perfil/${token}`), /Olá, Pessoa Perfil./);
-  assert.strictEqual((await post(`/perfil/${token}`, '', { ...respostas, q3: '9', aceite: '1' })).status, 422);
+  assert.strictEqual((await post(`/perfil/${token}`, '', { ...respostas, q3: '11', aceite: '1' })).status, 422);
   assert.strictEqual((await post(`/perfil/${token}`, '', respostas)).status, 422, 'sem aceite não grava');
   assert.strictEqual((await post(`/perfil/${token}`, '', { ...respostas, aceite: '1' })).status, 200);
   assert.match(await texto(`/perfil/${token}`), /já foi respondido/);

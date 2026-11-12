@@ -246,6 +246,7 @@ ol.guia { list-style: none; padding: 0; margin: 0; }
 .alertas li:last-child { border-bottom: 0; } .alertas time { color: var(--suave); white-space: nowrap; font-size: .85rem; }
 .escala { display: flex; flex-wrap: wrap; gap: 6px; } .escala label { display: inline-flex; gap: 4px; align-items: center; border: 1px solid var(--borda); border-radius: 8px; padding: 6px 10px; cursor: pointer; } .escala input { width: auto; }
 .pergunta { margin-bottom: 16px; }
+.escala-caixa { display: inline-block; max-width: 100%; } .escala-pontas { display: flex; justify-content: space-between; gap: 12px; margin-top: 4px; color: var(--suave); font-size: .78rem; }
 .celula-acoes { white-space: nowrap; }
 @media (max-width: 640px) { .barras .item { grid-template-columns: 1fr 64px; } .barras .barra { grid-column: 1 / -1; grid-row: 2; } }
 .abas a.fim { margin-left: auto; }

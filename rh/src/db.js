@@ -50,6 +50,34 @@ CREATE INDEX IF NOT EXISTS auditoria_office ON auditoria(office, id);
 `);
 
 const nowIso = () => new Date().toISOString();
+
+// Avaliações passaram da escala de 1 a 5 para 0 a 10: na primeira subida com esta
+// versão, as notas já gravadas (de todos os escritórios) são multiplicadas por 2.
+// A marca em config impede converter duas vezes.
+(function notasDeZeroADez() {
+  const MARCA = ['_sistema', 'escala_avaliacao_10'];
+  if (db.prepare('SELECT 1 FROM config WHERE office = ? AND chave = ?').get(...MARCA)) return;
+  const dobro = v => (v == null || v === '' || Number.isNaN(Number(v)) ? v : Math.round(Number(v) * 2 * 100) / 100);
+  db.exec('BEGIN');
+  try {
+    for (const r of db.prepare("SELECT id, dados FROM registros WHERE kind = 'avaliacao'").all()) {
+      const d = JSON.parse(r.dados);
+      d.desempenho = dobro(d.desempenho);
+      d.potencial = dobro(d.potencial);
+      if (Array.isArray(d.itens) && d.itens.length) {
+        // com as notas por competência, refaz as médias sem herdar o arredondamento antigo
+        d.itens = d.itens.map(i => ({ ...i, nota: dobro(i.nota) }));
+        const grupo = re => d.itens.filter(i => re.test(String(i.grupo || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()));
+        const media = l => (l.length ? Math.round((l.reduce((s, i) => s + i.nota * (i.peso || 1), 0) / l.reduce((s, i) => s + (i.peso || 1), 0)) * 100) / 100 : null);
+        d.desempenho = media(grupo(/tecnic/)) ?? media(d.itens);
+        d.potencial = media(grupo(/comportament/)) ?? d.potencial;
+      }
+      db.prepare('UPDATE registros SET dados = ? WHERE id = ?').run(JSON.stringify(d), r.id);
+    }
+    db.prepare('INSERT INTO config (office, chave, valor) VALUES (?,?,?)').run(...MARCA, JSON.stringify({ em: new Date().toISOString() }));
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+}());
 function tx(fn) {
   db.exec('BEGIN');
   try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }

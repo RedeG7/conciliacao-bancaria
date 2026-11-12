@@ -159,7 +159,7 @@ perfilRotas.publicas(app, { h, excedeuLimite, telaErro });
 app.use(h((req, res, next) => {
   const t = cookies(req)[COOKIE];
   const s = t && db.prepare('SELECT * FROM sessions WHERE token_hash = ? AND expires_at > ?').get(sha(t), nowIso());
-  if (!s) return telaErro(res, 401, 'Sua sessão terminou. Abra o RH pelo card no Hub.');
+  if (!s) return telaErro(res, 401, 'Este endereço é da área interna do RH e pede login. Se você abriu o RH antes, a sessão terminou: entre de novo pelo card no Hub. Se você recebeu um questionário ou uma pesquisa para responder, peça ao RH o link de resposta, que abre sem login.');
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(s.user_id);
   if (!u) return telaErro(res, 401, 'Sua sessão terminou. Abra o RH pelo card no Hub.');
   req.user = u; req.office = s.office; req.sessionHash = s.token_hash;
@@ -469,7 +469,7 @@ app.get('/matriz-potencial', h((req, res) => {
     };
   };
   const quadros = M.matriz(avaliacoes).map(l => l.map(q => ({ ...q, pessoas: q.itens.map(pessoaDoBox).sort((x, y) => y.comportamento + y.desempenho - x.comportamento - x.desempenho) })));
-  res.send(layout(req, '9box', html`${formCiclo(ciclos, atual)}${G.noveBox(quadros, { semNota: avaliacoes.filter(a => a.potencial == null).length })}`, { descricao: 'Nos dois eixos: abaixo de 2,5 = baixo, de 2,5 a 4 = médio, acima de 4 = alto.' }));
+  res.send(layout(req, '9box', html`${formCiclo(ciclos, atual)}${G.noveBox(quadros, { semNota: avaliacoes.filter(a => a.potencial == null).length })}`, { descricao: 'Notas de 0 a 10 nos dois eixos: abaixo de 5 = baixo, de 5 a 8 = médio, acima de 8 = alto.' }));
 }));
 
 app.get('/avaliacoes/:id(\\d+)', h((req, res) => {
@@ -516,7 +516,7 @@ function visaoAvd(req) {
   ];
   return html`${formCiclo(ciclos, atual)}
     <div class="cards4">${cartao('Avaliados', avaliacoes.length)}${cartao('Pendentes', pendentes.length)}
-      ${cartao('Taxa de resposta', total ? `${Math.round((avaliacoes.length / total) * 100)}%` : '-')}${cartao('Média de desempenho', avaliacoes.length ? n2(M.media(avaliacoes.map(a => a.desempenho))) : '-', 'Notas de 1 a 5')}</div>
+      ${cartao('Taxa de resposta', total ? `${Math.round((avaliacoes.length / total) * 100)}%` : '-')}${cartao('Média de desempenho', avaliacoes.length ? n2(M.media(avaliacoes.map(a => a.desempenho))) : '-', 'Notas de 0 a 10')}</div>
     <h3>Notas médias</h3>
     <div class="abas">${ABA_AVD.map(([p, r]) => html`<a href="${url(p, todos ? 'todos' : 'top')}" class="${p === por ? 'ativo' : ''}">${r}</a>`)}
       <a href="${url(por, 'top')}" class="fim ${todos ? '' : 'ativo'}">Top 5</a><a href="${url(por, 'todos')}" class="${todos ? 'ativo' : ''}">Todos</a></div>

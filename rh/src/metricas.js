@@ -42,10 +42,10 @@ function resumoDesligamentos(desligamentos, colaboradores, hoje, meses = 12) {
   };
 }
 
-// 9box: abaixo de 2,5 = baixo; de 2,5 a 4 = médio; acima de 4 = alto. São os cortes
-// que reproduzem os quadrantes da Sólides (50% e 80% da nota máxima). O comportamento
-// fica guardado no campo potencial, que era o eixo vertical da matriz.
-const faixa = n => (n < 2.5 ? 0 : n <= 4 ? 1 : 2);
+// 9box, notas de 0 a 10: abaixo de 5 = baixo; de 5 a 8 = médio; acima de 8 = alto. São
+// os cortes que reproduzem os quadrantes da Sólides (50% e 80% da nota máxima). O
+// comportamento fica guardado no campo potencial, que era o eixo vertical da matriz.
+const faixa = n => (n < 5 ? 0 : n <= 8 ? 1 : 2);
 const QUADRANTES = [ // linha = comportamento (de cima para baixo: alto, médio, baixo), coluna = desempenho
   ['Desenvolver técnica', 'Aprimorar técnica', 'Destaques'],
   ['Verificar situação', 'Aprimorar comportamento e técnica', 'Aprimorar comportamento'],
