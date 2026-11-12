@@ -1,6 +1,6 @@
 'use strict';
 // Perfil comportamental: questionário próprio da RedeG7 e cálculo, em funções
-// puras. São 24 afirmações, 6 para cada um dos 4 estilos, respondidas de 1 a 5.
+// puras. São 24 afirmações, 6 para cada um dos 4 estilos, respondidas de 0 a 10.
 // Não é teste psicológico nem instrumento validado: serve de apoio à conversa
 // com a pessoa e nunca como critério único de contratação ou desligamento.
 const ESTILOS = {
@@ -59,18 +59,20 @@ const QUESTOES = [
   ['criterioso', 'Prefiro fazer certo a fazer rápido.'],
 ].map(([estilo, texto]) => ({ estilo, texto }));
 
-const ESCALA = [[1, 'Discordo totalmente'], [2, 'Discordo'], [3, 'Em parte'], [4, 'Concordo'], [5, 'Concordo totalmente']];
+// 0 = discordo totalmente, 10 = concordo totalmente
+const ESCALA = Array.from({ length: 11 }, (_, n) => [n, String(n)]);
 const ORDEM_FAIXAS = ['Baixo', 'Médio', 'Alto'];
 const faixa = v => (v >= 70 ? 'Alto' : v >= 40 ? 'Médio' : 'Baixo');
 const SECUNDARIO_ATE = 10; // pontos abaixo do principal para contar como 2º estilo
 
-// respostas de 1 a 5, na ordem de QUESTOES; null se faltar ou houver valor inválido
+// respostas de 0 a 10, na ordem de QUESTOES; null se faltar ou houver valor inválido.
+// Os pontos (0 a 100) são a média do estilo vezes 10, a mesma escala dos perfis antigos.
 function pontuar(respostas) {
-  if (respostas.length !== QUESTOES.length || respostas.some(n => !Number.isInteger(n) || n < 1 || n > 5)) return null;
+  if (respostas.length !== QUESTOES.length || respostas.some(n => !Number.isInteger(n) || n < 0 || n > 10)) return null;
   const pontos = {};
   for (const e of CHAVES) {
     const notas = respostas.filter((_, i) => QUESTOES[i].estilo === e);
-    pontos[e] = Math.round(((notas.reduce((s, n) => s + n, 0) / notas.length - 1) / 4) * 100);
+    pontos[e] = Math.round((notas.reduce((s, n) => s + n, 0) / notas.length) * 10);
   }
   const [principal, seg] = [...CHAVES].sort((a, b) => pontos[b] - pontos[a]);
   return { pontos, principal, secundario: pontos[principal] - pontos[seg] <= SECUNDARIO_ATE ? seg : null };

@@ -22,8 +22,10 @@ const emailOk = e => /^[^@\s]+@[^@\s]+$/.test(e);
 const lerRespostas = body => P.pontuar(P.QUESTOES.map((_, i) => Number(um(body[`q${i}`]) ?? NaN)));
 
 // ---------------------------------------------------------------- questionário
-const blocoPerguntas = () => html`${P.QUESTOES.map((q, i) => html`<div class="pergunta"><p><b>${i + 1}. ${q.texto}</b></p><div class="escala">
-  ${P.ESCALA.map(([v, t]) => html`<label><input type="radio" name="q${i}" value="${v}" required>${t}</label>`)}</div></div>`)}`;
+const blocoPerguntas = () => html`<p class="desc">Dê uma nota de 0 a 10 para cada frase: 0 = discordo totalmente, 10 = concordo totalmente.</p>
+  ${P.QUESTOES.map((q, i) => html`<div class="pergunta"><p><b>${i + 1}. ${q.texto}</b></p><div class="escala-caixa"><div class="escala">
+  ${P.ESCALA.map(([v, t]) => html`<label><input type="radio" name="q${i}" value="${v}" required>${t}</label>`)}</div>
+  <div class="escala-pontas" aria-hidden="true"><span>Discordo totalmente</span><span>Concordo totalmente</span></div></div></div>`)}`;
 const blocoAceite = () => html`<p class="desc">Não há resposta certa ou errada. ${AVISO} O resultado fica visível só para a equipe de RH da empresa.</p>
   <label class="aceite"><input type="checkbox" name="aceite" value="1" required> Li e concordo em responder.</label>`;
 
