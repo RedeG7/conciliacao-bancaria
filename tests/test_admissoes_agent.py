@@ -62,6 +62,17 @@ def test_preparo_com_dado_faltando_pede_documentos_sem_dado_pessoal(chamadas, ct
     assert "Maria" not in motivo and "11111111111" not in motivo
 
 
+def test_ia_completa_com_o_formulario(chamadas, ctx, monkeypatch):
+    monkeypatch.setattr(agente.ia, "ler_documentos", lambda cli, mat, emp: {**FICHA_OK, "cargo": ""})
+    monkeypatch.setattr(agente.hub_api, "admissao_material",
+                        lambda token, i: {**MATERIAL, "mensagens": ["Nome: Outro Nome" + chr(10) + "Cargo: Atendente"]})
+    assert agente.processar(ctx, _preparo()) == "awaiting_approval"
+    previa = chamadas[0][2]
+    # só preenche o que a IA deixou vazio
+    assert previa["cargo"] == "Atendente" and previa["nome"] == "Maria Teste"
+    assert previa["campos_vindos_do_formulario"] == ["Cargo"]
+
+
 def test_preparo_sem_documento_legivel(chamadas, ctx, monkeypatch):
     monkeypatch.setattr(agente.hub_api, "admissao_material",
                         lambda token, i: {**MATERIAL, "documentos": [], "ignorados": [{"nome": "a.xlsx"}]})

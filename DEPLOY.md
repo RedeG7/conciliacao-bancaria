@@ -407,6 +407,11 @@ docker run --rm -v conciliacao-bancaria_rh_data:/data -v $(pwd):/b alpine \
 
 ## Admissões (card "🧑‍💼 Admissões", departamento Pessoal)
 
+Atalho `admissao.redeg7.com`: o Caddy redireciona para
+`https://hub.redeg7.com/?tela=admissoes` (vale o login do Hub). Precisa do
+registro DNS **A** `admissao` apontando pro mesmo IP do Hub; outro endereço:
+`DOMINIO_ADMISSAO=...` no `.env`.
+
 Faz parte do próprio Hub (mesma imagem, mesmo Postgres): as tabelas
 `admissoes`, `admissoes_eventos` e `admissoes_chaves` são criadas sozinhas
 no primeiro acesso (`admissoes.garantir_schema()`). Regras em

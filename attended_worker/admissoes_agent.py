@@ -128,7 +128,17 @@ def preparar(ctx: Contexto, admissao: dict) -> tuple[str, Any]:
             extraido = ia.ler_documentos(cliente, material, empresa)
     except ia.ErroIA as exc:
         return "failed", f"Leitura dos documentos: {exc}"
+    # os dois métodos juntos: o que a IA não achou nos anexos e o cliente
+    # preencheu no formulário do Acessórias entra pelo formulário
+    do_formulario = []
+    ficha = formulario.ler_formulario(material) or {}
+    for chave, rotulo in ia.CAMPOS:
+        if not str(extraido.get(chave) or "").strip() and ficha.get(chave):
+            extraido[chave] = ficha[chave]
+            do_formulario.append(rotulo)
     previa, faltando = ia.montar_previa(extraido, empresa, material)
+    if do_formulario:
+        previa["campos_vindos_do_formulario"] = do_formulario
     if faltando:
         return "awaiting_documents", "Faltam nos documentos: " + ", ".join(faltando)
     return "previa", previa
