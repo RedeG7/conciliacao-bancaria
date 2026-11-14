@@ -47,6 +47,27 @@ import auth
 import clientes
 
 CANAIS = ("acessorias", "onvio", "whatsapp")
+# Versão do módulo, mostrada na tela. A cada atualização: suba VERSAO e
+# acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
+# O programa do agente tem versão própria em attended_worker/VERSION_ADMISSOES
+# (é ela que dispara a atualização automática do .exe).
+VERSAO = "1.2"
+NOVIDADES = [
+    ("1.2", "14/11/2026", [
+        "Número da versão e novidades na tela de Admissões.",
+        "Versão do agente nos botões de download.",
+    ]),
+    ("1.1", "14/11/2026", [
+        "Agente também no computador local (opção \"Onde o Domínio está\" na janela do agente).",
+        "Botões para baixar o agente e passo a passo de instalação em Canais e agente.",
+    ]),
+    ("1.0", "14/11/2026", [
+        "Módulo de Admissões no RPA Folha: fila, prévia do agente e aprovação do DP.",
+        "Integração com o Acessórias e aba IA (Claude ou OpenAI); IA desligada lê o formulário do Acessórias.",
+        "Atalho admissao.redeg7.com.",
+    ]),
+]
+
 CANAL_ROTULO = {"acessorias": "Acessórias", "onvio": "ONVIO", "whatsapp": "WhatsApp"}
 
 QUEUED = "queued"
