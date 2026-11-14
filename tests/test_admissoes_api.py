@@ -106,3 +106,44 @@ def test_agente_de_outro_escritorio_recebe_404(cli, chave):
     assert cli.post(f"/api/admissoes/agente/{r['id']}/status",
                     json={"status": "failed", "motivo": "x"}, headers=h_b).status_code == 404
     assert cli.post("/api/admissoes/agente/proxima", headers=h_b).json()["admissao"] is None
+
+
+def test_material_so_para_quem_reservou_e_com_a_empresa(cli, chave, monkeypatch):
+    import admissoes_canais
+    cli.post("/api/admissoes/eventos", json=EVENTO, headers={"X-API-Key": chave})
+    h = _token(cli)
+    r = cli.post("/api/admissoes/agente/proxima", headers=h).json()["admissao"]
+    assert r["empresa"] == {"codigo_dominio": "101", "nome": "Padaria Alfa", "cnpj": "11222333000181"}
+
+    vistos = []
+
+    def material(esc, linha, cliente=None):
+        vistos.append((esc, linha["id_externo"]))
+        return {"assunto": "Admissão", "mensagens": ["oi"], "documentos": [], "ignorados": []}
+
+    monkeypatch.setattr(admissoes_canais, "material_para_agente", material)
+    m = cli.post(f"/api/admissoes/agente/{r['id']}/material", headers=h)
+    assert m.status_code == 200 and m.json()["empresa"]["codigo_dominio"] == "101"
+    assert vistos == [(ESC_A, "AC-100")]
+    # outro escritório não enxerga; sem reserva (depois da prévia) não entrega
+    assert cli.post(f"/api/admissoes/agente/{r['id']}/material", headers=_token(cli, "agente_b")).status_code == 404
+    cli.post(f"/api/admissoes/agente/{r['id']}/previa", json={"previa": {"servico": 1}}, headers=h)
+    assert cli.post(f"/api/admissoes/agente/{r['id']}/material", headers=h).status_code == 409
+
+
+def test_material_erro_do_canal_vira_502(cli, chave, monkeypatch):
+    import admissoes_canais
+
+    def falha(esc, linha, cliente=None):
+        raise admissoes_canais.ErroCanal("Acessórias recusou o token (confira o API Token)")
+
+    monkeypatch.setattr(admissoes_canais, "material_para_agente", falha)
+    cli.post("/api/admissoes/eventos", json=EVENTO, headers={"X-API-Key": chave})
+    h = _token(cli)
+    r = cli.post("/api/admissoes/agente/proxima", headers=h).json()["admissao"]
+    resp = cli.post(f"/api/admissoes/agente/{r['id']}/material", headers=h)
+    assert resp.status_code == 502 and "token" in resp.json()["detail"]
+
+
+def test_rotas_do_programa_do_agente(cli):
+    assert cli.get("/api/attended-admissoes/versao").json()["versao"]

@@ -230,6 +230,18 @@ def admissao_proxima(token: str) -> Optional[dict]:
     return _post(token, "/admissoes/agente/proxima").get("admissao")
 
 
+def admissao_material(token: str, admissao_id: int) -> dict:
+    """Empresa, mensagens e anexos (base64) da tarefa reservada - o Hub
+    busca no canal de origem."""
+    return _post(token, f"/admissoes/agente/{admissao_id}/material", timeout=TIMEOUT_UPLOAD_S)
+
+
+def admissao_leitura(token: str) -> dict:
+    """{"leitura": "formulario"} ou {"leitura": "claude"|"openai", "chave": ..., "modelo"?}
+    - configurado na aba IA de Canais e agente."""
+    return _post(token, "/admissoes/agente/ia")
+
+
 def admissao_previa(token: str, admissao_id: int, previa: dict) -> dict:
     return _post(token, f"/admissoes/agente/{admissao_id}/previa", {"previa": previa})
 

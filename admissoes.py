@@ -98,6 +98,9 @@ class TransicaoInvalida(ValueError):
     pass
 
 
+MOTIVO_SEM_EMPRESA = "Empresa não está no cadastro de clientes do escritório"
+
+
 class SemPermissao(PermissionError):
     pass
 
@@ -138,6 +141,11 @@ def garantir_schema() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS admissoes_fila ON admissoes (escritorio_id, status, criado_em)"
         )
+        # assunto/resumo como veio do canal (ex.: assunto da solicitação no Acessórias)
+        conn.execute("ALTER TABLE admissoes ADD COLUMN IF NOT EXISTS resumo TEXT")
+        # nome da empresa como veio do canal (mostra quem pediu mesmo antes
+        # de a empresa estar no cadastro de clientes)
+        conn.execute("ALTER TABLE admissoes ADD COLUMN IF NOT EXISTS empresa_nome TEXT")
         # trilha de auditoria: toda mudança de estado, com quem e por quê.
         # Sem FK para usuarios: o registro continua valendo se a pessoa sair.
         conn.execute("""
@@ -248,10 +256,19 @@ def _travar(conn, admissao_id: int, escritorio_id: str) -> dict:
 
 
 def _cliente_por_ref(conn, escritorio_id: str, empresa_ref: str) -> Optional[dict]:
-    return conn.execute(
+    """Empresa pelo código no Domínio ou, se a referência for um CNPJ/CPF
+    (com ou sem máscara), pelo CNPJ do cadastro de clientes."""
+    cliente = conn.execute(
         "SELECT id, nome FROM clientes WHERE escritorio_id = %s AND codigo_dominio = %s",
         (escritorio_id, empresa_ref),
     ).fetchone()
+    digitos = clientes.so_digitos(empresa_ref)
+    if not cliente and len(digitos) in (11, 14):
+        cliente = conn.execute(
+            "SELECT id, nome FROM clientes WHERE escritorio_id = %s AND cnpj = %s ORDER BY id LIMIT 1",
+            (escritorio_id, digitos),
+        ).fetchone()
+    return cliente
 
 
 def _limpar_documentos(documentos: Optional[list]) -> list[str]:
@@ -271,7 +288,7 @@ def _limpar_documentos(documentos: Optional[list]) -> list[str]:
 
 def receber_solicitacao(
     escritorio_id: str, canal: str, id_externo: str, empresa_ref: str,
-    documentos: Optional[list] = None, autor: str = "",
+    documentos: Optional[list] = None, autor: str = "", resumo: str = "", empresa_nome: str = "",
 ) -> tuple[dict, bool]:
     """Cria a solicitação ou devolve a que já existe para canal + ID externo
     (retorna (admissao, duplicada)). Reenvio com documentos novos acrescenta
@@ -286,19 +303,21 @@ def receber_solicitacao(
         raise TransicaoInvalida("ID externo e empresa são obrigatórios (até 200 caracteres)")
     docs = _limpar_documentos(documentos)
     autor = autor or f"canal:{canal}"
+    resumo = " ".join((resumo or "").split())[:300] or None
+    empresa_nome = " ".join((empresa_nome or "").split())[:200] or None
 
     with auth.conectar() as conn:
         cliente = _cliente_por_ref(conn, escritorio_id, empresa_ref)
         status = QUEUED if cliente else BLOCKED
-        motivo = "" if cliente else "Empresa não está no cadastro de clientes do escritório"
+        motivo = "" if cliente else MOTIVO_SEM_EMPRESA
         nova = conn.execute("""
             INSERT INTO admissoes (escritorio_id, canal, id_externo, empresa_ref, cliente_id,
-                                   status, motivo, documentos)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                   status, motivo, documentos, resumo, empresa_nome)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (escritorio_id, canal, id_externo) DO NOTHING
             RETURNING *
         """, (escritorio_id, canal, id_externo, empresa_ref, cliente["id"] if cliente else None,
-              status, motivo or None, Jsonb(docs))).fetchone()
+              status, motivo or None, Jsonb(docs), resumo, empresa_nome)).fetchone()
         if nova:
             _evento(conn, nova["id"], None, status, autor, "canal", motivo or "Solicitação recebida")
             conn.commit()
@@ -308,6 +327,11 @@ def receber_solicitacao(
             "SELECT * FROM admissoes WHERE escritorio_id = %s AND canal = %s AND id_externo = %s FOR UPDATE",
             (escritorio_id, canal, id_externo),
         ).fetchone()
+        if (resumo and not existente["resumo"]) or (empresa_nome and not existente["empresa_nome"]):
+            existente = conn.execute(
+                "UPDATE admissoes SET resumo = COALESCE(resumo, %s), empresa_nome = COALESCE(empresa_nome, %s) "
+                "WHERE id = %s RETURNING *", (resumo, empresa_nome, existente["id"]),
+            ).fetchone()
         novos = [d for d in docs if d not in (existente["documentos"] or [])]
         if novos:
             todos = list(existente["documentos"] or []) + novos
@@ -366,6 +390,29 @@ def reservar_proxima(escritorio_id: str, agente: str) -> Optional[dict]:
         _evento(conn, linha["id"], QUEUED if fase == FASE_PREPARO else APPROVED, CLAIMED, agente, "agente",
                 "Reservada para gravação aprovada" if fase == FASE_GRAVACAO else "Reservada para preparo")
         conn.commit()
+    return linha
+
+
+def empresa_da_admissao(linha: dict) -> Optional[dict]:
+    """Empresa do cadastro ligada à admissão: o código no Domínio é a
+    empresa que o agente ativa antes de cadastrar o empregado."""
+    if not linha.get("cliente_id"):
+        return None
+    with auth.conectar() as conn:
+        c = conn.execute(
+            "SELECT nome, codigo_dominio, cnpj FROM clientes WHERE id = %s AND escritorio_id = %s",
+            (linha["cliente_id"], linha["escritorio_id"]),
+        ).fetchone()
+    if not c:
+        return None
+    return {"codigo_dominio": str(c["codigo_dominio"]), "nome": c["nome"], "cnpj": c.get("cnpj") or ""}
+
+
+def obter_reservada(admissao_id: int, escritorio_id: str, agente: str) -> dict:
+    """A tarefa só é entregue (documentos inclusos) a quem a reservou."""
+    with auth.conectar() as conn:
+        linha = _travar_do_agente(conn, admissao_id, escritorio_id, agente)
+        conn.rollback()
     return linha
 
 
@@ -511,6 +558,57 @@ def devolver_a_fila(admissao_id: int, escritorio_id: str, usuario: str, motivo: 
     return linha
 
 
+def religar_empresas(escritorio_id: str, autor: str = "sistema") -> int:
+    """Solicitações bloqueadas só por falta da empresa no cadastro: se a
+    empresa já foi cadastrada (código ou CNPJ), liga e manda para a fila.
+    Devolve quantas foram religadas."""
+    religadas = 0
+    with auth.conectar() as conn:
+        pendentes = conn.execute(
+            "SELECT id, empresa_ref FROM admissoes WHERE escritorio_id = %s AND status = %s "
+            "AND cliente_id IS NULL AND fase IS NULL FOR UPDATE",
+            (escritorio_id, BLOCKED),
+        ).fetchall()
+        for p in pendentes:
+            cliente = _cliente_por_ref(conn, escritorio_id, p["empresa_ref"])
+            if not cliente:
+                continue
+            conn.execute(
+                "UPDATE admissoes SET cliente_id = %s, status = %s, motivo = NULL, atualizado_em = now() "
+                "WHERE id = %s", (cliente["id"], QUEUED, p["id"]),
+            )
+            _evento(conn, p["id"], BLOCKED, QUEUED, autor, "sistema",
+                    f"Empresa encontrada no cadastro: {cliente['nome']}")
+            religadas += 1
+        conn.commit()
+    return religadas
+
+
+def vincular_empresa(admissao_id: int, escritorio_id: str, cliente_id: int, usuario: str) -> dict:
+    """DP escolhe a empresa do cadastro para uma solicitação que chegou sem
+    empresa reconhecida (ou com a errada, antes de o agente pegar)."""
+    with auth.conectar() as conn:
+        linha = _travar(conn, admissao_id, escritorio_id)
+        if linha["fase"] is not None or linha["status"] not in (BLOCKED, QUEUED, AWAITING_DOCUMENTS):
+            raise TransicaoInvalida("A empresa só pode ser trocada antes de o agente preparar a prévia")
+        cliente = conn.execute(
+            "SELECT id, nome FROM clientes WHERE id = %s AND escritorio_id = %s", (cliente_id, escritorio_id),
+        ).fetchone()
+        if not cliente:
+            raise AdmissaoNaoEncontrada("Empresa não encontrada neste escritório")
+        de = linha["status"]
+        novo = QUEUED if de == BLOCKED and linha["cliente_id"] is None else de
+        linha = conn.execute(
+            "UPDATE admissoes SET cliente_id = %s, status = %s, "
+            "motivo = CASE WHEN %s <> %s THEN NULL ELSE motivo END, atualizado_em = now() "
+            "WHERE id = %s RETURNING *",
+            (cliente["id"], novo, novo, de, admissao_id),
+        ).fetchone()
+        _evento(conn, admissao_id, de, novo, usuario, "usuario", f"Empresa vinculada: {cliente['nome']}")
+        conn.commit()
+    return linha
+
+
 def registrar_manual(escritorio_id: str, usuario: str, canal: str, id_externo: str,
                      empresa_ref: str, documentos: Optional[list] = None) -> tuple[dict, bool]:
     """Solicitação digitada pelo DP na tela (ex.: pedido que chegou pelo
@@ -539,7 +637,8 @@ def listar(escritorio_id: str, status: Optional[list] = None, canal: Optional[st
     with auth.conectar() as conn:
         return conn.execute(f"""
             SELECT a.id, a.canal, a.id_externo, a.empresa_ref, a.cliente_id, c.nome AS cliente_nome,
-                   a.status, a.fase, a.motivo, a.criado_em, a.atualizado_em, a.decidido_por, a.protocolo
+                   a.status, a.fase, a.motivo, a.resumo, a.empresa_nome, a.criado_em, a.atualizado_em, a.decidido_por,
+                   a.protocolo
             FROM admissoes a LEFT JOIN clientes c ON c.id = a.cliente_id
             WHERE {' AND '.join(filtros)}
             ORDER BY a.atualizado_em DESC
@@ -554,6 +653,14 @@ def obter(admissao_id: int, escritorio_id: str) -> Optional[dict]:
             FROM admissoes a LEFT JOIN clientes c ON c.id = a.cliente_id
             WHERE a.id = %s AND a.escritorio_id = %s
         """, (admissao_id, escritorio_id)).fetchone()
+
+
+def obter_por_externo(escritorio_id: str, canal: str, id_externo: str) -> Optional[dict]:
+    with auth.conectar() as conn:
+        return conn.execute(
+            "SELECT * FROM admissoes WHERE escritorio_id = %s AND canal = %s AND id_externo = %s",
+            (escritorio_id, canal, id_externo),
+        ).fetchone()
 
 
 def listar_eventos(admissao_id: int, escritorio_id: str) -> list[dict]:

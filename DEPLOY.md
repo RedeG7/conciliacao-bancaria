@@ -458,3 +458,18 @@ $env:TEST_DATABASE_URL = "postgresql://postgres:teste@127.0.0.1:55432/hub_test"
 pip install pytest httpx
 python -m pytest tests
 ```
+
+### Integração com o Acessórias
+
+Cada escritório configura em **RPA Folha › Admissões › Canais e agente › Acessórias**:
+o API Token (Acessórias › engrenagem › API Token, de preferência de um usuário só
+para a integração), os departamentos e as palavras do assunto que indicam admissão.
+O token fica cifrado com a `RPA_ENC_KEY` (a mesma das credenciais do RPA).
+
+- A API do Acessórias não tem webhook: o serviço `api` consulta as solicitações
+  externas a cada `ADMISSOES_SINC_INTERVALO_S` segundos (padrão 300; `0` desliga).
+  Há também o botão "Sincronizar agora" na tela.
+- A empresa é reconhecida pelo **CNPJ** do cadastro em Gerenciar Clientes. Sem CNPJ
+  cadastrado, a solicitação entra como "Bloqueada" até o cadastro ser corrigido.
+- ONVIO e WhatsApp: os campos já ficam salvos, mas a integração ainda não consulta nada.
+

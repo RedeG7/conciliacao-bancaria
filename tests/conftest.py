@@ -22,6 +22,11 @@ sys.path.insert(0, str(RAIZ))
 sys.path.insert(0, str(RAIZ / "attended_worker"))
 
 _URL = os.environ.get("TEST_DATABASE_URL", "")
+# sem a sincronização periódica dos canais durante os testes da API
+os.environ["ADMISSOES_SINC_INTERVALO_S"] = "0"
+if not os.environ.get("RPA_ENC_KEY"):
+    from cryptography.fernet import Fernet
+    os.environ["RPA_ENC_KEY"] = Fernet.generate_key().decode()
 if _URL:
     # trava de segurança: o banco é truncado, então o nome precisa dizer "test"
     if "test" not in _URL.rsplit("/", 1)[-1].lower():
@@ -38,11 +43,13 @@ def _schema():
     if not _URL:
         pytest.skip("TEST_DATABASE_URL não definida")
     import admissoes
+    import admissoes_canais
     import auth
     from rpa import core as rpa_core
     auth.garantir_schema()
     rpa_core.garantir_schema()
     admissoes.garantir_schema()
+    admissoes_canais.garantir_schema()
     return True
 
 
@@ -54,12 +61,12 @@ def db(_schema):
     import auth
     import clientes
     with auth.conectar() as conn:
-        conn.execute("TRUNCATE admissoes_eventos, admissoes, admissoes_chaves, clientes, sessoes, usuarios, "
+        conn.execute("TRUNCATE admissoes_canais_config, admissoes_eventos, admissoes, admissoes_chaves, clientes, sessoes, usuarios, "
                      "escritorios RESTART IDENTITY CASCADE")
         conn.commit()
     auth.criar_escritorio("Escritório A", ESC_A)
     auth.criar_escritorio("Escritório B", ESC_B)
-    clientes.criar_cliente(ESC_A, "Padaria Alfa", "101")
+    clientes.criar_cliente(ESC_A, "Padaria Alfa", "101", "11.222.333/0001-81")
     clientes.criar_cliente(ESC_B, "Mercado Beta", "201")
     auth.criar_ou_atualizar_usuario("dp_admin", SENHA, ESC_A, auth.PAPEL_ADMIN_ESCRITORIO)
     auth.criar_ou_atualizar_usuario("dp_user", SENHA, ESC_A, auth.PAPEL_USUARIO)
