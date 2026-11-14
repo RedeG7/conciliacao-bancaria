@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Agente de admissões da sessão RDS: pega as admissões do escritório na fila
+Agente de admissões (sessão RDS ou computador local): pega as admissões do escritório na fila
 do Hub (api.py, /api/admissoes/agente/*), faz o trabalho e devolve o
 resultado. Segue skills/cadastro-empregado-dominio/SKILL.md.
 
@@ -16,7 +16,8 @@ Fase preparo (tarefa nova):
       no Hub.
 
 Fase gravacao (só depois da aprovação registrada no Hub):
-  o Claude opera o Domínio na tela da sessão RDS com os dados APROVADOS
+  o Claude opera o Domínio na tela (sessão RDS ou computador local, conforme
+  escolhido na janela do agente) com os dados APROVADOS
   (só com a Claude ligada no Hub; sem ela, a tarefa volta para o DP
   preencher com a prévia aprovada).
   Nesta versão existe só o MODO CONFERÊNCIA: preenche o cadastro e para
@@ -49,10 +50,12 @@ import hub_api
 INTERVALO_S = 15
 PASTA_PADRAO = Path(r"C:\Dominio")
 MODO_CONFERENCIA = "conferencia"
+AMBIENTE_RDS = "rds"
+AMBIENTE_LOCAL = "local"
 
 MOTIVO_CONFERENCIA = (
     "Modo conferência: o cadastro foi preenchido no Domínio e NÃO foi salvo nem transmitido. "
-    "Confira a tela na sessão RDS e salve manualmente se estiver correto."
+    "Confira a tela onde o agente roda (sessão RDS ou computador local) e salve manualmente se estiver correto."
 )
 MOTIVO_SEM_CLAUDE = (
     "Prévia aprovada. O preenchimento automático no Domínio usa a Claude (Canais e agente › IA); "
@@ -77,6 +80,7 @@ class Contexto:
     criar_ia: Callable[[str, str], Any] = criar_cliente
     pasta: Path = PASTA_PADRAO
     modo: str = MODO_CONFERENCIA
+    ambiente: str = AMBIENTE_RDS
     parar: threading.Event = field(default_factory=threading.Event)
     log: Callable[[str], None] = print
     _clientes: dict = field(default_factory=dict, repr=False)
@@ -159,9 +163,10 @@ def gravar(ctx: Contexto, admissao: dict) -> tuple[str, str]:
     if leitura.get("leitura") != "claude":
         return "blocked", MOTIVO_SEM_CLAUDE
     if ctx.tela is None:
-        return "blocked", "Agente sem acesso à tela da sessão RDS"
+        return "blocked", "Agente sem acesso à tela onde o Domínio está"
     resultado, motivo = ia.operar_dominio(
         ctx.cliente(leitura), ctx.tela, admissao["previa_aprovada"], _pasta_tarefa(ctx, admissao), ctx.parar, ctx.log,
+        ambiente=ctx.ambiente,
     )
     if resultado == "preenchido":
         return "blocked", MOTIVO_CONFERENCIA
@@ -212,8 +217,9 @@ def rodar_uma(ctx: Contexto) -> Optional[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Agente de admissões (sessão RDS)")
+    parser = argparse.ArgumentParser(description="Agente de admissões (sessão RDS ou computador local)")
     parser.add_argument("--uma-vez", action="store_true", help="processa no máximo uma tarefa e sai")
+    parser.add_argument("--local", action="store_true", help="o Domínio está neste computador (não numa sessão RDS)")
     args = parser.parse_args()
 
     if os.environ.get("HUB_API_URL"):
@@ -222,7 +228,7 @@ def main() -> int:
     senha = os.environ.get("HUB_SENHA") or getpass.getpass("Senha do Hub: ")
     token = hub_api.login(usuario, senha)["token"]
     from tela import Tela
-    ctx = Contexto(token=token, tela=Tela())
+    ctx = Contexto(token=token, tela=Tela(), ambiente=AMBIENTE_LOCAL if args.local else AMBIENTE_RDS)
     print(f"Conectado em {hub_api.BASE_URL} como {usuario}. Aguardando admissões...")
 
     while True:

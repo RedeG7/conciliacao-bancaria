@@ -136,19 +136,19 @@ def test_gravacao_sem_liberacao_nao_grava(chamadas, ctx, monkeypatch):
 def test_gravacao_conferencia_preenche_e_nunca_conclui(chamadas, ctx, monkeypatch):
     usados = []
 
-    def operar(cli, tela, previa, pasta, parar, log):
-        usados.append((previa, pasta))
+    def operar(cli, tela, previa, pasta, parar, log, ambiente):
+        usados.append((previa, pasta, ambiente))
         return "preenchido", ""
 
     monkeypatch.setattr(agente.ia, "operar_dominio", operar)
     adm = {"id": 3, "fase": "gravacao", "liberado_para_gravar": True, "previa_aprovada": {"servico": 1}}
     assert agente.processar(ctx, adm) == "blocked"
-    assert usados[0][0] == {"servico": 1} and usados[0][1].name == "admissao-3"
+    assert usados[0][0] == {"servico": 1} and usados[0][1].name == "admissao-3" and usados[0][2] == "rds"
     assert chamadas == [("status", 3, "blocked", agente.MOTIVO_CONFERENCIA, "")]
 
 
 def test_gravacao_bloqueada_no_dominio_repassa_o_motivo(chamadas, ctx, monkeypatch):
-    monkeypatch.setattr(agente.ia, "operar_dominio", lambda *a: ("bloqueado", "empregado já cadastrado"))
+    monkeypatch.setattr(agente.ia, "operar_dominio", lambda *a, **k: ("bloqueado", "empregado já cadastrado"))
     adm = {"id": 4, "fase": "gravacao", "liberado_para_gravar": True, "previa_aprovada": {"servico": 1}}
     agente.processar(ctx, adm)
     assert chamadas[0][3] == "empregado já cadastrado"
@@ -160,6 +160,14 @@ def test_gravacao_sem_claude_volta_para_o_dp(chamadas, ctx, monkeypatch):
     adm = {"id": 6, "fase": "gravacao", "liberado_para_gravar": True, "previa_aprovada": {"servico": 1}}
     assert agente.processar(ctx, adm) == "blocked"
     assert chamadas == [("status", 6, "blocked", agente.MOTIVO_SEM_CLAUDE, "")]
+
+
+def test_gravacao_no_computador_local(chamadas, ctx, monkeypatch):
+    ctx.ambiente = agente.AMBIENTE_LOCAL
+    usados = []
+    monkeypatch.setattr(agente.ia, "operar_dominio", lambda *a, **k: usados.append(k["ambiente"]) or ("preenchido", ""))
+    adm = {"id": 7, "fase": "gravacao", "liberado_para_gravar": True, "previa_aprovada": {"servico": 1}}
+    assert agente.processar(ctx, adm) == "blocked" and usados == ["local"]
 
 
 def test_outro_modo_nao_grava_nesta_versao(chamadas, ctx, monkeypatch):

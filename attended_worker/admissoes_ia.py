@@ -6,7 +6,7 @@
    ficha de admissão, o ASO e os demais anexos e devolve os campos do
    cadastro (saída estruturada, sem inventar dado). Qual IA usar - ou
    nenhuma, lendo o formulário do Acessórias - é configurado no Hub.
-2. operar_dominio(): opera o Domínio na tela da sessão RDS com a
+2. operar_dominio(): opera o Domínio na tela (sessão RDS ou computador local) com a
    ferramenta de computador, seguindo skills/cadastro-empregado-dominio.
    Nesta versão só existe o MODO CONFERÊNCIA: preenche o cadastro com os
    dados APROVADOS no Hub e para antes de salvar - não salva e não
@@ -262,8 +262,14 @@ FERRAMENTA_FINALIZAR = {
     },
 }
 
-SISTEMA_DOMINIO = """Você opera o sistema Domínio (módulo Folha) numa sessão de área de trabalho remota \
-do Windows, para cadastrar um empregado de uma empresa cliente do escritório.
+# onde o agente roda (escolhido na janela do agente)
+AMBIENTES = {
+    "rds": "numa sessão de área de trabalho remota (RDS) do Windows, no servidor onde o Domínio está instalado",
+    "local": "num computador Windows local, com o Domínio instalado ou aberto nesta máquina",
+}
+
+SISTEMA_DOMINIO = """Você opera o sistema Domínio (módulo Folha) {ambiente}, para cadastrar um empregado \
+de uma empresa cliente do escritório.
 
 MODO CONFERÊNCIA - regras que não têm exceção:
 - NÃO salve o cadastro: nunca clique em Gravar/Salvar/Confirmar do cadastro do empregado e não use atalho \
@@ -301,10 +307,14 @@ def _resultado(bloco_id: str, conteudo, erro: bool = False) -> dict:
     return r
 
 
+def sistema_dominio(ambiente: str = "rds") -> str:
+    return SISTEMA_DOMINIO.replace("{ambiente}", AMBIENTES.get(ambiente, AMBIENTES["rds"]))
+
+
 def operar_dominio(cliente, tela, previa: dict, pasta: Optional[Path] = None,
                    parar: Optional[threading.Event] = None,
                    log: Callable[[str], None] = print,
-                   max_passos: int = MAX_PASSOS_DOMINIO) -> tuple[str, str]:
+                   max_passos: int = MAX_PASSOS_DOMINIO, ambiente: str = "rds") -> tuple[str, str]:
     """Loop da ferramenta de computador. Retorna ("preenchido"|"bloqueado",
     motivo). O print final fica em `pasta` como evidência."""
     import anthropic
@@ -328,12 +338,12 @@ def operar_dominio(cliente, tela, previa: dict, pasta: Optional[Path] = None,
     for passo in range(1, max_passos + 1):
         if parar.is_set():
             evidencia("interrompido.png")
-            return "bloqueado", "Agente parado pelo operador na sessão RDS"
+            return "bloqueado", "Agente parado pelo operador"
         try:
             resp = cliente.messages.create(
                 model=MODELO,
                 max_tokens=16000,
-                system=SISTEMA_DOMINIO,
+                system=sistema_dominio(ambiente),
                 tools=ferramentas,
                 output_config={"effort": "high"},
                 # o histórico cresce a cada print: cache do prefixo
