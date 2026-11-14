@@ -15,7 +15,9 @@ attended_worker/build/
 attended_worker/*.spec
 issnet_attended_config.json
 attended_worker/build_nfgo/
+attended_worker/build_admissoes/
 nfgo_attended_config.json
+admissoes_agente_config.json
 marketing/node_modules/
 marketing/data/
 inss-obras/node_modules/

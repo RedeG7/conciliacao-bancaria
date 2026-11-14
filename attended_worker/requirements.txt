@@ -12,3 +12,7 @@ pdfplumber>=0.11,<1
 requests>=2.31,<3
 # usa os certificados do Windows nas conexoes com o Hub (ver hub_api.py)
 truststore>=0.9
+# agente de admissoes (admissoes_agent.py / gui_admissoes.py): leitura dos
+# documentos e operacao do Dominio com o Claude
+anthropic>=2.8,<3
+openai>=1.100,<3

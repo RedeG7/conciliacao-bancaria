@@ -219,3 +219,33 @@ def concluir_consulta_nfgo(
         "observacao": observacao,
     }
     _post(token, f"/empresas/{empresa_id}/concluir", corpo, timeout=TIMEOUT_UPLOAD_S)
+
+
+# ---------------------------------------------------------------------------
+# Admissões (attended_worker/admissoes_agent.py, sessão RDS)
+# ---------------------------------------------------------------------------
+
+def admissao_proxima(token: str) -> Optional[dict]:
+    """Reserva a próxima admissão do escritório (ou None se a fila está vazia)."""
+    return _post(token, "/admissoes/agente/proxima").get("admissao")
+
+
+def admissao_material(token: str, admissao_id: int) -> dict:
+    """Empresa, mensagens e anexos (base64) da tarefa reservada - o Hub
+    busca no canal de origem."""
+    return _post(token, f"/admissoes/agente/{admissao_id}/material", timeout=TIMEOUT_UPLOAD_S)
+
+
+def admissao_leitura(token: str) -> dict:
+    """{"leitura": "formulario"} ou {"leitura": "claude"|"openai", "chave": ..., "modelo"?}
+    - configurado na aba IA de Canais e agente."""
+    return _post(token, "/admissoes/agente/ia")
+
+
+def admissao_previa(token: str, admissao_id: int, previa: dict) -> dict:
+    return _post(token, f"/admissoes/agente/{admissao_id}/previa", {"previa": previa})
+
+
+def admissao_status(token: str, admissao_id: int, status: str, motivo: str = "", protocolo: str = "") -> dict:
+    return _post(token, f"/admissoes/agente/{admissao_id}/status",
+                 {"status": status, "motivo": motivo, "protocolo": protocolo})
