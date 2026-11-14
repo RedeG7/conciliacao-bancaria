@@ -287,3 +287,10 @@ def test_chave_do_canal(db):
     with auth.conectar() as conn:
         guardado = conn.execute("SELECT chave_hash FROM admissoes_chaves").fetchall()
     assert all(nova not in l["chave_hash"] for l in guardado)
+
+
+def test_versao_do_modulo_bate_com_as_novidades():
+    # a cada atualização: suba admissoes.VERSAO e registre a novidade no topo
+    assert adm.NOVIDADES[0][0] == adm.VERSAO
+    versoes = [tuple(int(x) for x in v.split(".")) for v, _, _ in adm.NOVIDADES]
+    assert versoes == sorted(versoes, reverse=True) and len(set(versoes)) == len(versoes)

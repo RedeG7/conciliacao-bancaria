@@ -886,6 +886,10 @@ def _tela_admissoes() -> None:
     _cabecalho_app("🧑‍💼", "Admissões",
                    "Solicitações de admissão, fila do agente e aprovação do DP antes de salvar no Domínio.",
                    pai=_PAI_RPA_FOLHA)
+    _agente_v = _adm_versao_agente()
+    with st.expander(f"Versão {admissoes.VERSAO}" + (f" · agente v{_agente_v}" if _agente_v else "") + " — novidades"):
+        for versao, data, itens in admissoes.NOVIDADES:
+            st.markdown(f"**{versao}** ({data})" + chr(10) + chr(10).join(f"- {i}" for i in itens))
 
     papel = st.session_state.get("papel_usuario")
     usuario = st.session_state.get("usuario_logado")
@@ -1011,6 +1015,11 @@ def _tela_admissoes() -> None:
         _adm_download_agente()
 
 
+def _adm_versao_agente() -> str:
+    arq = Path(__file__).parent / "attended_worker" / "VERSION_ADMISSOES"
+    return arq.read_text(encoding="utf-8").strip() if arq.exists() else ""
+
+
 def _adm_download_agente() -> None:
     """Download e instalação do programa do agente (admissoes_agente.exe,
     montado no deploy e servido pela api.py em /api/attended-admissoes/*)."""
@@ -1018,8 +1027,11 @@ def _adm_download_agente() -> None:
     st.caption("Instale onde o Domínio é usado: numa sessão RDS do servidor ou num computador local "
                "(escolha na janela do programa, em \"Onde o Domínio está\").")
     c1, c2 = st.columns(2)
-    c1.link_button("⬇ Baixar agente (.zip)", "/api/attended-admissoes/download-zip", use_container_width=True)
-    c2.link_button("Baixar só o .exe", "/api/attended-admissoes/download", use_container_width=True)
+    v = _adm_versao_agente()
+    c1.link_button(f"⬇ Baixar agente{f' v{v}' if v else ''} (.zip)", "/api/attended-admissoes/download-zip",
+                   use_container_width=True)
+    c2.link_button(f"Baixar só o .exe{f' v{v}' if v else ''}", "/api/attended-admissoes/download",
+                   use_container_width=True)
     with st.expander("Como instalar"):
         st.markdown(
             "1. Em **Gerenciar Usuários**, crie uma conta só para o agente: papel **Usuário**, com o app "
