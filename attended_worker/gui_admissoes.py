@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Janela do Agente de Admissões (roda na sessão RDS, onde o Domínio está
-aberto). Núcleo em admissoes_agent.py.
+"""Janela do Agente de Admissões (roda onde o Domínio está aberto: numa
+sessão RDS do servidor ou num computador local - escolhido na janela).
+Núcleo em admissoes_agent.py.
 
 Fluxo: entrar com a conta do Hub dedicada ao agente > Iniciar. O programa
 consulta o Hub a cada 15 s; quando há admissão na fila, monta a prévia
@@ -10,8 +11,8 @@ agente › IA - as chaves ficam no Hub) e manda para o DP aprovar; quando o
 DP aprova, com a Claude ligada, preenche o cadastro no Domínio em MODO
 CONFERÊNCIA (não salva, não transmite).
 
-A sessão RDS precisa ficar aberta (não minimizar, não desconectar) para o
-agente enxergar e clicar na tela. Mouse no canto superior esquerdo da tela
+A tela precisa ficar disponível (sessão RDS aberta, sem minimizar nem
+desconectar; computador local desbloqueado) para o agente enxergar e clicar. Mouse no canto superior esquerdo da tela
 interrompe a ação em andamento (FailSafe)."""
 
 from __future__ import annotations
@@ -111,8 +112,16 @@ class App(tk.Tk):
         self.ent_pasta = ttk.Entry(cfg, width=40)
         self.ent_pasta.insert(0, self._config.get("pasta", str(agente.PASTA_PADRAO)))
         self.ent_pasta.grid(row=0, column=1, sticky="w", padx=6)
+        ttk.Label(cfg, text="Onde o Domínio está").grid(row=1, column=0, sticky="w", padx=6, pady=3)
+        self.var_ambiente = tk.StringVar(value=self._config.get("ambiente", agente.AMBIENTE_RDS))
+        amb = ttk.Frame(cfg)
+        amb.grid(row=1, column=1, columnspan=2, sticky="w", padx=6)
+        ttk.Radiobutton(amb, text="Sessão RDS (servidor)", value=agente.AMBIENTE_RDS,
+                        variable=self.var_ambiente).pack(side="left")
+        ttk.Radiobutton(amb, text="Este computador (local)", value=agente.AMBIENTE_LOCAL,
+                        variable=self.var_ambiente).pack(side="left", padx=10)
         ttk.Label(cfg, text="Modo: CONFERÊNCIA — preenche o cadastro no Domínio e NÃO salva nem transmite.",
-                  foreground="#9a3412").grid(row=1, column=0, columnspan=3, sticky="w", padx=6, pady=3)
+                  foreground="#9a3412").grid(row=2, column=0, columnspan=3, sticky="w", padx=6, pady=3)
 
         botoes = ttk.Frame(self)
         botoes.pack(fill="x", **pad)
@@ -162,11 +171,12 @@ class App(tk.Tk):
             messagebox.showwarning(NOME_APP, "Entre com a conta do Hub primeiro.")
             return
         pasta = Path(self.ent_pasta.get().strip() or agente.PASTA_PADRAO)
-        self._config["pasta"] = str(pasta)
+        ambiente = self.var_ambiente.get()
+        self._config.update(pasta=str(pasta), ambiente=ambiente)
         _salvar_config(self._config)
         try:
             from tela import Tela
-            ctx = agente.Contexto(token=self._token, tela=Tela(),
+            ctx = agente.Contexto(token=self._token, tela=Tela(), ambiente=ambiente,
                                   pasta=pasta, parar=self._parar, log=self._log)
         except Exception as exc:
             messagebox.showerror(NOME_APP, f"Não consegui preparar o agente: {exc}")
@@ -176,7 +186,9 @@ class App(tk.Tk):
         self.btn_iniciar.configure(state="disabled")
         self.btn_parar.configure(state="normal")
         self.lbl_status.configure(text="Aguardando admissões...")
-        self._log("Agente iniciado. Mantenha esta sessão RDS aberta.")
+        self._log("Agente iniciado. " + ("Mantenha esta sessão RDS aberta (sem minimizar)."
+                                         if ambiente == agente.AMBIENTE_RDS
+                                         else "Mantenha este computador desbloqueado e o Domínio aberto."))
         threading.Thread(target=self._laco, args=(ctx,), daemon=True).start()
 
     def _parar_agente(self) -> None:

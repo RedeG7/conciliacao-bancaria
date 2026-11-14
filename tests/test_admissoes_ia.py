@@ -134,6 +134,13 @@ def test_operar_executa_em_ordem_e_finaliza(tmp_path):
     assert resultados[0]["content"][0]["type"] == "image"
 
 
+def test_operar_no_computador_local_ajusta_o_prompt():
+    cli, msgs = _cliente([_resp(_uso(1, "finalizar", {"resultado": "bloqueado", "motivo": "x"}, toolset=None))])
+    ia.operar_dominio(cli, FakeTela(), {}, log=lambda m: None, ambiente="local")
+    assert "computador Windows local" in msgs.pedidos[0]["system"] and "NÃO salve" in msgs.pedidos[0]["system"]
+    assert "sessão de área de trabalho remota" in ia.sistema_dominio("rds")
+
+
 def test_operar_acao_que_falha_pula_as_seguintes():
     cli, msgs = _cliente([
         _resp(_uso(1, "left_click", {"coordinate": [1, 1]}), _uso(2, "type", {"text": "x"})),

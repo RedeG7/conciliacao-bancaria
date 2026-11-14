@@ -1008,9 +1008,32 @@ def _tela_admissoes() -> None:
                 st.code(st.session_state["adm_chave_nova"], language=None)
         else:
             st.caption("Só administradores do escritório geram ou revogam a chave.")
-        st.markdown("**Agente da sessão RDS**")
-        st.caption("Rode `attended_worker/admissoes_agent.py` na sessão RDS com uma conta do Hub só para o agente "
-                   "(papel Usuário, com o app Admissões liberado). Essa conta não consegue aprovar o que ela mesma preparou.")
+        _adm_download_agente()
+
+
+def _adm_download_agente() -> None:
+    """Download e instalação do programa do agente (admissoes_agente.exe,
+    montado no deploy e servido pela api.py em /api/attended-admissoes/*)."""
+    st.markdown("**Programa do agente**")
+    st.caption("Instale onde o Domínio é usado: numa sessão RDS do servidor ou num computador local "
+               "(escolha na janela do programa, em \"Onde o Domínio está\").")
+    c1, c2 = st.columns(2)
+    c1.link_button("⬇ Baixar agente (.zip)", "/api/attended-admissoes/download-zip", use_container_width=True)
+    c2.link_button("Baixar só o .exe", "/api/attended-admissoes/download", use_container_width=True)
+    with st.expander("Como instalar"):
+        st.markdown(
+            "1. Em **Gerenciar Usuários**, crie uma conta só para o agente: papel **Usuário**, com o app "
+            "**Admissões** liberado. Essa conta não aprova o que ela mesma preparou.\n"
+            "2. Na **sessão RDS** (ou no **computador local**) onde o Domínio é usado, baixe o .zip acima e "
+            "extraia numa pasta fixa, por exemplo `C:\\AgenteAdmissoes`.\n"
+            "3. Abra o `admissoes_agente.exe`. Se o Windows avisar (SmartScreen), clique em **Mais informações › "
+            "Executar assim mesmo**.\n"
+            "4. Entre com a conta do agente, escolha **Onde o Domínio está** (Sessão RDS ou Este computador), "
+            "confira a pasta de trabalho (`C:\\Dominio`) e clique em **Iniciar**.\n"
+            "5. Deixe o Domínio aberto no módulo Folha. Na RDS, não minimize nem desconecte a sessão; no "
+            "computador local, não bloqueie a tela. O programa se atualiza sozinho quando sai versão nova.\n\n"
+            "A leitura dos documentos (formulário ou IA) é escolhida aqui no Hub, na aba **IA**."
+        )
 
 
 def _adm_integracoes(escritorio_id: str, usuario: str, pode_configurar: bool) -> None:
