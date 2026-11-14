@@ -1,0 +1,573 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Admissões: solicitações de admissão de empregado vindas dos canais
+(Acessórias, ONVIO, WhatsApp), fila para o agente da sessão RDS e
+aprovação humana do DP antes de qualquer gravação no Domínio/eSocial.
+
+Mesmo padrão de clientes.py / rpa/core.py: tabelas no Postgres do Hub (via
+auth.conectar()), fila com SELECT ... FOR UPDATE SKIP LOCKED (sem Redis) e
+tudo isolado por escritorio_id.
+
+Ciclo de vida (coluna status):
+
+    queued ─► claimed ─► awaiting_documents ─┐
+                 │   ├─► blocked ────────────┼─► (DP devolve) ─► queued
+                 │   ├─► failed ─────────────┘
+                 │   └─► awaiting_approval ─► approved ─► claimed (fase gravacao) ─► completed
+                 │                        └─► rejected          ├─► blocked/failed ─► (DP devolve) ─► awaiting_approval
+                 └─ (fase gravacao travada) ─► (DP devolve) ─► awaiting_approval
+
+A coluna `fase` diz o que o agente está fazendo numa tarefa `claimed`:
+  - "preparo": conferir documentos e montar a PRÉVIA do cadastro, sem salvar
+  - "gravacao": só depois de aprovada no Hub - salvar no Domínio e transmitir
+
+Trava de aprovação (regra 9 da skill cadastro-empregado-dominio): o agente
+só recebe uma tarefa em fase "gravacao" se ela foi aprovada por uma pessoa
+no Hub, e a aprovação fica presa ao hash da prévia que essa pessoa viu
+(aprovado_hash). Se a prévia mudar, a aprovação não vale. Só existe
+`completed` vindo da fase gravacao com aprovado_hash == previa_hash.
+Falha ou bloqueio na gravação nunca volta sozinho para a fila: a operação
+não é idempotente, então o DP concilia e aprova de novo.
+
+LGPD: a prévia (dados do empregado) fica só na coluna `previa`; eventos e
+mensagens de erro nunca copiam esses dados.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import secrets
+from typing import Any, Optional
+
+from psycopg.types.json import Jsonb
+
+import auth
+import clientes
+
+CANAIS = ("acessorias", "onvio", "whatsapp")
+CANAL_ROTULO = {"acessorias": "Acessórias", "onvio": "ONVIO", "whatsapp": "WhatsApp"}
+
+QUEUED = "queued"
+CLAIMED = "claimed"
+AWAITING_DOCUMENTS = "awaiting_documents"
+AWAITING_APPROVAL = "awaiting_approval"
+BLOCKED = "blocked"
+FAILED = "failed"
+APPROVED = "approved"
+REJECTED = "rejected"
+COMPLETED = "completed"
+
+STATUS_ROTULO = {
+    QUEUED: "Na fila",
+    CLAIMED: "Com o agente",
+    AWAITING_DOCUMENTS: "Aguardando documentos",
+    AWAITING_APPROVAL: "Aguardando aprovação",
+    BLOCKED: "Bloqueada",
+    FAILED: "Falhou",
+    APPROVED: "Aprovada",
+    REJECTED: "Rejeitada",
+    COMPLETED: "Concluída",
+}
+
+FASE_PREPARO = "preparo"
+FASE_GRAVACAO = "gravacao"
+
+# o que o agente pode informar sobre uma tarefa que ele reservou, por fase
+# (awaiting_approval só por registrar_previa, que exige a prévia)
+_SAIDAS_AGENTE = {
+    FASE_PREPARO: {AWAITING_DOCUMENTS, BLOCKED, FAILED},
+    FASE_GRAVACAO: {COMPLETED, BLOCKED, FAILED},
+}
+# de onde o DP pode devolver uma tarefa (claimed = agente travou/fechou)
+_DEVOLVIVEIS = {AWAITING_DOCUMENTS, BLOCKED, FAILED, CLAIMED}
+
+PAPEIS_APROVADORES = (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO)
+
+MAX_DOCUMENTOS = 50
+MAX_TEXTO = 1000
+MAX_PREVIA_BYTES = 64 * 1024
+
+
+class AdmissaoNaoEncontrada(LookupError):
+    pass
+
+
+class TransicaoInvalida(ValueError):
+    pass
+
+
+class SemPermissao(PermissionError):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
+
+def garantir_schema() -> None:
+    clientes.garantir_schema()
+    with auth.conectar() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admissoes (
+                id SERIAL PRIMARY KEY,
+                escritorio_id TEXT NOT NULL REFERENCES escritorios(id),
+                canal TEXT NOT NULL,
+                id_externo TEXT NOT NULL,
+                empresa_ref TEXT NOT NULL,
+                cliente_id INTEGER REFERENCES clientes(id) ON DELETE SET NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                fase TEXT,
+                motivo TEXT,
+                documentos JSONB NOT NULL DEFAULT '[]'::jsonb,
+                previa JSONB,
+                previa_hash TEXT,
+                aprovado_hash TEXT,
+                reservado_por TEXT,
+                reservado_em TIMESTAMPTZ,
+                decidido_por TEXT,
+                decidido_em TIMESTAMPTZ,
+                decisao_obs TEXT,
+                protocolo TEXT,
+                criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+                atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+                UNIQUE (escritorio_id, canal, id_externo)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS admissoes_fila ON admissoes (escritorio_id, status, criado_em)"
+        )
+        # trilha de auditoria: toda mudança de estado, com quem e por quê.
+        # Sem FK para usuarios: o registro continua valendo se a pessoa sair.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admissoes_eventos (
+                id BIGSERIAL PRIMARY KEY,
+                admissao_id INTEGER NOT NULL REFERENCES admissoes(id) ON DELETE CASCADE,
+                de TEXT,
+                para TEXT NOT NULL,
+                autor TEXT NOT NULL,
+                origem TEXT NOT NULL,
+                motivo TEXT,
+                quando TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        # chave dos canais (um por escritório): só o hash fica no banco, o
+        # texto aparece uma vez na tela ao gerar
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admissoes_chaves (
+                escritorio_id TEXT PRIMARY KEY REFERENCES escritorios(id),
+                chave_hash TEXT NOT NULL UNIQUE,
+                prefixo TEXT NOT NULL,
+                criada_por TEXT NOT NULL,
+                criada_em TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Chave dos canais
+# ---------------------------------------------------------------------------
+
+def _hash_chave(chave: str) -> str:
+    return hashlib.sha256(chave.encode("utf-8")).hexdigest()
+
+
+def gerar_chave_canal(escritorio_id: str, criada_por: str) -> str:
+    """Gera (ou troca) a chave do escritório e devolve o texto, que não é
+    guardado - a chave anterior para de funcionar na hora."""
+    chave = "adm_" + secrets.token_urlsafe(32)
+    with auth.conectar() as conn:
+        conn.execute("""
+            INSERT INTO admissoes_chaves (escritorio_id, chave_hash, prefixo, criada_por)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (escritorio_id) DO UPDATE SET
+                chave_hash = EXCLUDED.chave_hash, prefixo = EXCLUDED.prefixo,
+                criada_por = EXCLUDED.criada_por, criada_em = now()
+        """, (escritorio_id, _hash_chave(chave), chave[:10], criada_por))
+        conn.commit()
+    return chave
+
+
+def info_chave_canal(escritorio_id: str) -> Optional[dict]:
+    with auth.conectar() as conn:
+        return conn.execute(
+            "SELECT prefixo, criada_por, criada_em FROM admissoes_chaves WHERE escritorio_id = %s",
+            (escritorio_id,),
+        ).fetchone()
+
+
+def revogar_chave_canal(escritorio_id: str) -> None:
+    with auth.conectar() as conn:
+        conn.execute("DELETE FROM admissoes_chaves WHERE escritorio_id = %s", (escritorio_id,))
+        conn.commit()
+
+
+def escritorio_da_chave(chave: Optional[str]) -> Optional[str]:
+    if not chave:
+        return None
+    with auth.conectar() as conn:
+        linha = conn.execute(
+            "SELECT escritorio_id FROM admissoes_chaves WHERE chave_hash = %s", (_hash_chave(chave),)
+        ).fetchone()
+    return linha["escritorio_id"] if linha else None
+
+
+# ---------------------------------------------------------------------------
+# Auxiliares
+# ---------------------------------------------------------------------------
+
+def hash_previa(previa: dict) -> str:
+    """Hash estável da prévia (ordem das chaves não importa)."""
+    texto = json.dumps(previa, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+
+def _texto(valor: Optional[str]) -> str:
+    return (valor or "").strip()[:MAX_TEXTO]
+
+
+def _evento(conn, admissao_id: int, de: Optional[str], para: str, autor: str, origem: str,
+            motivo: str = "") -> None:
+    conn.execute(
+        "INSERT INTO admissoes_eventos (admissao_id, de, para, autor, origem, motivo) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (admissao_id, de, para, autor, origem, _texto(motivo) or None),
+    )
+
+
+def _travar(conn, admissao_id: int, escritorio_id: str) -> dict:
+    linha = conn.execute(
+        "SELECT * FROM admissoes WHERE id = %s AND escritorio_id = %s FOR UPDATE",
+        (admissao_id, escritorio_id),
+    ).fetchone()
+    if not linha:
+        raise AdmissaoNaoEncontrada("Admissão não encontrada")
+    return linha
+
+
+def _cliente_por_ref(conn, escritorio_id: str, empresa_ref: str) -> Optional[dict]:
+    return conn.execute(
+        "SELECT id, nome FROM clientes WHERE escritorio_id = %s AND codigo_dominio = %s",
+        (escritorio_id, empresa_ref),
+    ).fetchone()
+
+
+def _limpar_documentos(documentos: Optional[list]) -> list[str]:
+    limpos: list[str] = []
+    for d in documentos or []:
+        d = str(d).strip()[:500]
+        if d and d not in limpos:
+            limpos.append(d)
+    if len(limpos) > MAX_DOCUMENTOS:
+        raise TransicaoInvalida(f"No máximo {MAX_DOCUMENTOS} documentos por solicitação")
+    return limpos
+
+
+# ---------------------------------------------------------------------------
+# Entrada pelos canais
+# ---------------------------------------------------------------------------
+
+def receber_solicitacao(
+    escritorio_id: str, canal: str, id_externo: str, empresa_ref: str,
+    documentos: Optional[list] = None, autor: str = "",
+) -> tuple[dict, bool]:
+    """Cria a solicitação ou devolve a que já existe para canal + ID externo
+    (retorna (admissao, duplicada)). Reenvio com documentos novos acrescenta
+    as referências e, se ela estava aguardando documentos, volta para a fila.
+    Empresa fora do cadastro de clientes do escritório entra como blocked."""
+    canal = (canal or "").strip().lower()
+    if canal not in CANAIS:
+        raise TransicaoInvalida("Canal inválido")
+    id_externo = (id_externo or "").strip()
+    empresa_ref = (empresa_ref or "").strip()
+    if not id_externo or len(id_externo) > 200 or not empresa_ref or len(empresa_ref) > 200:
+        raise TransicaoInvalida("ID externo e empresa são obrigatórios (até 200 caracteres)")
+    docs = _limpar_documentos(documentos)
+    autor = autor or f"canal:{canal}"
+
+    with auth.conectar() as conn:
+        cliente = _cliente_por_ref(conn, escritorio_id, empresa_ref)
+        status = QUEUED if cliente else BLOCKED
+        motivo = "" if cliente else "Empresa não está no cadastro de clientes do escritório"
+        nova = conn.execute("""
+            INSERT INTO admissoes (escritorio_id, canal, id_externo, empresa_ref, cliente_id,
+                                   status, motivo, documentos)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (escritorio_id, canal, id_externo) DO NOTHING
+            RETURNING *
+        """, (escritorio_id, canal, id_externo, empresa_ref, cliente["id"] if cliente else None,
+              status, motivo or None, Jsonb(docs))).fetchone()
+        if nova:
+            _evento(conn, nova["id"], None, status, autor, "canal", motivo or "Solicitação recebida")
+            conn.commit()
+            return nova, False
+
+        existente = conn.execute(
+            "SELECT * FROM admissoes WHERE escritorio_id = %s AND canal = %s AND id_externo = %s FOR UPDATE",
+            (escritorio_id, canal, id_externo),
+        ).fetchone()
+        novos = [d for d in docs if d not in (existente["documentos"] or [])]
+        if novos:
+            todos = list(existente["documentos"] or []) + novos
+            if len(todos) > MAX_DOCUMENTOS:
+                raise TransicaoInvalida(f"No máximo {MAX_DOCUMENTOS} documentos por solicitação")
+            status_antes = existente["status"]
+            novo_status = QUEUED if status_antes == AWAITING_DOCUMENTS else status_antes
+            existente = conn.execute(
+                "UPDATE admissoes SET documentos = %s, status = %s, "
+                "motivo = CASE WHEN %s = %s THEN NULL ELSE motivo END, atualizado_em = now() "
+                "WHERE id = %s RETURNING *",
+                (Jsonb(todos), novo_status, novo_status, QUEUED, existente["id"]),
+            ).fetchone()
+            _evento(conn, existente["id"], status_antes, novo_status, autor, "canal",
+                    f"{len(novos)} documento(s) novo(s) recebido(s)")
+        conn.commit()
+        return existente, True
+
+
+# ---------------------------------------------------------------------------
+# Agente (sessão RDS)
+# ---------------------------------------------------------------------------
+
+def reservar_proxima(escritorio_id: str, agente: str) -> Optional[dict]:
+    """Reserva a próxima tarefa do escritório para o agente. Aprovadas vêm
+    antes (terminar o que o DP já liberou) e entram na fase gravacao; as da
+    fila entram na fase preparo. SKIP LOCKED: dois agentes nunca pegam a
+    mesma tarefa."""
+    with auth.conectar() as conn:
+        linha = conn.execute("""
+            SELECT * FROM admissoes
+            WHERE escritorio_id = %s AND status IN (%s, %s)
+            ORDER BY (status = %s) DESC, criado_em, id
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        """, (escritorio_id, QUEUED, APPROVED, APPROVED)).fetchone()
+        if not linha:
+            return None
+        fase = FASE_GRAVACAO if linha["status"] == APPROVED else FASE_PREPARO
+        if fase == FASE_GRAVACAO and (not linha["aprovado_hash"] or linha["aprovado_hash"] != linha["previa_hash"]):
+            # não deveria acontecer (aprovar() grava os dois juntos) - se
+            # acontecer, a aprovação não vale e volta para o DP
+            conn.execute(
+                "UPDATE admissoes SET status = %s, aprovado_hash = NULL, atualizado_em = now() WHERE id = %s",
+                (AWAITING_APPROVAL, linha["id"]),
+            )
+            _evento(conn, linha["id"], APPROVED, AWAITING_APPROVAL, "sistema", "sistema",
+                    "Aprovação não confere com a prévia atual")
+            conn.commit()
+            return None
+        linha = conn.execute("""
+            UPDATE admissoes SET status = %s, fase = %s, reservado_por = %s, reservado_em = now(),
+                                 atualizado_em = now()
+            WHERE id = %s RETURNING *
+        """, (CLAIMED, fase, agente, linha["id"])).fetchone()
+        _evento(conn, linha["id"], QUEUED if fase == FASE_PREPARO else APPROVED, CLAIMED, agente, "agente",
+                "Reservada para gravação aprovada" if fase == FASE_GRAVACAO else "Reservada para preparo")
+        conn.commit()
+    return linha
+
+
+def _travar_do_agente(conn, admissao_id: int, escritorio_id: str, agente: str) -> dict:
+    linha = _travar(conn, admissao_id, escritorio_id)
+    if linha["status"] != CLAIMED:
+        raise TransicaoInvalida("A tarefa não está reservada")
+    if linha["reservado_por"] != agente:
+        raise SemPermissao("A tarefa está reservada por outro agente")
+    return linha
+
+
+def registrar_previa(admissao_id: int, escritorio_id: str, agente: str, previa: dict) -> dict:
+    """Fase preparo: o agente entrega a prévia do cadastro (o que ele
+    preencheria no Domínio, sem salvar) e a tarefa vai para o DP aprovar."""
+    if not isinstance(previa, dict) or not previa:
+        raise TransicaoInvalida("A prévia precisa ser um objeto com os dados do cadastro")
+    if len(json.dumps(previa, ensure_ascii=False).encode("utf-8")) > MAX_PREVIA_BYTES:
+        raise TransicaoInvalida("Prévia grande demais")
+    with auth.conectar() as conn:
+        linha = _travar_do_agente(conn, admissao_id, escritorio_id, agente)
+        if linha["fase"] != FASE_PREPARO:
+            raise TransicaoInvalida("A prévia não pode mudar depois de aprovada")
+        linha = conn.execute("""
+            UPDATE admissoes SET status = %s, previa = %s, previa_hash = %s, aprovado_hash = NULL,
+                                 decidido_por = NULL, decidido_em = NULL, decisao_obs = NULL,
+                                 motivo = NULL, atualizado_em = now()
+            WHERE id = %s RETURNING *
+        """, (AWAITING_APPROVAL, Jsonb(previa), hash_previa(previa), admissao_id)).fetchone()
+        _evento(conn, admissao_id, CLAIMED, AWAITING_APPROVAL, agente, "agente", "Prévia enviada para conferência")
+        conn.commit()
+    return linha
+
+
+def atualizar_pelo_agente(
+    admissao_id: int, escritorio_id: str, agente: str, status: str,
+    motivo: str = "", protocolo: str = "",
+) -> dict:
+    """Saídas da tarefa reservada. Na fase preparo: aguardando documentos,
+    bloqueada ou falhou. Na fase gravacao: concluída (com protocolo),
+    bloqueada ou falhou - concluir exige a aprovação ainda valendo."""
+    with auth.conectar() as conn:
+        linha = _travar_do_agente(conn, admissao_id, escritorio_id, agente)
+        if status not in _SAIDAS_AGENTE.get(linha["fase"], set()):
+            raise TransicaoInvalida(f"Estado '{status}' não permitido na fase '{linha['fase']}'")
+        if status == COMPLETED:
+            if not linha["decidido_por"] or not linha["aprovado_hash"] or linha["aprovado_hash"] != linha["previa_hash"]:
+                raise SemPermissao("Sem aprovação registrada no Hub para esta prévia")
+        if status in (BLOCKED, FAILED, AWAITING_DOCUMENTS) and not _texto(motivo):
+            raise TransicaoInvalida("Informe o motivo")
+        linha = conn.execute("""
+            UPDATE admissoes SET status = %s, motivo = %s, protocolo = COALESCE(%s, protocolo),
+                                 atualizado_em = now()
+            WHERE id = %s RETURNING *
+        """, (status, _texto(motivo) or None, _texto(protocolo)[:200] or None, admissao_id)).fetchone()
+        _evento(conn, admissao_id, CLAIMED, status, agente, "agente", motivo or ("Concluída" if status == COMPLETED else ""))
+        conn.commit()
+    return linha
+
+
+# ---------------------------------------------------------------------------
+# Decisões do DP (tela do Hub)
+# ---------------------------------------------------------------------------
+
+def pode_aprovar(papel: Optional[str]) -> bool:
+    return papel in PAPEIS_APROVADORES
+
+
+def aprovar(admissao_id: int, escritorio_id: str, usuario: str, papel: str,
+            previa_hash_vista: str, observacao: str = "") -> dict:
+    """Registra a aprovação humana da prévia que a pessoa VIU na tela
+    (previa_hash_vista). Quem montou a prévia (conta do agente) não aprova."""
+    if not pode_aprovar(papel):
+        raise SemPermissao("Só administradores do escritório aprovam admissões")
+    with auth.conectar() as conn:
+        linha = _travar(conn, admissao_id, escritorio_id)
+        if linha["status"] != AWAITING_APPROVAL:
+            raise TransicaoInvalida("A admissão não está aguardando aprovação")
+        if not linha["previa_hash"] or linha["previa_hash"] != previa_hash_vista:
+            raise TransicaoInvalida("A prévia mudou desde que você abriu a tela - confira de novo")
+        if usuario == linha["reservado_por"]:
+            raise SemPermissao("Quem preparou a prévia não pode aprová-la")
+        linha = conn.execute("""
+            UPDATE admissoes SET status = %s, aprovado_hash = previa_hash, decidido_por = %s,
+                                 decidido_em = now(), decisao_obs = %s, atualizado_em = now()
+            WHERE id = %s RETURNING *
+        """, (APPROVED, usuario, _texto(observacao) or None, admissao_id)).fetchone()
+        _evento(conn, admissao_id, AWAITING_APPROVAL, APPROVED, usuario, "usuario", observacao or "Aprovada")
+        conn.commit()
+    return linha
+
+
+def rejeitar(admissao_id: int, escritorio_id: str, usuario: str, papel: str, motivo: str) -> dict:
+    """Rejeita a prévia (ou desfaz uma aprovação que o agente ainda não pegou)."""
+    if not pode_aprovar(papel):
+        raise SemPermissao("Só administradores do escritório rejeitam admissões")
+    if len(_texto(motivo)) < 3:
+        raise TransicaoInvalida("Informe o motivo da rejeição")
+    with auth.conectar() as conn:
+        linha = _travar(conn, admissao_id, escritorio_id)
+        if linha["status"] not in (AWAITING_APPROVAL, APPROVED):
+            raise TransicaoInvalida("Só dá para rejeitar admissão aguardando aprovação ou aprovada")
+        de = linha["status"]
+        linha = conn.execute("""
+            UPDATE admissoes SET status = %s, aprovado_hash = NULL, decidido_por = %s, decidido_em = now(),
+                                 decisao_obs = %s, atualizado_em = now()
+            WHERE id = %s RETURNING *
+        """, (REJECTED, usuario, _texto(motivo), admissao_id)).fetchone()
+        _evento(conn, admissao_id, de, REJECTED, usuario, "usuario", motivo)
+        conn.commit()
+    return linha
+
+
+def devolver_a_fila(admissao_id: int, escritorio_id: str, usuario: str, motivo: str = "") -> dict:
+    """DP resolveu a pendência (documento chegou, empresa cadastrada, agente
+    travado). Fase preparo volta para a fila; problema na fase gravacao volta
+    para aguardando aprovação, sem a aprovação antiga (precisa conciliar no
+    Domínio antes de tentar de novo)."""
+    with auth.conectar() as conn:
+        linha = _travar(conn, admissao_id, escritorio_id)
+        if linha["status"] not in _DEVOLVIVEIS:
+            raise TransicaoInvalida("Esta admissão não pode voltar para a fila")
+        cliente_id = linha["cliente_id"]
+        if cliente_id is None:
+            cliente = _cliente_por_ref(conn, escritorio_id, linha["empresa_ref"])
+            if not cliente:
+                raise TransicaoInvalida("Cadastre a empresa em Gerenciar Clientes antes de devolver")
+            cliente_id = cliente["id"]
+        if linha["fase"] == FASE_GRAVACAO:
+            novo, fase = AWAITING_APPROVAL, FASE_PREPARO
+        else:
+            novo, fase = QUEUED, None
+        de = linha["status"]
+        linha = conn.execute("""
+            UPDATE admissoes SET status = %s, fase = %s, cliente_id = %s, motivo = NULL,
+                                 aprovado_hash = NULL, decidido_por = NULL, decidido_em = NULL,
+                                 reservado_por = CASE WHEN %s = %s THEN reservado_por ELSE NULL END,
+                                 atualizado_em = now()
+            WHERE id = %s RETURNING *
+        """, (novo, fase, cliente_id, novo, AWAITING_APPROVAL, admissao_id)).fetchone()
+        _evento(conn, admissao_id, de, novo, usuario, "usuario", motivo or "Devolvida pelo DP")
+        conn.commit()
+    return linha
+
+
+def registrar_manual(escritorio_id: str, usuario: str, canal: str, id_externo: str,
+                     empresa_ref: str, documentos: Optional[list] = None) -> tuple[dict, bool]:
+    """Solicitação digitada pelo DP na tela (ex.: pedido que chegou pelo
+    WhatsApp antes de existir o conector) - mesma regra dos canais."""
+    return receber_solicitacao(escritorio_id, canal, id_externo, empresa_ref, documentos, autor=usuario)
+
+
+# ---------------------------------------------------------------------------
+# Consultas (tela)
+# ---------------------------------------------------------------------------
+
+def listar(escritorio_id: str, status: Optional[list] = None, canal: Optional[str] = None,
+           cliente_id: Optional[int] = None, limite: int = 500) -> list[dict]:
+    filtros = ["a.escritorio_id = %s"]
+    params: list[Any] = [escritorio_id]
+    if status:
+        filtros.append("a.status = ANY(%s)")
+        params.append(list(status))
+    if canal:
+        filtros.append("a.canal = %s")
+        params.append(canal)
+    if cliente_id:
+        filtros.append("a.cliente_id = %s")
+        params.append(cliente_id)
+    params.append(limite)
+    with auth.conectar() as conn:
+        return conn.execute(f"""
+            SELECT a.id, a.canal, a.id_externo, a.empresa_ref, a.cliente_id, c.nome AS cliente_nome,
+                   a.status, a.fase, a.motivo, a.criado_em, a.atualizado_em, a.decidido_por, a.protocolo
+            FROM admissoes a LEFT JOIN clientes c ON c.id = a.cliente_id
+            WHERE {' AND '.join(filtros)}
+            ORDER BY a.atualizado_em DESC
+            LIMIT %s
+        """, params).fetchall()
+
+
+def obter(admissao_id: int, escritorio_id: str) -> Optional[dict]:
+    with auth.conectar() as conn:
+        return conn.execute("""
+            SELECT a.*, c.nome AS cliente_nome
+            FROM admissoes a LEFT JOIN clientes c ON c.id = a.cliente_id
+            WHERE a.id = %s AND a.escritorio_id = %s
+        """, (admissao_id, escritorio_id)).fetchone()
+
+
+def listar_eventos(admissao_id: int, escritorio_id: str) -> list[dict]:
+    with auth.conectar() as conn:
+        return conn.execute("""
+            SELECT e.* FROM admissoes_eventos e JOIN admissoes a ON a.id = e.admissao_id
+            WHERE e.admissao_id = %s AND a.escritorio_id = %s ORDER BY e.quando, e.id
+        """, (admissao_id, escritorio_id)).fetchall()
+
+
+def contagem_por_status(escritorio_id: str) -> dict:
+    with auth.conectar() as conn:
+        linhas = conn.execute(
+            "SELECT status, count(*) AS n FROM admissoes WHERE escritorio_id = %s GROUP BY status",
+            (escritorio_id,),
+        ).fetchall()
+    return {l["status"]: l["n"] for l in linhas}

@@ -30,8 +30,9 @@ from typing import Optional
 
 from fastapi import Cookie, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+import admissoes
 import auth
 from rpa import core as rpa_core
 
@@ -55,6 +56,7 @@ def _startup() -> None:
     # antes do app novo (num banco recem-criado, por exemplo).
     auth.garantir_schema()
     rpa_core.garantir_schema()
+    admissoes.garantir_schema()
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +385,109 @@ def attended_download():
 # bilhete assinado (HMAC-SHA256 com MARKETING_SSO_SECRET, que o CRM também
 # recebe - ver docker-compose.yml) que vale 60s e redireciona pro CRM, que
 # confere o bilhete, cria a sessão dele e entra direto (marketing/src/sso.js).
+
+# ---------------------------------------------------------------------------
+# Admissões (canais -> fila -> agente RDS -> aprovação do DP no Hub)
+# ---------------------------------------------------------------------------
+# Regras e estados em admissoes.py. Os canais (Acessórias, ONVIO, WhatsApp)
+# entram com a chave do escritório (X-API-Key, gerada na tela Admissões); o
+# agente entra com usuário/senha do Hub (Bearer), igual ao attended_worker.
+# Aprovar/rejeitar NÃO existe aqui: só na tela do Hub, por uma pessoa.
+
+_APP_ADMISSOES = "admissoes"
+
+
+def _erro_admissao(exc: Exception) -> HTTPException:
+    if isinstance(exc, admissoes.AdmissaoNaoEncontrada):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, admissoes.SemPermissao):
+        return HTTPException(status_code=403, detail=str(exc))
+    return HTTPException(status_code=409, detail=str(exc))
+
+
+def _agente_admissoes(authorization: Optional[str]) -> dict:
+    usuario = _usuario_autenticado(authorization)
+    if not _app_permitido(usuario, _APP_ADMISSOES):
+        raise HTTPException(status_code=403, detail="Usuário sem acesso ao app Admissões")
+    return usuario
+
+
+def _admissao_para_agente(linha: dict) -> dict:
+    """Só o que o agente precisa - sem dados de auditoria de quem decidiu."""
+    fase = linha.get("fase")
+    return {
+        "id": linha["id"], "canal": linha["canal"], "id_externo": linha["id_externo"],
+        "empresa_ref": linha["empresa_ref"], "status": linha["status"], "fase": fase,
+        "documentos": linha.get("documentos") or [],
+        # só a fase gravacao (aprovada no Hub) libera salvar/transmitir; nela
+        # vai junto a prévia exatamente como foi aprovada
+        "liberado_para_gravar": fase == admissoes.FASE_GRAVACAO,
+        "previa_aprovada": linha.get("previa") if fase == admissoes.FASE_GRAVACAO else None,
+    }
+
+
+class AdmissaoEventoBody(BaseModel):
+    channel: str = Field(pattern="^(acessorias|onvio|whatsapp)$")
+    external_id: str = Field(min_length=1, max_length=200)
+    company_ref: str = Field(min_length=1, max_length=200)
+    event_type: str = "admission_requested"
+    document_refs: list[str] = Field(default_factory=list, max_length=admissoes.MAX_DOCUMENTOS)
+
+
+@app.post("/api/admissoes/eventos", status_code=202)
+def admissao_evento(body: AdmissaoEventoBody, x_api_key: Optional[str] = Header(None)):
+    escritorio_id = admissoes.escritorio_da_chave(x_api_key)
+    if not escritorio_id:
+        raise HTTPException(status_code=401, detail="Chave inválida")
+    if body.event_type != "admission_requested":
+        raise HTTPException(status_code=422, detail="Evento não suportado")
+    try:
+        linha, duplicada = admissoes.receber_solicitacao(
+            escritorio_id, body.channel, body.external_id, body.company_ref, body.document_refs,
+        )
+    except (admissoes.TransicaoInvalida, admissoes.SemPermissao) as exc:
+        raise _erro_admissao(exc)
+    return {"id": linha["id"], "status": linha["status"], "duplicate": duplicada}
+
+
+@app.post("/api/admissoes/agente/proxima")
+def admissao_proxima(authorization: Optional[str] = Header(None)):
+    usuario = _agente_admissoes(authorization)
+    linha = admissoes.reservar_proxima(usuario["escritorio_id"], usuario["usuario"])
+    return {"admissao": _admissao_para_agente(linha) if linha else None}
+
+
+class AdmissaoPreviaBody(BaseModel):
+    previa: dict
+
+
+@app.post("/api/admissoes/agente/{admissao_id}/previa")
+def admissao_previa(admissao_id: int, body: AdmissaoPreviaBody, authorization: Optional[str] = Header(None)):
+    usuario = _agente_admissoes(authorization)
+    try:
+        linha = admissoes.registrar_previa(admissao_id, usuario["escritorio_id"], usuario["usuario"], body.previa)
+    except (admissoes.AdmissaoNaoEncontrada, admissoes.TransicaoInvalida, admissoes.SemPermissao) as exc:
+        raise _erro_admissao(exc)
+    return {"id": linha["id"], "status": linha["status"]}
+
+
+class AdmissaoStatusBody(BaseModel):
+    status: str
+    motivo: str = ""
+    protocolo: str = ""
+
+
+@app.post("/api/admissoes/agente/{admissao_id}/status")
+def admissao_status(admissao_id: int, body: AdmissaoStatusBody, authorization: Optional[str] = Header(None)):
+    usuario = _agente_admissoes(authorization)
+    try:
+        linha = admissoes.atualizar_pelo_agente(
+            admissao_id, usuario["escritorio_id"], usuario["usuario"], body.status, body.motivo, body.protocolo,
+        )
+    except (admissoes.AdmissaoNaoEncontrada, admissoes.TransicaoInvalida, admissoes.SemPermissao) as exc:
+        raise _erro_admissao(exc)
+    return {"id": linha["id"], "status": linha["status"]}
+
 
 _SSO_VALIDADE_S = 60
 

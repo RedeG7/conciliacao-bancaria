@@ -31,6 +31,8 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
+import admissoes
+import json
 import auth
 import clientes
 import historico
@@ -94,6 +96,7 @@ def _garantir_schema_extra() -> bool:
     clientes.garantir_schema()
     historico.garantir_schema()
     rpa_core.garantir_schema()
+    admissoes.garantir_schema()
     return True
 
 
@@ -852,6 +855,239 @@ def _tela_historico() -> None:
             f"👤 **{r['usuario']}** — Lançamento {empresa} "
             f"dia {dt.strftime('%d/%m/%Y')} hora {dt.strftime('%H:%M')}"
         )
+
+
+_FUSO_SP = ZoneInfo("America/Sao_Paulo")
+
+# estados que ainda pedem alguém do DP (filtro padrão da tela Admissões)
+_ADM_PENDENTES = [
+    admissoes.AWAITING_APPROVAL, admissoes.AWAITING_DOCUMENTS, admissoes.BLOCKED,
+    admissoes.FAILED, admissoes.QUEUED, admissoes.CLAIMED, admissoes.APPROVED,
+]
+
+
+def _adm_quando(valor) -> str:
+    return valor.astimezone(_FUSO_SP).strftime("%d/%m/%Y %H:%M") if valor else "—"
+
+
+def _adm_rotulo_cliente(lista_clientes: list, codigo: str) -> str:
+    return next((f"{c['codigo_dominio']} - {c['nome']}" for c in lista_clientes if c["codigo_dominio"] == codigo), codigo)
+
+
+def _tela_admissoes() -> None:
+    """Admissões: solicitações que chegam dos canais (Acessórias, ONVIO,
+    WhatsApp) pela API (api.py, /api/admissoes/eventos), fila do agente da
+    sessão RDS e aprovação do DP. Regras em admissoes.py - a tela só mostra
+    e chama as funções de lá. Aprovar/rejeitar: só admin do escritório ou
+    super admin, e nunca a conta que montou a prévia. Escritório: cada um só
+    vê o próprio; super_admin_global escolhe (mesmo padrão das outras telas)."""
+    _cabecalho_app("🧑‍💼", "Admissões",
+                   "Solicitações de admissão, fila do agente e aprovação do DP antes de salvar no Domínio.")
+
+    papel = st.session_state.get("papel_usuario")
+    usuario = st.session_state.get("usuario_logado")
+    escritorio_id = st.session_state.get("escritorio_id")
+    if papel == auth.PAPEL_SUPER_GLOBAL:
+        escritorios = auth.carregar_escritorios()
+        ids = list(escritorios.keys())
+        escritorio_id = st.selectbox(
+            "Escritório", ids, format_func=lambda eid: escritorios.get(eid, {}).get("nome", eid),
+            index=ids.index(escritorio_id) if escritorio_id in ids else 0, key="adm_escritorio",
+        )
+    pode_aprovar = admissoes.pode_aprovar(papel)
+
+    contagem = admissoes.contagem_por_status(escritorio_id)
+    cols = st.columns(5)
+    for col, status in zip(cols, [admissoes.AWAITING_APPROVAL, admissoes.AWAITING_DOCUMENTS,
+                                  admissoes.BLOCKED, admissoes.FAILED, admissoes.QUEUED]):
+        col.metric(admissoes.STATUS_ROTULO[status], contagem.get(status, 0))
+
+    aba_lista, aba_nova, aba_canais = st.tabs(["Solicitações", "Registrar solicitação", "Canais e agente"])
+    lista_clientes = clientes.listar_clientes(escritorio_id)
+
+    with aba_lista:
+        f1, f2, f3 = st.columns([2, 1, 1.4])
+        filtro_status = f1.multiselect(
+            "Situação", list(admissoes.STATUS_ROTULO), default=_ADM_PENDENTES,
+            format_func=admissoes.STATUS_ROTULO.get, key="adm_f_status",
+        )
+        filtro_canal = f2.selectbox(
+            "Canal", [""] + list(admissoes.CANAIS),
+            format_func=lambda c: admissoes.CANAL_ROTULO.get(c, "Todos"), key="adm_f_canal",
+        )
+        ids_clientes = [None] + [c["id"] for c in lista_clientes]
+        nomes_clientes = {c["id"]: f"{c['codigo_dominio']} - {c['nome']}" for c in lista_clientes}
+        filtro_cliente = f3.selectbox(
+            "Empresa", ids_clientes, format_func=lambda cid: nomes_clientes.get(cid, "Todas"), key="adm_f_cliente",
+        )
+        linhas = admissoes.listar(escritorio_id, filtro_status or None, filtro_canal or None, filtro_cliente)
+        if not linhas:
+            st.info("Nenhuma solicitação com esses filtros.")
+        else:
+            st.dataframe(
+                [{
+                    "Nº": l["id"],
+                    "Situação": admissoes.STATUS_ROTULO.get(l["status"], l["status"]),
+                    "Canal": admissoes.CANAL_ROTULO.get(l["canal"], l["canal"]),
+                    "ID externo": l["id_externo"],
+                    "Empresa": l["cliente_nome"] or f"{l['empresa_ref']} (não cadastrada)",
+                    "Motivo": l["motivo"] or "",
+                    "Atualizada": _adm_quando(l["atualizado_em"]),
+                } for l in linhas],
+                hide_index=True, use_container_width=True,
+            )
+            rotulos = {
+                l["id"]: f"Nº {l['id']} · {admissoes.STATUS_ROTULO.get(l['status'])} · {l['cliente_nome'] or l['empresa_ref']}"
+                for l in linhas
+            }
+            escolhida = st.selectbox("Abrir solicitação", list(rotulos), format_func=rotulos.get, key="adm_escolhida")
+            _detalhe_admissao(escolhida, escritorio_id, usuario, papel, pode_aprovar)
+
+    with aba_nova:
+        st.caption("Para pedidos que chegaram por um canal ainda sem integração automática (ex.: WhatsApp). "
+                   "Mesma regra dos canais: canal + ID externo repetido não cria outra solicitação.")
+        if not lista_clientes:
+            st.info("Cadastre a empresa em Gerenciar Clientes primeiro.")
+        else:
+            with st.form("adm_nova", clear_on_submit=True):
+                n_canal = st.selectbox("Canal", list(admissoes.CANAIS), format_func=admissoes.CANAL_ROTULO.get)
+                n_id = st.text_input("ID externo (nº do chamado, protocolo ou id da mensagem)")
+                n_empresa = st.selectbox(
+                    "Empresa", [c["codigo_dominio"] for c in lista_clientes],
+                    format_func=lambda cod: _adm_rotulo_cliente(lista_clientes, cod),
+                )
+                n_docs = st.text_area(
+                    "Referências dos documentos (uma por linha, opcional)",
+                    help="Link ou identificador da ficha de admissão e do ASO no canal - não cole dados pessoais aqui.",
+                )
+                if st.form_submit_button("Registrar", type="primary"):
+                    try:
+                        linha, dup = admissoes.registrar_manual(
+                            escritorio_id, usuario, n_canal, n_id, n_empresa,
+                            [d for d in n_docs.splitlines() if d.strip()],
+                        )
+                    except admissoes.TransicaoInvalida as exc:
+                        st.error(str(exc))
+                    else:
+                        if dup:
+                            st.warning(f"Já existia a solicitação Nº {linha['id']} para esse canal e ID.")
+                        else:
+                            st.success(f"Solicitação Nº {linha['id']} registrada e enviada para a fila do agente.")
+
+    with aba_canais:
+        st.markdown("**Chave dos canais**")
+        st.caption("Os conectores de Acessórias, ONVIO e WhatsApp enviam as solicitações para "
+                   "`POST /api/admissoes/eventos` com o cabeçalho `X-API-Key`.")
+        info = admissoes.info_chave_canal(escritorio_id)
+        if info:
+            st.write(f"Chave ativa `{info['prefixo']}…`, gerada por {info['criada_por']} em {_adm_quando(info['criada_em'])}.")
+        else:
+            st.write("Nenhuma chave gerada - os canais ainda não conseguem enviar solicitações.")
+        if pode_aprovar:
+            c1, c2 = st.columns(2)
+            if c1.button("Gerar nova chave" if info else "Gerar chave", key="adm_gerar_chave"):
+                st.session_state["adm_chave_nova"] = admissoes.gerar_chave_canal(escritorio_id, usuario)
+                st.rerun()
+            if info and c2.button("Revogar chave", key="adm_revogar_chave"):
+                admissoes.revogar_chave_canal(escritorio_id)
+                st.session_state.pop("adm_chave_nova", None)
+                st.rerun()
+            if st.session_state.get("adm_chave_nova"):
+                st.warning("Copie agora: a chave não aparece de novo. Gerar outra invalida esta.")
+                st.code(st.session_state["adm_chave_nova"], language=None)
+        else:
+            st.caption("Só administradores do escritório geram ou revogam a chave.")
+        st.markdown("**Agente da sessão RDS**")
+        st.caption("Rode `attended_worker/admissoes_agent.py` na sessão RDS com uma conta do Hub só para o agente "
+                   "(papel Usuário, com o app Admissões liberado). Essa conta não consegue aprovar o que ela mesma preparou.")
+
+
+def _detalhe_admissao(admissao_id: int, escritorio_id: str, usuario: str, papel: str, pode_aprovar: bool) -> None:
+    a = admissoes.obter(admissao_id, escritorio_id)
+    if not a:
+        st.error("Solicitação não encontrada.")
+        return
+    # hash da prévia mostrada na renderização ANTERIOR: é a que a pessoa viu
+    # quando clicou em Aprovar (o clique roda a tela de novo, já com o banco
+    # atual) - se a prévia mudou nesse meio tempo, aprovar() recusa
+    chave_visto = f"adm_visto_{admissao_id}"
+    hash_visto = st.session_state.get(chave_visto)
+    st.session_state[chave_visto] = a["previa_hash"]
+
+    with st.container(border=True):
+        st.markdown(f"#### Nº {a['id']} · {admissoes.STATUS_ROTULO.get(a['status'], a['status'])}")
+        c1, c2, c3 = st.columns(3)
+        c1.write(f"**Canal:** {admissoes.CANAL_ROTULO.get(a['canal'], a['canal'])}")
+        c1.write(f"**ID externo:** {a['id_externo']}")
+        c2.write(f"**Empresa:** {a['cliente_nome'] or a['empresa_ref'] + ' (não cadastrada)'}")
+        c2.write(f"**Recebida em:** {_adm_quando(a['criado_em'])}")
+        c3.write(f"**Agente:** {a['reservado_por'] or '—'}")
+        if a["decidido_por"]:
+            c3.write(f"**Decisão:** {a['decidido_por']} em {_adm_quando(a['decidido_em'])}")
+        if a["protocolo"]:
+            st.success(f"Protocolo: {a['protocolo']}")
+        if a["motivo"]:
+            st.warning(a["motivo"])
+        if a["documentos"]:
+            st.write("**Documentos:**")
+            for d in a["documentos"]:
+                st.write(f"- {d}")
+
+        if a["previa"]:
+            st.markdown("**Prévia do cadastro (o que o agente vai salvar no Domínio)**")
+            st.dataframe(
+                # tudo como texto: coluna com tipos misturados quebra o Arrow do st.dataframe
+                [{"Campo": k, "Valor": v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)}
+                 for k, v in a["previa"].items()],
+                hide_index=True, use_container_width=True,
+            )
+
+        if a["status"] == admissoes.AWAITING_APPROVAL:
+            if not pode_aprovar:
+                st.info("Aguardando um administrador do escritório aprovar ou rejeitar.")
+            elif usuario == a["reservado_por"]:
+                st.info("Foi esta conta que preparou a prévia - outra pessoa precisa aprovar.")
+            else:
+                conferi = st.checkbox("Conferi a prévia com a ficha de admissão e o ASO", key=f"adm_conferi_{a['id']}")
+                obs = st.text_input("Observação (opcional)", key=f"adm_obs_{a['id']}")
+                if st.button("Aprovar e liberar para salvar", type="primary", disabled=not conferi,
+                             key=f"adm_ok_{a['id']}"):
+                    _adm_acao(lambda: admissoes.aprovar(a["id"], escritorio_id, usuario, papel, hash_visto or "", obs),
+                              "Aprovada. O agente salva no Domínio na próxima rodada.")
+                motivo = st.text_input("Motivo da rejeição", key=f"adm_rej_{a['id']}")
+                if st.button("Rejeitar", key=f"adm_rejeitar_{a['id']}"):
+                    _adm_acao(lambda: admissoes.rejeitar(a["id"], escritorio_id, usuario, papel, motivo), "Rejeitada.")
+        elif a["status"] == admissoes.APPROVED and pode_aprovar:
+            motivo = st.text_input("Motivo para desfazer a aprovação", key=f"adm_desf_{a['id']}")
+            if st.button("Desfazer aprovação (rejeitar)", key=f"adm_desfazer_{a['id']}"):
+                _adm_acao(lambda: admissoes.rejeitar(a["id"], escritorio_id, usuario, papel, motivo),
+                          "Aprovação desfeita.")
+        elif a["status"] in (admissoes.AWAITING_DOCUMENTS, admissoes.BLOCKED, admissoes.FAILED, admissoes.CLAIMED):
+            if a["fase"] == admissoes.FASE_GRAVACAO:
+                destino = "para aprovação de novo"
+                st.caption("Falhou ao salvar: confira no Domínio o que já foi gravado antes de aprovar de novo.")
+            else:
+                destino = "para a fila do agente"
+            motivo = st.text_input("O que foi resolvido?", key=f"adm_dev_{a['id']}")
+            if st.button(f"Devolver {destino}", key=f"adm_devolver_{a['id']}"):
+                _adm_acao(lambda: admissoes.devolver_a_fila(a["id"], escritorio_id, usuario, motivo), "Devolvida.")
+
+        with st.expander("Histórico"):
+            for e in admissoes.listar_eventos(a["id"], escritorio_id):
+                de = admissoes.STATUS_ROTULO.get(e["de"], e["de"]) if e["de"] else "—"
+                para = admissoes.STATUS_ROTULO.get(e["para"], e["para"])
+                st.write(f"{_adm_quando(e['quando'])} · {de} → **{para}** · {e['autor']}"
+                         + (f" · {e['motivo']}" if e["motivo"] else ""))
+
+
+def _adm_acao(fn, mensagem: str) -> None:
+    try:
+        fn()
+    except (admissoes.TransicaoInvalida, admissoes.SemPermissao, admissoes.AdmissaoNaoEncontrada) as exc:
+        st.error(str(exc))
+        return
+    st.toast(mensagem)
+    st.rerun()
 
 
 def _tela_gerenciar_clientes() -> None:
@@ -1978,6 +2214,14 @@ _APPS_HOME = [
         "tela": None,
     },
     {
+        "id": "admissoes",
+        "icone": "🧑‍💼",
+        "titulo": "Admissões",
+        "descricao": "Solicitações de admissão dos canais, fila do agente e aprovação do DP antes de salvar no Domínio.",
+        "departamento": "Pessoal",
+        "tela": "admissoes",
+    },
+    {
         "id": "rpa_nfgo",
         "icone": "🧾",
         "titulo": "RPA NF GO",
@@ -2584,7 +2828,7 @@ if st.session_state.get("mostrar_trocar_senha"):
 
 # tela atual também na URL (?tela=...): F5 ou uma sessão nova do Streamlit
 # (reconexão, Hub reiniciado no deploy) voltava sempre pra tela inicial
-_TELAS_URL = {"home", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "conciliacao", "historico", "gerenciar_clientes",
+_TELAS_URL = {"home", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
               "gerenciar_escritorios", "gerenciar_usuarios", "logs_acesso"}
 if "tela" not in st.session_state:
     _tela_url = st.query_params.get("tela", "home")
@@ -2655,6 +2899,15 @@ if st.session_state.get("tela") == "rpa_nfgo":
         subtitulo="Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO.",
         pai=_PAI_RPA_FISCAL,
     )
+    st.stop()
+
+if st.session_state.get("tela") == "admissoes":
+    if "admissoes" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    _tela_admissoes()
     st.stop()
 
 if st.session_state.get("tela") == "conciliacao":
