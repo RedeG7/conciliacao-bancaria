@@ -227,3 +227,14 @@ def test_tela_reduz_print_e_converte_coordenadas():
 
 def test_escapar_send_keys():
     assert tela_mod._escapar_send_keys("a+b(c)%") == "a{+}b{(}c{)}{%}"
+
+
+def test_codigo_padrao_1_quando_nao_informado():
+    ficha = {"nome": "Maria", "cpf": "52998224725", "data_nascimento": "01/02/1990", "data_admissao": "01/12/2026",
+             "cargo": "Atendente", "salario": "1.518,00", "departamento": "Vendas", "sindicato": "",
+             "documentos_identificados": [], "observacoes": []}
+    previa, _ = ia.montar_previa(ficha, EMPRESA, MATERIAL)
+    assert previa["departamento"] == "Vendas"
+    assert all(previa[c] == "1" for c in ("servico", "funcao", "centro_custo", "sindicato"))
+    assert previa["com_codigo_padrao_1"] == ["Serviço", "Função", "Centro de custo", "Sindicato"]
+    assert "código 1" in ia.sistema_dominio("rds")

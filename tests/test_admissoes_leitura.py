@@ -52,7 +52,7 @@ def test_sem_formulario():
 def test_previa_pelo_formulario_lista_o_que_o_dp_confere():
     previa, faltando = formulario.montar_previa(formulario.ler_formulario(MATERIAL), EMPRESA, MATERIAL)
     assert faltando == []
-    assert previa["empresa_codigo_dominio"] == "101" and previa["servico"] == 1
+    assert previa["empresa_codigo_dominio"] == "101" and previa["servico"] == "1"
     assert "Data do ASO" in previa["a_conferir_pelo_dp"] and "Data de admissão" in previa["a_conferir_pelo_dp"]
     assert previa["anexos_da_solicitacao"] == ["aso.pdf", "ctps.xlsx"]
     assert previa["origem_dos_dados"].startswith("Formulário")
@@ -134,3 +134,12 @@ def test_rota_da_leitura_so_para_o_agente_do_escritorio(db):
     tok = cli.post("/api/login", json={"usuario": "agente", "senha": SENHA}).json()["token"]
     r = cli.post("/api/admissoes/agente/ia", headers={"Authorization": f"Bearer {tok}"})
     assert r.status_code == 200 and r.json() == {"leitura": "claude", "chave": CHAVE_CLAUDE}
+
+
+def test_formulario_departamento_e_funcao_como_cargo():
+    texto = FORM.replace("Cargo: Atendente", "Função: Atendente") + "\nDepartamento: 2\nCentro de Custo: Loja 1"
+    ficha = formulario.ler_formulario({"mensagens": [texto]})
+    assert ficha["cargo"] == "Atendente" and ficha["funcao"] == "Atendente"
+    previa, faltando = formulario.montar_previa(ficha, EMPRESA, {"mensagens": [texto]})
+    assert faltando == [] and previa["departamento"] == "2" and previa["centro_custo"] == "Loja 1"
+    assert previa["servico"] == "1" and previa["sindicato"] == "1"

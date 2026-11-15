@@ -507,7 +507,8 @@ def _sincronizar_acessorias(escritorio_id: str, autor: str, cfg: dict,
     dias = int(cfg["parametros"].get("dias_retroativos") or 7)
     # a API filtra por dia (SolUltAtIni) - recua 1 dia para não perder nada
     # na virada; repetir uma solicitação é inofensivo (deduplicação)
-    desde = (desde_salvo.date() - timedelta(days=1)) if desde_salvo else hoje - timedelta(days=dias)
+    # sinc_desde vem do banco em UTC: a data é a do relógio local, como "hoje"
+    desde = (desde_salvo.astimezone().date() - timedelta(days=1)) if desde_salvo else hoje - timedelta(days=dias)
     departamentos = _lista(cfg["parametros"].get("departamentos", ""))
     palavras = _lista(cfg["parametros"].get("palavras", ""))
     inicio = datetime.now().astimezone()

@@ -50,7 +50,12 @@ _SINONIMOS = {
     "telefone": ["telefone", "celular", "whatsapp", "telefone/celular"],
     "email": ["email", "e mail"],
     "data_admissao": ["data de admissao", "admissao", "data admissao", "data de inicio", "inicio"],
-    "cargo": ["cargo", "funcao", "cargo/funcao"],
+    "cargo": ["cargo", "cargo/funcao"],
+    "funcao": ["funcao"],
+    "servico": ["servico", "codigo do servico", "tomador", "obra"],
+    "departamento": ["departamento", "setor"],
+    "centro_custo": ["centro de custo", "centro de custos", "c custo"],
+    "sindicato": ["sindicato"],
     "salario": ["salario", "salario base", "remuneracao"],
     "horario_trabalho": ["horario", "horario de trabalho", "jornada"],
     "tipo_contrato": ["tipo de contrato", "contrato"],
@@ -95,6 +100,8 @@ def ler_formulario(material: dict) -> dict | None:
                 outros.setdefault(m.group(1).strip()[:60], valor)
     if not achou:
         return None
+    if not ficha["cargo"] and ficha["funcao"]:  # muitos formulários chamam o cargo de "Função"
+        ficha["cargo"] = ficha["funcao"]
     for campo in ("cpf", "pis", "cep"):
         if ficha[campo]:
             ficha[campo] = re.sub(r"\D", "", ficha[campo]) or None
