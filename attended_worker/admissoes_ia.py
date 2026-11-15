@@ -229,6 +229,8 @@ def montar_previa(extraido: dict, empresa: dict, material: dict,
         "empresa_codigo_dominio": empresa.get("codigo_dominio", ""),
         "empresa_nome": empresa.get("nome", ""),
     }
+    if empresa.get("cnpj"):
+        previa["empresa_cnpj"] = empresa["cnpj"]
     for chave, _ in CAMPOS:
         valor = extraido.get(chave)
         if valor not in (None, ""):
@@ -295,7 +297,19 @@ Domínio sem dado na prévia: deixe como está (se for obrigatório para continu
 
 Procedimento (Domínio Folha):
 1. Tire um print e confirme que o Domínio está aberto no módulo Folha. Se não estiver, finalize "bloqueado".
-2. Ative a empresa pelo código informado (troca de empresa) e confira o nome na barra do sistema.
+2. Empresa: veja no print qual empresa está ativa (barra do sistema). Se já for a empresa indicada, siga \
+para o passo 3. Se não for, troque de empresa assim:
+   a) O Domínio só troca de empresa sem nenhuma janela aberta: feche antes as janelas abertas dentro do \
+Domínio (botão Fechar/X da janela ou Esc), sem gravar nada.
+   b) Na barra de ícones do topo, clique no ícone do prédio (Troca de empresa) - é o primeiro ícone, antes \
+do ícone de pessoa.
+   c) Digite o código da empresa informado e clique em "Acessar".
+   d) Confira pelo CNPJ ou pela razão social (barra do sistema ou dados da empresa). A lista de troca pode \
+mostrar só o apelido (nome fantasia), diferente da razão social: isso não é motivo para parar.
+   e) Abriu a empresa errada (clique ou código no lugar errado)? Não preencha nada nela: feche as janelas \
+abertas e refaça a rota b) a d) com o código indicado. Tente no máximo 3 vezes; se ainda não for a \
+empresa certa, ou se o código levar a uma empresa com outro CNPJ/razão social, finalize "bloqueado" \
+("código da empresa no Domínio não confere").
 3. Arquivo > Empregados: pesquise pelo CPF/nome para ver se o empregado já existe. Se existir, finalize \
 "bloqueado" ("empregado já cadastrado").
 4. Novo empregado: confira a matrícula eSocial sugerida e preencha os dados pessoais, documentos, endereço e \
@@ -307,6 +321,10 @@ pessoais). Não cadastre serviço, função, departamento, centro de custo nem s
 Confira o cargo; se não existir, finalize "bloqueado" ("cargo não cadastrado") - não cadastre cargo nesta versão.
 6. ASO: data e médico. Use F2 para pesquisar o médico; se não existir, cadastre com F7 só com nome, CRM e UF da prévia.
 7. Confira cada aba preenchida com um print e chame finalizar ("preenchido"), sem salvar.
+
+A tela é remota e o Domínio responde devagar: depois de clicar, digitar ou trocar de tela, use wait \
+(1 a 3 s) e tire um print antes da próxima ação. Nunca repita um clique ou uma digitação sem ver no print \
+que a anterior não entrou; se o campo ficou com texto errado, selecione tudo no campo e digite de novo.
 
 Seja objetivo: poucas ações por vez e um print depois de cada etapa para conferir."""
 
@@ -337,7 +355,8 @@ def operar_dominio(cliente, tela, previa: dict, pasta: Optional[Path] = None,
     parar = parar or threading.Event()
     dados = json.dumps(previa, ensure_ascii=False, indent=1)
     mensagens: list = [{"role": "user", "content": [{"type": "text", "text": (
-        f"Empresa: código {previa.get('empresa_codigo_dominio')} - {previa.get('empresa_nome')}.\n"
+        f"Empresa: código {previa.get('empresa_codigo_dominio')} - {previa.get('empresa_nome')}"
+        + (f" - CNPJ {previa['empresa_cnpj']}" if previa.get("empresa_cnpj") else "") + ".\n"
         "<previa_aprovada>\n" + dados + "\n</previa_aprovada>\n\n"
         "Preencha o cadastro do empregado no Domínio em modo conferência (sem salvar)."
     )}]}]

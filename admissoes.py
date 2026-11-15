@@ -51,8 +51,19 @@ CANAIS = ("acessorias", "onvio", "whatsapp")
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
 # O programa do agente tem versão própria em attended_worker/VERSION_ADMISSOES
 # (é ela que dispara a atualização automática do .exe).
-VERSAO = "1.4"
+VERSAO = "1.5"
 NOVIDADES = [
+    ("1.5", "15/11/2026", [
+        "A tela de Admissões se atualiza sozinha quando uma solicitação muda de situação (confere a cada "
+        "10 s) e mostra um aviso no canto da tela.",
+        "Pop-up \"Admissão aguardando aprovação\" quando chega prévia para aprovar, com botão que abre a "
+        "solicitação direto.",
+        "Agente 1.4: preenchimento no Domínio mais calmo na sessão RDS (espera a tela responder depois de "
+        "cada clique e digitação, digita mais devagar).",
+        "Troca de empresa: só troca se a empresa ativa for outra; fecha as janelas abertas, usa o ícone do "
+        "prédio, digita o código e clica em Acessar. Confere pelo CNPJ/razão social (apelido diferente na "
+        "lista não bloqueia). Se abrir a empresa errada, refaz a rota até a certa (até 3 vezes).",
+    ]),
     ("1.4", "14/11/2026", [
         "Serviço, Função, Departamento, Centro de custo e Sindicato: o agente usa o que veio no cadastro "
         "(código ou nome); sem informação, ou se não existir no Domínio, usa o código 1.",

@@ -217,7 +217,8 @@ def test_tela_reduz_print_e_converte_coordenadas():
     t.executar("left_click", {"coordinate": [100, 50]})
     t.executar("type", {"text": "José"})
     t.executar("key", {"text": "ctrl+a", "repeat": 2})
-    assert gui.feito[0][0] == "click" and gui.feito[0][1] == (200, 100)
+    cliques = [f for f in gui.feito if f[0] == "click"]
+    assert cliques[0][1] == (200, 100)
     assert digitado == ["José"]
     assert [f for f in gui.feito if f[0] == "hotkey"] == [("hotkey", ("ctrl", "a"), {})] * 2
     assert t.executar("cursor_position", {}) == "[100, 50]"
@@ -238,3 +239,27 @@ def test_codigo_padrao_1_quando_nao_informado():
     assert all(previa[c] == "1" for c in ("servico", "funcao", "centro_custo", "sindicato"))
     assert previa["com_codigo_padrao_1"] == ["Serviço", "Função", "Centro de custo", "Sindicato"]
     assert "código 1" in ia.sistema_dominio("rds")
+
+
+def test_tela_espera_depois_das_acoes(monkeypatch):
+    dormiu = []
+    monkeypatch.setattr(tela_mod.time, "sleep", dormiu.append)
+
+    class G:
+        def moveTo(self, *a, **k): pass
+        def click(self, *a, **k): pass
+    t = tela_mod.Tela(gui=G(), capturar=lambda: FakeImg((1366, 768)), digitar=lambda s: None, ritmo=1.2)
+    t.executar("left_click", {"coordinate": [10, 10]})
+    t.executar("type", {"text": "abc"})
+    assert dormiu == [1.2, 1.2]
+
+
+def test_previa_e_mensagem_levam_o_cnpj_da_empresa():
+    previa, _ = ia.montar_previa({"nome": "x"}, {**EMPRESA, "cnpj": "64184866000182"}, MATERIAL)
+    assert previa["empresa_cnpj"] == "64184866000182"
+    assert "CNPJ" in ia.sistema_dominio("rds") and "apelido" in ia.sistema_dominio("rds")
+
+
+def test_troca_de_empresa_pelo_icone_do_predio():
+    s = ia.sistema_dominio("rds")
+    assert "ícone do prédio" in s and '"Acessar"' in s and "sem nenhuma janela aberta" in s

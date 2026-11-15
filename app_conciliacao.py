@@ -876,6 +876,63 @@ def _adm_rotulo_cliente(lista_clientes: list, codigo: str) -> str:
     return next((f"{c['codigo_dominio']} - {c['nome']}" for c in lista_clientes if c["codigo_dominio"] == codigo), codigo)
 
 
+_ADM_INTERVALO_S = 10
+
+
+def _adm_estado(escritorio_id: str) -> dict:
+    """Assinatura da lista (id -> situação, última alteração) para saber se algo mudou."""
+    return {l["id"]: (l["status"], str(l["atualizado_em"])) for l in admissoes.listar(escritorio_id, limite=200)}
+
+
+@st.dialog("Admissão aguardando aprovação")
+def _adm_dialogo_aprovar(escritorio_id: str, ids: list) -> None:
+    linhas = {l["id"]: l for l in admissoes.listar(escritorio_id, [admissoes.AWAITING_APPROVAL])}
+    mostradas = [linhas[i] for i in ids if i in linhas]
+    if not mostradas:
+        st.write("Essa solicitação já foi decidida.")
+        return
+    st.write("O agente montou a prévia. Confira e aprove para ele preencher no Domínio.")
+    for l in mostradas:
+        st.markdown(f"**Nº {l['id']}** · {l['cliente_nome'] or l.get('empresa_nome') or l['empresa_ref']}"
+                    + (f"  \n{l['resumo']}" if l.get("resumo") else ""))
+        if st.button("Abrir para conferir e aprovar", type="primary", key=f"adm_pop_{l['id']}"):
+            st.session_state["adm_abrir"] = l["id"]
+            st.rerun()
+
+
+def _adm_vigiar(escritorio_id: str, pode_aprovar: bool) -> None:
+    """Atualiza a tela sozinha quando alguma solicitação muda de situação
+    (confere a cada _ADM_INTERVALO_S s sem refazer a tela), avisa com um
+    toast e abre um pop-up quando chega prévia para aprovar."""
+    chave = f"adm_estado_{escritorio_id}"
+    avisadas = st.session_state.setdefault("adm_avisadas", set())
+    if chave not in st.session_state:
+        st.session_state[chave] = _adm_estado(escritorio_id)
+
+    @st.fragment(run_every=_ADM_INTERVALO_S)
+    def _vigia() -> None:
+        atual = _adm_estado(escritorio_id)
+        antes = st.session_state.get(chave, {})
+        if atual == antes:
+            return
+        st.session_state[chave] = atual
+        st.session_state["adm_toasts"] = [
+            f"Nº {i}: {admissoes.STATUS_ROTULO.get(atual[i][0], atual[i][0])}"
+            for i, v in atual.items() if antes.get(i) != v]
+        st.rerun()
+
+    _vigia()
+    for msg in st.session_state.pop("adm_toasts", []):
+        st.toast(msg, icon="🔔")
+    if pode_aprovar:
+        estado = st.session_state[chave]
+        novas = [i for i, (status, _) in estado.items()
+                 if status == admissoes.AWAITING_APPROVAL and i not in avisadas]
+        if novas:
+            avisadas.update(novas)
+            _adm_dialogo_aprovar(escritorio_id, novas)
+
+
 def _tela_admissoes() -> None:
     """Admissões: solicitações que chegam dos canais (Acessórias, ONVIO,
     WhatsApp) pela API (api.py, /api/admissoes/eventos), fila do agente da
@@ -902,6 +959,7 @@ def _tela_admissoes() -> None:
             index=ids.index(escritorio_id) if escritorio_id in ids else 0, key="adm_escritorio",
         )
     pode_aprovar = admissoes.pode_aprovar(papel)
+    _adm_vigiar(escritorio_id, pode_aprovar)
 
     contagem = admissoes.contagem_por_status(escritorio_id)
     cols = st.columns(6)
@@ -914,6 +972,11 @@ def _tela_admissoes() -> None:
     lista_clientes = clientes.listar_clientes(escritorio_id)
 
     with aba_lista:
+        abrir = st.session_state.pop("adm_abrir", None)
+        if abrir:  # veio do pop-up: limpa os filtros e abre a solicitação
+            for k in ("adm_f_status", "adm_f_canal", "adm_f_cliente"):
+                st.session_state.pop(k, None)  # volta ao padrão (pendentes, todos, todas)
+            st.session_state["adm_escolhida"] = abrir
         f1, f2, f3 = st.columns([2, 1, 1.4])
         filtro_status = f1.multiselect(
             "Situação", list(admissoes.STATUS_ROTULO), default=_ADM_PENDENTES,
