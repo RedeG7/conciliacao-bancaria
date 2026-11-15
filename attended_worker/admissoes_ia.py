@@ -41,6 +41,8 @@ CAMPOS = [
     ("cep", "CEP"), ("logradouro", "Logradouro"), ("numero", "Número"), ("complemento", "Complemento"),
     ("bairro", "Bairro"), ("cidade", "Cidade"), ("uf", "UF"), ("telefone", "Telefone"), ("email", "E-mail"),
     ("data_admissao", "Data de admissão"), ("cargo", "Cargo"), ("salario", "Salário"),
+    ("servico", "Serviço"), ("funcao", "Função"), ("departamento", "Departamento"),
+    ("centro_custo", "Centro de custo"), ("sindicato", "Sindicato"),
     ("tipo_salario", "Tipo de salário (mensal/horista)"), ("horario_trabalho", "Horário de trabalho"),
     ("tipo_contrato", "Tipo de contrato"), ("dias_experiencia", "Dias de experiência"),
     ("banco", "Banco"), ("agencia", "Agência"), ("conta", "Conta"), ("vale_transporte", "Vale-transporte"),
@@ -52,6 +54,9 @@ ROTULO = dict(CAMPOS)
 OBRIGATORIOS = ("nome", "cpf", "data_nascimento", "data_admissao", "cargo", "salario")
 # sem ASO nos anexos a prévia sai assim mesmo: o DP confere o ASO antes de aprovar
 CAMPOS_ASO = ("aso_data", "aso_resultado", "aso_medico_nome", "aso_medico_crm", "aso_medico_uf")
+# no Domínio: vai o que veio no cadastro (código ou nome); sem informação, código 1
+CAMPOS_CODIGO_PADRAO = ("servico", "funcao", "departamento", "centro_custo", "sindicato")
+CODIGO_PADRAO = "1"
 
 # texto simples, "" = não consta: a saída estruturada aceita no máximo 16
 # campos com união de tipos (string|null), e a ficha tem mais de 40
@@ -223,12 +228,16 @@ def montar_previa(extraido: dict, empresa: dict, material: dict,
     previa: dict = {
         "empresa_codigo_dominio": empresa.get("codigo_dominio", ""),
         "empresa_nome": empresa.get("nome", ""),
-        "servico": 1,
     }
     for chave, _ in CAMPOS:
         valor = extraido.get(chave)
         if valor not in (None, ""):
             previa[chave] = str(valor).strip()
+    padrao = [c for c in CAMPOS_CODIGO_PADRAO if not previa.get(c)]
+    for c in padrao:
+        previa[c] = CODIGO_PADRAO
+    if padrao:
+        previa["com_codigo_padrao_1"] = [ROTULO[c] for c in padrao]
     dependentes = [d for d in (extraido.get("dependentes") or []) if any(d.values())]
     if dependentes:
         previa["dependentes"] = dependentes
@@ -291,8 +300,11 @@ Procedimento (Domínio Folha):
 "bloqueado" ("empregado já cadastrado").
 4. Novo empregado: confira a matrícula eSocial sugerida e preencha os dados pessoais, documentos, endereço e \
 dados contratuais da prévia.
-5. Serviço código 1. Confira o cargo; se não existir, finalize "bloqueado" ("cargo não cadastrado") - não \
-cadastre cargo nesta versão.
+5. Serviço, Função, Departamento, Centro de custo e Sindicato: digite o valor da prévia (código ou nome \
+informado no cadastro; pesquise com F2 quando vier nome). Se a prévia trouxer "1", use o código 1. Se o \
+valor informado não existir no Domínio, use o código 1 e diga isso no motivo ao finalizar (sem dados \
+pessoais). Não cadastre serviço, função, departamento, centro de custo nem sindicato.
+Confira o cargo; se não existir, finalize "bloqueado" ("cargo não cadastrado") - não cadastre cargo nesta versão.
 6. ASO: data e médico. Use F2 para pesquisar o médico; se não existir, cadastre com F7 só com nome, CRM e UF da prévia.
 7. Confira cada aba preenchida com um print e chame finalizar ("preenchido"), sem salvar.
 

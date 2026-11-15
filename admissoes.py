@@ -51,8 +51,14 @@ CANAIS = ("acessorias", "onvio", "whatsapp")
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
 # O programa do agente tem versão própria em attended_worker/VERSION_ADMISSOES
 # (é ela que dispara a atualização automática do .exe).
-VERSAO = "1.3"
+VERSAO = "1.4"
 NOVIDADES = [
+    ("1.4", "14/11/2026", [
+        "Serviço, Função, Departamento, Centro de custo e Sindicato: o agente usa o que veio no cadastro "
+        "(código ou nome); sem informação, ou se não existir no Domínio, usa o código 1.",
+        "Agente 1.3: toda vez que abre, consulta o Hub e, se tiver versão nova, baixa e reabre sozinho "
+        "antes de mostrar a janela (mesmo nome de arquivo, atalhos continuam valendo).",
+    ]),
     ("1.3", "14/11/2026", [
         "Botão \"Marcar como concluída\" depois de conferir e salvar no Domínio; concluída pode voltar para a fila.",
         "Tarefa presa \"Com o agente\" volta sozinha: preparo para a fila em 20 min; gravação vira bloqueada em 90 min.",

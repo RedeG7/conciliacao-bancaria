@@ -4,6 +4,10 @@
 sessão RDS do servidor ou num computador local - escolhido na janela).
 Núcleo em admissoes_agent.py.
 
+Ao abrir, antes da janela, o programa consulta o Hub: se houver versão
+nova, baixa, troca o próprio .exe (mesmo nome - atalhos continuam valendo)
+e reabre sozinho. Sem conexão com o Hub, abre a versão atual.
+
 Fluxo: entrar com a conta do Hub dedicada ao agente > Iniciar. O programa
 consulta o Hub a cada 15 s; quando há admissão na fila, monta a prévia
 (pelo formulário do Acessórias ou com a IA ligada no Hub, em Canais e
@@ -55,6 +59,95 @@ def _versao_maior(a: str, b: str) -> bool:
 VERSAO_ATUAL = _ler_versao_local()
 
 
+# ---------------------------------------------------------------------------
+# atualização ao abrir
+# ---------------------------------------------------------------------------
+
+def versao_no_hub(timeout: int = 8) -> str:
+    r = requests.get(f"{hub_api.BASE_URL}/attended-admissoes/versao", timeout=timeout)
+    r.raise_for_status()
+    return str(r.json()["versao"])
+
+
+def baixar_exe_do_hub() -> bytes:
+    import io
+    import zipfile
+    with requests.get(f"{hub_api.BASE_URL}/attended-admissoes/download-zip", timeout=120) as r:
+        r.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+            return zf.read("admissoes_agente.exe")
+
+
+def trocar_exe(exe_atual: Path, conteudo: bytes) -> Path:
+    """Põe a versão nova no MESMO caminho do .exe em uso. O Windows não
+    deixa sobrescrever um .exe rodando, mas deixa renomear: o atual vira
+    .old (apagado na próxima abertura) e o novo entra no lugar."""
+    novo_tmp = exe_atual.with_name(exe_atual.name + ".novo")
+    novo_tmp.write_bytes(conteudo)
+    antigo = exe_atual.with_name(exe_atual.name + ".old")
+    antigo.unlink(missing_ok=True)
+    exe_atual.rename(antigo)
+    try:
+        novo_tmp.rename(exe_atual)
+    except OSError:
+        antigo.rename(exe_atual)  # desfaz: continua na versão atual
+        raise
+    return exe_atual
+
+
+def limpar_sobras(exe_atual: Path) -> None:
+    for sufixo in (".old", ".novo"):
+        try:
+            exe_atual.with_name(exe_atual.name + sufixo).unlink(missing_ok=True)
+        except OSError:
+            pass  # o .old ainda pode estar em uso por alguns segundos
+
+
+def atualizar_antes_de_abrir(exe_atual: Path, versao_local: str, consultar=versao_no_hub,
+                             baixar=baixar_exe_do_hub, aviso=lambda texto: None) -> str:
+    """Retorna "atualizado" (o .exe novo está no lugar: reabrir), "em_dia"
+    ou "sem_hub" (abre a versão atual)."""
+    limpar_sobras(exe_atual)
+    aviso("Verificando atualização no Hub...")
+    try:
+        versao = consultar()
+    except Exception:
+        return "sem_hub"
+    if not _versao_maior(versao, versao_local):
+        return "em_dia"
+    aviso(f"Baixando a versão {versao}...")
+    try:
+        trocar_exe(exe_atual, baixar())
+    except Exception:
+        return "sem_hub"
+    return "atualizado"
+
+
+def _janela_de_atualizacao() -> bool:
+    """Janelinha enquanto consulta/baixa. True = reabriu na versão nova
+    (este processo deve sair)."""
+    exe = Path(sys.executable).resolve()
+    raiz = tk.Tk()
+    raiz.title(NOME_APP)
+    raiz.geometry("380x90")
+    raiz.resizable(False, False)
+    texto = tk.StringVar(value="Verificando atualização no Hub...")
+    ttk.Label(raiz, textvariable=texto, padding=16).pack(fill="both", expand=True)
+    resultado: dict = {}
+
+    def trabalho() -> None:
+        resultado["r"] = atualizar_antes_de_abrir(
+            exe, VERSAO_ATUAL, aviso=lambda t: raiz.after(0, texto.set, t))
+        raiz.after(0, raiz.destroy)
+
+    threading.Thread(target=trabalho, daemon=True).start()
+    raiz.mainloop()
+    if resultado.get("r") == "atualizado":
+        subprocess.Popen([str(exe)], creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+        return True
+    return False
+
+
 def _carregar_config() -> dict:
     try:
         return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
@@ -81,7 +174,7 @@ class App(tk.Tk):
         self._rodando = False
         self._montar_ui()
         self._atualizar_estado_login()
-        self.after(800, self._checar_atualizacao)
+        self.after(3600 * 1000, self._checar_atualizacao)
 
     # -- tela -------------------------------------------------------------
     def _montar_ui(self) -> None:
@@ -223,8 +316,11 @@ class App(tk.Tk):
 
     # -- auto-atualização (mesmo esquema do gui_nfgo.py) -------------------
     def _checar_atualizacao(self) -> None:
+        # ao abrir já atualizou (main); aqui é só para avisar quando sair
+        # versão nova com o programa aberto - confere de hora em hora
         if getattr(sys, "frozen", False):
             threading.Thread(target=self._checar_atualizacao_bg, daemon=True).start()
+            self.after(3600 * 1000, self._checar_atualizacao)
 
     def _checar_atualizacao_bg(self) -> None:
         try:
@@ -238,31 +334,13 @@ class App(tk.Tk):
 
     def _perguntar_atualizar(self, versao_nova: str) -> None:
         if self._rodando:
-            self._log(f"Versão nova disponível (v{versao_nova}) - pare o agente e reabra para atualizar.")
+            self._log(f"Versão nova disponível (v{versao_nova}) - pare o agente e reabra o programa para atualizar.")
             return
         if messagebox.askyesno(NOME_APP, f"Tem uma versão nova (v{versao_nova} — você está na v{VERSAO_ATUAL}).\n\n"
-                               "Atualizar agora? O programa baixa a versão nova e reabre sozinho."):
-            threading.Thread(target=self._baixar_e_atualizar_bg, args=(versao_nova,), daemon=True).start()
-
-    def _baixar_e_atualizar_bg(self, versao_nova: str) -> None:
-        import zipfile
-        exe_novo = Path(sys.executable).resolve().with_name(f"admissoes_agente_v{versao_nova}.exe")
-        temp_zip = exe_novo.with_suffix(".zip.part")
-        try:
-            with requests.get(f"{hub_api.BASE_URL}/attended-admissoes/download-zip", stream=True, timeout=60) as r:
-                r.raise_for_status()
-                with temp_zip.open("wb") as f:
-                    for pedaco in r.iter_content(chunk_size=262144):
-                        f.write(pedaco)
-            with zipfile.ZipFile(temp_zip) as zf:
-                exe_novo.write_bytes(zf.read("admissoes_agente.exe"))
-        except Exception as exc:
-            self._log(f"Atualização falhou: {exc}")
-            return
-        finally:
-            temp_zip.unlink(missing_ok=True)
-        subprocess.Popen(["cmd", "/c", "start", "", str(exe_novo)], creationflags=_SEM_JANELA)
-        os._exit(0)
+                               "Reabrir agora para atualizar?"):
+            subprocess.Popen([str(Path(sys.executable).resolve())],
+                             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+            os._exit(0)
 
 
 def main() -> None:
@@ -272,7 +350,12 @@ def main() -> None:
         sys.stderr = open(os.devnull, "w", encoding="utf-8")
     if os.environ.get("HUB_API_URL"):
         hub_api.BASE_URL = os.environ["HUB_API_URL"].rstrip("/")
-    App().mainloop()
+    # sempre confere no Hub antes de abrir (só no .exe; rodando o .py não há o que trocar)
+    if getattr(sys, "frozen", False) and _janela_de_atualizacao():
+        return
+    app = App()
+    app.after(0, app._log, f"Versão {VERSAO_ATUAL}.")
+    app.mainloop()
 
 
 if __name__ == "__main__":

@@ -50,7 +50,7 @@ def test_preparo_le_documentos_e_manda_previa(chamadas, ctx, monkeypatch):
     assert agente.processar(ctx, _preparo()) == "awaiting_approval"
     tipo, i, previa = chamadas[0]
     assert tipo == "previa" and i == 1
-    assert previa["empresa_codigo_dominio"] == "101" and previa["servico"] == 1 and previa["cpf"] == "52998224725"
+    assert previa["empresa_codigo_dominio"] == "101" and previa["servico"] == "1" and previa["cpf"] == "52998224725"
 
 
 def test_preparo_com_dado_faltando_pede_documentos_sem_dado_pessoal(chamadas, ctx, monkeypatch):
