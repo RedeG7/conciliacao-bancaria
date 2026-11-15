@@ -54,11 +54,11 @@ def test_preparo_le_documentos_e_manda_previa(chamadas, ctx, monkeypatch):
 
 
 def test_preparo_com_dado_faltando_pede_documentos_sem_dado_pessoal(chamadas, ctx, monkeypatch):
-    ficha = {**FICHA_OK, "aso_medico_crm": None, "cpf": "11111111111"}
+    ficha = {**FICHA_OK, "data_admissao": None, "cpf": "11111111111"}
     monkeypatch.setattr(agente.ia, "ler_documentos", lambda cli, mat, emp: ficha)
     assert agente.processar(ctx, _preparo()) == "awaiting_documents"
     _, _, status, motivo, _ = chamadas[0]
-    assert status == "awaiting_documents" and "CRM do médico" in motivo and "CPF válido" in motivo
+    assert status == "awaiting_documents" and "Data de admissão" in motivo and "CPF válido" in motivo
     assert "Maria" not in motivo and "11111111111" not in motivo
 
 
@@ -71,6 +71,13 @@ def test_ia_completa_com_o_formulario(chamadas, ctx, monkeypatch):
     # só preenche o que a IA deixou vazio
     assert previa["cargo"] == "Atendente" and previa["nome"] == "Maria Teste"
     assert previa["campos_vindos_do_formulario"] == ["Cargo"]
+
+
+def test_sem_aso_a_previa_sai_e_o_dp_confere(chamadas, ctx, monkeypatch):
+    sem_aso = {**FICHA_OK, **{c: "" for c in agente.ia.CAMPOS_ASO}}
+    monkeypatch.setattr(agente.ia, "ler_documentos", lambda cli, mat, emp: sem_aso)
+    assert agente.processar(ctx, _preparo()) == "awaiting_approval"
+    assert "Data do ASO" in chamadas[0][2]["a_conferir_pelo_dp"]
 
 
 def test_preparo_sem_documento_legivel(chamadas, ctx, monkeypatch):

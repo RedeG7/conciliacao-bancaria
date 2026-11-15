@@ -51,8 +51,15 @@ CANAIS = ("acessorias", "onvio", "whatsapp")
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
 # O programa do agente tem versão própria em attended_worker/VERSION_ADMISSOES
 # (é ela que dispara a atualização automática do .exe).
-VERSAO = "1.2"
+VERSAO = "1.3"
 NOVIDADES = [
+    ("1.3", "14/11/2026", [
+        "Botão \"Marcar como concluída\" depois de conferir e salvar no Domínio; concluída pode voltar para a fila.",
+        "Tarefa presa \"Com o agente\" volta sozinha: preparo para a fila em 20 min; gravação vira bloqueada em 90 min.",
+        "ASO deixou de ser obrigatório: sem ASO nos anexos, a prévia sai e o DP confere o ASO antes de aprovar.",
+        "Contador \"Com o agente\" no topo da tela.",
+        "Agente 1.2 (atualiza sozinho): ASO opcional na leitura.",
+    ]),
     ("1.2", "14/11/2026", [
         "Número da versão e novidades na tela de Admissões.",
         "Versão do agente nos botões de download.",
@@ -103,6 +110,12 @@ _SAIDAS_AGENTE = {
 }
 # de onde o DP pode devolver uma tarefa (claimed = agente travou/fechou)
 _DEVOLVIVEIS = {AWAITING_DOCUMENTS, BLOCKED, FAILED, CLAIMED}
+
+# reserva sem resposta do agente (programa fechado, travado, sessão caiu):
+# preparo não grava nada, então volta para a fila; gravação pode ter
+# deixado algo no Domínio, então vira bloqueada para o DP conferir
+PRESA_PREPARO_MIN = 20
+PRESA_GRAVACAO_MIN = 90
 
 PAPEIS_APROVADORES = (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO)
 
@@ -376,11 +389,43 @@ def receber_solicitacao(
 # Agente (sessão RDS)
 # ---------------------------------------------------------------------------
 
+def liberar_presas(escritorio_id: str) -> int:
+    """Tarefas reservadas há tempo demais sem resposta do agente (ver
+    PRESA_*_MIN). Retorna quantas foram liberadas."""
+    with auth.conectar() as conn:
+        presas = conn.execute("""
+            SELECT id, fase FROM admissoes
+            WHERE escritorio_id = %s AND status = %s AND (
+                (fase = %s AND atualizado_em < now() - make_interval(mins => %s)) OR
+                (fase = %s AND atualizado_em < now() - make_interval(mins => %s)))
+            FOR UPDATE SKIP LOCKED
+        """, (escritorio_id, CLAIMED, FASE_PREPARO, PRESA_PREPARO_MIN,
+              FASE_GRAVACAO, PRESA_GRAVACAO_MIN)).fetchall()
+        for p in presas:
+            if p["fase"] == FASE_GRAVACAO:
+                motivo = (f"O agente não respondeu em {PRESA_GRAVACAO_MIN} min durante o preenchimento no Domínio. "
+                          "Confira no Domínio o que ficou na tela antes de devolver.")
+                conn.execute("UPDATE admissoes SET status = %s, motivo = %s, atualizado_em = now() WHERE id = %s",
+                             (BLOCKED, motivo, p["id"]))
+                _evento(conn, p["id"], CLAIMED, BLOCKED, "sistema", "sistema", motivo)
+            else:
+                motivo = f"O agente não respondeu em {PRESA_PREPARO_MIN} min - voltou para a fila"
+                conn.execute("""
+                    UPDATE admissoes SET status = %s, fase = NULL, reservado_por = NULL, reservado_em = NULL,
+                                         motivo = NULL, atualizado_em = now()
+                    WHERE id = %s
+                """, (QUEUED, p["id"]))
+                _evento(conn, p["id"], CLAIMED, QUEUED, "sistema", "sistema", motivo)
+        conn.commit()
+    return len(presas)
+
+
 def reservar_proxima(escritorio_id: str, agente: str) -> Optional[dict]:
     """Reserva a próxima tarefa do escritório para o agente. Aprovadas vêm
     antes (terminar o que o DP já liberou) e entram na fase gravacao; as da
     fila entram na fase preparo. SKIP LOCKED: dois agentes nunca pegam a
-    mesma tarefa."""
+    mesma tarefa. Antes, libera as reservas presas (liberar_presas)."""
+    liberar_presas(escritorio_id)
     with auth.conectar() as conn:
         linha = conn.execute("""
             SELECT * FROM admissoes
@@ -575,6 +620,49 @@ def devolver_a_fila(admissao_id: int, escritorio_id: str, usuario: str, motivo: 
             WHERE id = %s RETURNING *
         """, (novo, fase, cliente_id, novo, AWAITING_APPROVAL, admissao_id)).fetchone()
         _evento(conn, admissao_id, de, novo, usuario, "usuario", motivo or "Devolvida pelo DP")
+        conn.commit()
+    return linha
+
+
+def concluir(admissao_id: int, escritorio_id: str, usuario: str, papel: str, observacao: str = "") -> dict:
+    """O DP conferiu e salvou o cadastro no Domínio (modo conferência: o
+    agente preenche e para antes de salvar). Só depois da aprovação."""
+    if not pode_aprovar(papel):
+        raise SemPermissao("Só administradores do escritório concluem admissões")
+    with auth.conectar() as conn:
+        linha = _travar(conn, admissao_id, escritorio_id)
+        if linha["fase"] != FASE_GRAVACAO or linha["status"] not in (BLOCKED, FAILED):
+            raise TransicaoInvalida("Só dá para concluir depois da aprovação, quando o agente devolveu a tarefa")
+        de = linha["status"]
+        linha = conn.execute("""
+            UPDATE admissoes SET status = %s, motivo = NULL, protocolo = COALESCE(%s, protocolo),
+                                 atualizado_em = now()
+            WHERE id = %s RETURNING *
+        """, (COMPLETED, _texto(observacao)[:200] or None, admissao_id)).fetchone()
+        _evento(conn, admissao_id, de, COMPLETED, usuario, "usuario", observacao or "Concluída pelo DP")
+        conn.commit()
+    return linha
+
+
+def reabrir(admissao_id: int, escritorio_id: str, usuario: str, papel: str, motivo: str) -> dict:
+    """Concluída que não ficou certa: volta para a fila do zero (o agente
+    monta a prévia de novo e ela passa pela aprovação outra vez)."""
+    if not pode_aprovar(papel):
+        raise SemPermissao("Só administradores do escritório reabrem admissões")
+    if len(_texto(motivo)) < 3:
+        raise TransicaoInvalida("Informe o que não ficou certo")
+    with auth.conectar() as conn:
+        linha = _travar(conn, admissao_id, escritorio_id)
+        if linha["status"] != COMPLETED:
+            raise TransicaoInvalida("Só admissão concluída pode ser reaberta")
+        linha = conn.execute("""
+            UPDATE admissoes SET status = %s, fase = NULL, previa = NULL, previa_hash = NULL,
+                                 aprovado_hash = NULL, decidido_por = NULL, decidido_em = NULL,
+                                 decisao_obs = NULL, reservado_por = NULL, reservado_em = NULL,
+                                 motivo = NULL, protocolo = NULL, atualizado_em = now()
+            WHERE id = %s RETURNING *
+        """, (QUEUED, admissao_id)).fetchone()
+        _evento(conn, admissao_id, COMPLETED, QUEUED, usuario, "usuario", motivo)
         conn.commit()
     return linha
 

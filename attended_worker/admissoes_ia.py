@@ -49,8 +49,9 @@ CAMPOS = [
     ("aso_medico_uf", "UF do CRM do médico"),
 ]
 ROTULO = dict(CAMPOS)
-OBRIGATORIOS = ("nome", "cpf", "data_nascimento", "data_admissao", "cargo", "salario",
-                "aso_data", "aso_medico_nome", "aso_medico_crm", "aso_medico_uf")
+OBRIGATORIOS = ("nome", "cpf", "data_nascimento", "data_admissao", "cargo", "salario")
+# sem ASO nos anexos a prévia sai assim mesmo: o DP confere o ASO antes de aprovar
+CAMPOS_ASO = ("aso_data", "aso_resultado", "aso_medico_nome", "aso_medico_crm", "aso_medico_uf")
 
 # texto simples, "" = não consta: a saída estruturada aceita no máximo 16
 # campos com união de tipos (string|null), e a ficha tem mais de 40
@@ -235,6 +236,9 @@ def montar_previa(extraido: dict, empresa: dict, material: dict,
         previa["observacoes_da_leitura"] = list(extraido["observacoes"])
     previa["documentos_lidos"] = list(extraido.get("documentos_identificados") or
                                       [d["nome"] for d in material.get("documentos") or []])
+    sem_aso = [ROTULO[c] for c in CAMPOS_ASO if c not in previa]
+    if sem_aso:
+        previa["a_conferir_pelo_dp"] = sem_aso
     return previa, faltando
 
 

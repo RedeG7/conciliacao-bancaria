@@ -85,8 +85,9 @@ def test_montar_previa():
     assert faltando == []
     assert previa["empresa_codigo_dominio"] == "101" and "bairro" not in previa and "dependentes" not in previa
     assert previa["observacoes_da_leitura"] == ["datas divergentes"]
-    _, faltando = ia.montar_previa({**ficha, "cargo": " ", "aso_data": None}, EMPRESA, MATERIAL)
-    assert faltando == ["Cargo", "Data do ASO"]
+    previa, faltando = ia.montar_previa({**ficha, "cargo": " ", "aso_data": None}, EMPRESA, MATERIAL)
+    # ASO não trava a prévia: vai para o DP conferir
+    assert faltando == ["Cargo"] and "Data do ASO" in previa["a_conferir_pelo_dp"]
 
 
 # --- operação do Domínio ------------------------------------------------------

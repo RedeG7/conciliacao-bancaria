@@ -904,9 +904,9 @@ def _tela_admissoes() -> None:
     pode_aprovar = admissoes.pode_aprovar(papel)
 
     contagem = admissoes.contagem_por_status(escritorio_id)
-    cols = st.columns(5)
+    cols = st.columns(6)
     for col, status in zip(cols, [admissoes.AWAITING_APPROVAL, admissoes.AWAITING_DOCUMENTS,
-                                  admissoes.BLOCKED, admissoes.FAILED, admissoes.QUEUED]):
+                                  admissoes.BLOCKED, admissoes.FAILED, admissoes.QUEUED, admissoes.CLAIMED]):
         col.metric(admissoes.STATUS_ROTULO[status], contagem.get(status, 0))
 
     aba_lista, aba_nova, aba_empresas, aba_canais = st.tabs(
@@ -1324,7 +1324,25 @@ def _detalhe_admissao(admissao_id: int, escritorio_id: str, usuario: str, papel:
             if st.button("Desfazer aprovação (rejeitar)", key=f"adm_desfazer_{a['id']}"):
                 _adm_acao(lambda: admissoes.rejeitar(a["id"], escritorio_id, usuario, papel, motivo),
                           "Aprovação desfeita.")
-        elif a["status"] in (admissoes.AWAITING_DOCUMENTS, admissoes.BLOCKED, admissoes.FAILED, admissoes.CLAIMED):
+        elif a["status"] == admissoes.COMPLETED and pode_aprovar:
+            st.caption("Conferiu e não ficou igual? Volte para a fila: o agente monta a prévia de novo "
+                       "e ela passa pela aprovação outra vez.")
+            motivo = st.text_input("O que não ficou certo?", key=f"adm_reab_{a['id']}")
+            if st.button("Voltar para a fila", key=f"adm_reabrir_{a['id']}"):
+                _adm_acao(lambda: admissoes.reabrir(a["id"], escritorio_id, usuario, papel, motivo),
+                          "Voltou para a fila.")
+        if a["status"] in (admissoes.AWAITING_DOCUMENTS, admissoes.BLOCKED, admissoes.FAILED, admissoes.CLAIMED):
+            if a["status"] == admissoes.CLAIMED:
+                st.caption(f"Se o agente parou (programa fechado, sessão caiu), devolva. Sem resposta, a tarefa volta "
+                           f"sozinha: preparo em {admissoes.PRESA_PREPARO_MIN} min, gravação em "
+                           f"{admissoes.PRESA_GRAVACAO_MIN} min (vira bloqueada).")
+            if a["fase"] == admissoes.FASE_GRAVACAO and a["status"] in (admissoes.BLOCKED, admissoes.FAILED) \
+                    and pode_aprovar:
+                st.markdown("**Conferiu e salvou no Domínio?**")
+                obs_c = st.text_input("Observação / matrícula no Domínio (opcional)", key=f"adm_conc_{a['id']}")
+                if st.button("Marcar como concluída", type="primary", key=f"adm_concluir_{a['id']}"):
+                    _adm_acao(lambda: admissoes.concluir(a["id"], escritorio_id, usuario, papel, obs_c),
+                              "Concluída.")
             if a["fase"] == admissoes.FASE_GRAVACAO:
                 destino = "para aprovação de novo"
                 st.caption("Falhou ao salvar: confira no Domínio o que já foi gravado antes de aprovar de novo.")
