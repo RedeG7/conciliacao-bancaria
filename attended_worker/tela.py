@@ -20,6 +20,12 @@ from typing import Callable, Optional
 # limite do modelo é 2576 px)
 LADO_MAX = 1366
 
+# sessão remota + Domínio respondem devagar: espera depois de cada ação
+# para o próximo print já mostrar o efeito (sem isso o modelo repete o
+# clique/digitação e os dois entram depois, fora de ordem)
+RITMO_S = 1.2
+PAUSA_TECLA_S = 0.04
+
 _TECLAS = {
     "return": "enter", "kp_enter": "enter", "escape": "esc", "page_down": "pagedown",
     "page_up": "pageup", "super": "win", "cmd": "win", "control": "ctrl", "ctl": "ctrl",
@@ -54,12 +60,15 @@ def _escapar_send_keys(texto: str) -> str:
 
 class Tela:
     def __init__(self, gui=None, capturar: Optional[Callable] = None,
-                 digitar: Optional[Callable[[str], None]] = None, lado_max: int = LADO_MAX):
+                 digitar: Optional[Callable[[str], None]] = None, lado_max: int = LADO_MAX,
+                 ritmo: Optional[float] = None):
         if gui is None:
             import pyautogui as gui  # noqa: N813 - só no Windows da sessão RDS
             gui.FAILSAFE = True       # mouse no canto superior esquerdo interrompe
             gui.PAUSE = 0.15
+            ritmo = RITMO_S if ritmo is None else ritmo
         self._gui = gui
+        self._ritmo = ritmo or 0.0
         self._capturar = capturar or self._capturar_pil
         self._digitar = digitar or self._digitar_unicode
         self._lado_max = lado_max
@@ -114,7 +123,8 @@ class Tela:
         # acentos e ç: pyautogui.write só digita ASCII; o send_keys do
         # pywinauto manda o caractere Unicode direto
         from pywinauto.keyboard import send_keys
-        send_keys(_escapar_send_keys(texto), with_spaces=True, with_tabs=True, with_newlines=True, pause=0.01)
+        send_keys(_escapar_send_keys(texto), with_spaces=True, with_tabs=True, with_newlines=True,
+                  pause=PAUSA_TECLA_S)
 
     def _clicar(self, entrada: dict, botao: str = "left", vezes: int = 1) -> None:
         ponto = self._ponto(entrada.get("coordinate"))
@@ -123,7 +133,9 @@ class Tela:
             self._gui.keyDown(m)
         try:
             if ponto:
-                self._gui.click(ponto[0], ponto[1], clicks=vezes, interval=0.08, button=botao)
+                # leva o mouse antes e clica parado: o RDS perde clique "teleportado"
+                self._gui.moveTo(ponto[0], ponto[1], duration=0.15)
+                self._gui.click(ponto[0], ponto[1], clicks=vezes, interval=0.12, button=botao)
             else:
                 self._gui.click(clicks=vezes, interval=0.08, button=botao)
         finally:
@@ -133,7 +145,12 @@ class Tela:
     def executar(self, nome: str, entrada: dict):
         """Executa um membro da ferramenta. Retorna bytes PNG (screenshot,
         zoom) ou texto."""
-        entrada = entrada or {}
+        resultado = self._executar(nome, entrada or {})
+        if self._ritmo and nome not in ("screenshot", "zoom", "cursor_position", "wait"):
+            time.sleep(self._ritmo)
+        return resultado
+
+    def _executar(self, nome: str, entrada: dict):
         if nome not in MEMBROS:
             raise AcaoInvalida(f"Ação desconhecida: {nome}")
         if nome == "screenshot":
