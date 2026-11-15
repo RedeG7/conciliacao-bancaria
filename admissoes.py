@@ -51,8 +51,16 @@ CANAIS = ("acessorias", "onvio", "whatsapp")
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
 # O programa do agente tem versão própria em attended_worker/VERSION_ADMISSOES
 # (é ela que dispara a atualização automática do .exe).
-VERSAO = "1.5"
+VERSAO = "1.6"
 NOVIDADES = [
+    ("1.6", "15/11/2026", [
+        "Agente 1.5: para ver se o empregado já existe, pesquisa com F2 no campo Código (não usa mais o "
+        "\"Listagem >>\", que travava o Domínio); depois clica em Novo e para se o Domínio avisar CPF já "
+        "cadastrado.",
+        "Passo a passo completo do cadastro no Domínio: aba Geral (CPF, serviço, cargo, função, departamento, "
+        "centro de custo, sindicato, admissão, salário, vínculo), Pessoais (endereço, dados pessoais, "
+        "documentos), Profissionais (tipo de admissão, jornada) e ASO em Monitoramento de Saúde.",
+    ]),
     ("1.5", "15/11/2026", [
         "A tela de Admissões se atualiza sozinha quando uma solicitação muda de situação (confere a cada "
         "10 s) e mostra um aviso no canto da tela.",
