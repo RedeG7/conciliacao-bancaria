@@ -294,3 +294,83 @@ def test_versao_do_modulo_bate_com_as_novidades():
     assert adm.NOVIDADES[0][0] == adm.VERSAO
     versoes = [tuple(int(x) for x in v.split(".")) for v, _, _ in adm.NOVIDADES]
     assert versoes == sorted(versoes, reverse=True) and len(set(versoes)) == len(versoes)
+
+
+# ---------------------------------------------------------------- presas e conclusão
+
+def _envelhecer(admissao_id, minutos):
+    with auth.conectar() as conn:
+        conn.execute("UPDATE admissoes SET atualizado_em = now() - make_interval(mins => %s) WHERE id = %s",
+                     (minutos, admissao_id))
+        conn.commit()
+
+
+def test_preparo_preso_volta_sozinho_para_a_fila(db):
+    a = _nova()
+    adm.reservar_proxima(ESC_A, "agente")
+    _envelhecer(a["id"], adm.PRESA_PREPARO_MIN - 1)
+    assert adm.liberar_presas(ESC_A) == 0 and _status(a["id"]) == adm.CLAIMED
+    _envelhecer(a["id"], adm.PRESA_PREPARO_MIN + 1)
+    # a próxima reserva já libera e pega de novo
+    b = adm.reservar_proxima(ESC_A, "outro-agente")
+    assert b["id"] == a["id"] and b["reservado_por"] == "outro-agente"
+    assert any("não respondeu" in (e["motivo"] or "") for e in adm.listar_eventos(a["id"], ESC_A))
+
+
+def test_gravacao_presa_vira_bloqueada(db):
+    a = _ate_aprovada()
+    adm.reservar_proxima(ESC_A, "agente")
+    _envelhecer(a["id"], adm.PRESA_PREPARO_MIN + 1)
+    assert adm.liberar_presas(ESC_A) == 0
+    _envelhecer(a["id"], adm.PRESA_GRAVACAO_MIN + 1)
+    assert adm.liberar_presas(ESC_A) == 1
+    b = adm.obter(a["id"], ESC_A)
+    assert b["status"] == adm.BLOCKED and "Confira no Domínio" in b["motivo"]
+    # não volta sozinha para gravar de novo
+    assert adm.reservar_proxima(ESC_A, "agente") is None
+
+
+def test_presas_de_outro_escritorio_nao_mexe(db):
+    a = _nova()
+    adm.reservar_proxima(ESC_A, "agente")
+    _envelhecer(a["id"], 999)
+    assert adm.liberar_presas(ESC_B) == 0 and _status(a["id"]) == adm.CLAIMED
+
+
+def _ate_conferencia():
+    a = _ate_aprovada()
+    adm.reservar_proxima(ESC_A, "agente")
+    return adm.atualizar_pelo_agente(a["id"], ESC_A, "agente", adm.BLOCKED, "Modo conferência: confira e salve")
+
+
+def test_dp_conclui_depois_da_conferencia(db):
+    a = _ate_conferencia()
+    with pytest.raises(adm.SemPermissao):
+        adm.concluir(a["id"], ESC_A, "func", auth.PAPEL_USUARIO)
+    b = adm.concluir(a["id"], ESC_A, "dp_admin", ADMIN, "matrícula 123")
+    assert b["status"] == adm.COMPLETED and b["protocolo"] == "matrícula 123" and b["motivo"] is None
+
+
+def test_nao_conclui_antes_da_aprovacao(db):
+    a = _ate_aprovacao()
+    with pytest.raises(adm.TransicaoInvalida):
+        adm.concluir(a["id"], ESC_A, "dp_admin", ADMIN)
+    c = _nova("AC-2")
+    adm.reservar_proxima(ESC_A, "agente")
+    adm.atualizar_pelo_agente(c["id"], ESC_A, "agente", adm.BLOCKED, "faltou empresa")
+    with pytest.raises(adm.TransicaoInvalida):
+        adm.concluir(c["id"], ESC_A, "dp_admin", ADMIN)
+
+
+def test_concluida_errada_volta_para_a_fila_do_zero(db):
+    a = _ate_conferencia()
+    adm.concluir(a["id"], ESC_A, "dp_admin", ADMIN)
+    with pytest.raises(adm.TransicaoInvalida):
+        adm.reabrir(a["id"], ESC_A, "dp_admin", ADMIN, "")
+    b = adm.reabrir(a["id"], ESC_A, "dp_admin", ADMIN, "cargo ficou errado")
+    assert b["status"] == adm.QUEUED and b["previa"] is None and b["aprovado_hash"] is None
+    assert b["fase"] is None and b["reservado_por"] is None
+    # recomeça pelo preparo e precisa de nova aprovação
+    assert adm.reservar_proxima(ESC_A, "agente")["fase"] == adm.FASE_PREPARO
+    with pytest.raises(adm.TransicaoInvalida):
+        adm.reabrir(a["id"], ESC_A, "dp_admin", ADMIN, "de novo")

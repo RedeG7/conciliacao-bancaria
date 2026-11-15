@@ -108,7 +108,8 @@ def montar_previa(ficha: dict, empresa: dict, material: dict) -> tuple[dict, lis
     resto dos obrigatórios do cadastro (ASO, admissão...) vira conferência do DP."""
     previa, faltando = ia.montar_previa(ficha, empresa, material, obrigatorios=OBRIGATORIOS)
     previa["origem_dos_dados"] = "Formulário do Acessórias (sem IA)"
-    conferir = [ia.ROTULO[c] for c in ia.OBRIGATORIOS if c not in OBRIGATORIOS and not previa.get(c)]
+    conferir = [ia.ROTULO[c] for c in ia.OBRIGATORIOS + ia.CAMPOS_ASO
+                if c not in OBRIGATORIOS and not previa.get(c)]
     if conferir:
         previa["a_conferir_pelo_dp"] = conferir
     if ficha.get("_outros"):
