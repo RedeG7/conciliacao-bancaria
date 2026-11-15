@@ -263,3 +263,8 @@ def test_previa_e_mensagem_levam_o_cnpj_da_empresa():
 def test_troca_de_empresa_pelo_icone_do_predio():
     s = ia.sistema_dominio("rds")
     assert "ícone do prédio" in s and '"Acessar"' in s and "sem nenhuma janela aberta" in s
+
+
+def test_pesquisa_de_empregado_sem_listagem():
+    s = ia.sistema_dominio("rds")
+    assert "NUNCA use o botão \"Listagem >>\"" in s and "pressione F2" in s and "Clique em \"Novo\"" in s

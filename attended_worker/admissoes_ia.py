@@ -27,7 +27,7 @@ from typing import Callable, Optional
 
 MODELO = "claude-opus-5-5"
 BETA_FALLBACK = "server-side-fallback-2026-07-01"
-MAX_PASSOS_DOMINIO = 120
+MAX_PASSOS_DOMINIO = 250
 
 # (chave, rótulo) - o rótulo é o que aparece em pendência, nunca o valor
 CAMPOS = [
@@ -310,17 +310,44 @@ mostrar só o apelido (nome fantasia), diferente da razão social: isso não é 
 abertas e refaça a rota b) a d) com o código indicado. Tente no máximo 3 vezes; se ainda não for a \
 empresa certa, ou se o código levar a uma empresa com outro CNPJ/razão social, finalize "bloqueado" \
 ("código da empresa no Domínio não confere").
-3. Arquivo > Empregados: pesquise pelo CPF/nome para ver se o empregado já existe. Se existir, finalize \
-"bloqueado" ("empregado já cadastrado").
-4. Novo empregado: confira a matrícula eSocial sugerida e preencha os dados pessoais, documentos, endereço e \
-dados contratuais da prévia.
-5. Serviço, Função, Departamento, Centro de custo e Sindicato: digite o valor da prévia (código ou nome \
-informado no cadastro; pesquise com F2 quando vier nome). Se a prévia trouxer "1", use o código 1. Se o \
-valor informado não existir no Domínio, use o código 1 e diga isso no motivo ao finalizar (sem dados \
-pessoais). Não cadastre serviço, função, departamento, centro de custo nem sindicato.
-Confira o cargo; se não existir, finalize "bloqueado" ("cargo não cadastrado") - não cadastre cargo nesta versão.
-6. ASO: data e médico. Use F2 para pesquisar o médico; se não existir, cadastre com F7 só com nome, CRM e UF da prévia.
-7. Confira cada aba preenchida com um print e chame finalizar ("preenchido"), sem salvar.
+3. Arquivo > Empregados (abre mostrando um empregado já cadastrado - é normal, não mexa nele). Para ver se \
+o empregado novo já existe: clique no campo "Código" e pressione F2 (pesquisa de empregados); pesquise pelo \
+nome e confira o CPF. NUNCA use o botão "Listagem >>" (é relatório e trava a tela). Se a pesquisa do F2 não \
+abrir em alguns segundos, feche o que abriu com Esc e siga para o passo 4. Se o empregado já existir, \
+finalize "bloqueado" ("empregado já cadastrado").
+4. Clique em "Novo" (rodapé da janela): a tela fica em branco para o empregado novo. Nunca altere os dados \
+do empregado que estava na tela antes do "Novo".
+   - Matrícula eSocial: aceite a sugerida pelo Domínio.
+   - Nome: nome completo da prévia.
+5. Aba "Geral" (quadro Geral, de cima para baixo):
+   - CPF: digite só os números. Se o Domínio avisar que o CPF já está cadastrado, finalize "bloqueado" \
+("empregado já cadastrado").
+   - Serviço, Cargo, Função, Departamento, Centro de custo e Sindicato: digite o valor da prévia (código ou \
+nome informado no cadastro; quando vier nome, pesquise com F2 no campo e escolha o que confere). Se a \
+prévia trouxer "1", use o código 1. Se o valor informado não existir no Domínio, use o código 1 e diga isso \
+no motivo ao finalizar (sem dados pessoais). Não cadastre serviço, função, departamento, centro de custo \
+nem sindicato. Cargo: pesquise com F2 pelo nome da prévia; se não existir, finalize "bloqueado" ("cargo \
+não cadastrado") - não cadastre cargo.
+   - Convenção Coletiva: deixe a que o Domínio trouxer.
+   - Quadro Datas: Admissão = data_admissao da prévia (o Domínio calcula vencimento de férias e vantagem).
+   - Quadro do contrato (lado direito): tipo de salário (mensal/horista) e vínculo conforme a prévia; \
+Valor = salário da prévia (só números e vírgula). Contrato de experiência: botão "..." ao lado do vínculo, \
+com os dias de experiência da prévia (se a prévia não trouxer, deixe como está).
+6. Aba "Pessoais":
+   - Endereço: CEP (aguarde o Domínio completar; se não completar, digite logradouro, número, complemento, \
+bairro, cidade e UF da prévia), telefone e e-mail.
+   - Informações pessoais: data de nascimento, nacionalidade, naturalidade (município/UF), nome da mãe e do pai.
+   - Outros dados: sexo, estado civil, raça/cor e grau de instrução SOMENTE se estiverem na prévia (nunca deduza).
+   - Documentos pessoais: RG (número, órgão emissor/UF, data de emissão), CTPS, PIS e título de eleitor se \
+estiverem na prévia. Órgão emissor que não existir na lista: use "OE" (Outros Emissores) e digite o emissor.
+7. Aba "Profissionais": tipo de admissão (admissão normal, salvo se a prévia disser outro) e jornada/horário \
+de trabalho se a prévia trouxer. O resto, deixe como o Domínio trouxer.
+8. ASO (se a prévia tiver aso_data): em "Atestados e Exames" > "Monitoramento de Saúde", informe a data e o \
+resultado do ASO. No campo do médico, F2 para pesquisar e confira nome, CRM e UF; se não existir, F7 para \
+cadastrar só com nome completo, CRM e UF da prévia e selecione-o. Sem ASO na prévia, pule esta etapa.
+9. Volte em cada aba preenchida, confira com um print que os valores estão nos campos certos e chame \
+finalizar ("preenchido"), sem clicar em Gravar. No motivo, diga em poucas palavras o que ficou de fora ou \
+com código 1 (sem dados pessoais).
 
 A tela é remota e o Domínio responde devagar: depois de clicar, digitar ou trocar de tela, use wait \
 (1 a 3 s) e tire um print antes da próxima ação. Nunca repita um clique ou uma digitação sem ver no print \
