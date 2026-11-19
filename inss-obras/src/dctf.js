@@ -11,6 +11,7 @@ const { db, nowIso, paramReader } = require('./db');
 const cert = require('./certificados');
 const calc = require('./calc');
 const folha = require('./folha');
+const esocial = require('./esocial');
 const { UFS } = require('./params');
 const { html, raw, brl, n2, dataBr, dataHoraBr, layout, contadores, tabela, select, campo } = require('./views');
 
@@ -563,11 +564,12 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
       <section data-painel="aba6" class="card" hidden>
         ${PERGUNTAS_1299.map((p, i) => campo(`${i + 1}. ${p}${i < 5 ? ' *' : ''}`, simNao(`question${i + 1}`, fech[`question${i + 1}`] ?? (i < 2 ? 1 : 0))))}
         <label class="passo"><input type="checkbox" name="transmissao_imediata" value="1" ${fech.transmissao_imediata ? 'checked' : ''}> Solicitação de transmissão imediata da DCTFWeb</label>
-        <p class="desc">Salve as respostas e, depois de encerrar a folha no eSocial, registre abaixo o recibo do S-1299.</p>
+        <p class="desc">Salve as respostas (botão Salvar) e escolha a competência. "Transmitir S-1299" fecha a folha do período no eSocial: as respostas 1 e 2 são conferidas pelos envios do sistema (há S-1200 na competência / há S-1210 pago no mês), e o recibo entra sozinho. Se a folha já foi fechada direto no portal, informe o recibo e use "Registrar recibo manual".</p>
         <div class="grade">
-          ${campo('Competência encerrada', select('fechar_mes', x.meses.map(m => [m.id, `${nomeMes(m.competencia)} (${STATUS_MES.find(s => s[0] === m.status)[1]})`]), '', 'form="formFechar"'))}
-          ${campo('Recibo do S-1299', inp('nr_rec_1299', '', 'form="formFechar"'))}</div>
-        <button class="botao" form="formFechar">Encerrar folha de pagamento</button>
+          ${campo('Competência', select('fechar_mes', x.meses.map(m => [m.id, `${nomeMes(m.competencia)} (${STATUS_MES.find(s => s[0] === m.status)[1]})`]), '', 'form="formFechar"'))}
+          ${campo('Recibo do S-1299 (só para registro manual)', inp('nr_rec_1299', '', 'form="formFechar"'))}</div>
+        <div class="acoes"><button class="botao" form="formFechar" formaction="/dctf-web/${d.id}/fechar/esocial">Transmitir S-1299 ao eSocial</button>
+          <button class="botao sec" form="formFechar">Registrar recibo manual</button></div>
       </section>
       </form>
       <form method="post" action="/dctf-web/${d.id}/fechar" id="formFechar"></form>
@@ -588,9 +590,13 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
             <button type="button" class="botao sec pequeno adicionar-linha" data-alvo="modeloItem${m.id}">+ Autônomo</button>
             <div class="grade">${campo('Situação do mês', select('status', STATUS_MES, m.status))}${campo('Recibo S-1299', inp('nr_rec_1299', m.nr_rec_1299))}
               ${campo('Mês sem atividade (paralisado)', simNao('is_paralyzed', m.is_paralyzed))}</div>
-            <div class="acoes"><button class="botao">Salvar mês</button><a class="botao sec" href="/dctf-web/${d.id}/meses/${m.id}/recibo" target="_blank">Gerar recibo</a>
+            <div class="acoes">${['fechado', 'fechado_externo'].includes(m.status) || m.is_paralyzed ? '' : html`<button class="botao" formaction="/dctf-web/${d.id}/meses/${m.id}/esocial">Enviar ao eSocial</button>`}
+              <button class="botao ${['fechado', 'fechado_externo'].includes(m.status) || m.is_paralyzed ? '' : 'sec'}">Salvar mês</button><a class="botao sec" href="/dctf-web/${d.id}/meses/${m.id}/recibo" target="_blank">Gerar recibo</a>
               <button class="botao sec" formaction="/dctf-web/${d.id}/meses/${m.id}/reabrir">Reabrir</button>
-              <button class="botao sec perigo" formaction="/dctf-web/${d.id}/meses/${m.id}/excluir" data-confirmar="Excluir este mês e os valores dele?">Excluir mês</button></div>
+              <button class="botao sec perigo" formaction="/dctf-web/${d.id}/meses/${m.id}/excluir" data-confirmar="Excluir este mês e os valores dele?">Excluir mês</button>
+              ${(() => { const ult = db.prepare("SELECT id, event, status FROM esocial_logs WHERE payroll_month_id = ? ORDER BY id DESC LIMIT 1").get(m.id);
+    return ult ? html`<a class="botao sec" href="/esocial/envios/${ult.id}">Último envio (${ult.event}: ${({ enviando: 'enviando', processando: 'processando', recebido: 'recebido', erro: 'erro' })[ult.status] || ult.status})</a>` : ''; })()}</div>
+            <p class="desc">"Enviar ao eSocial" grava o mês e transmite: na primeira vez, a obra (S-1005), a rubrica (S-1010) e a lotação (S-1020); depois o S-1200 de cada autônomo e o S-1210 no mês do pagamento. Os recibos entram sozinhos nos campos acima. O fechamento (S-1299) fica na aba Fechamento.</p>
           </form></details>`;
         })}
         ${x.erroQ ? html`<div class="aviso erro">${x.erroQ}</div>` : x.q && x.q.linhas.length ? quadroHtml(x.q) : ''}
@@ -672,8 +678,8 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
     if (!m) throw erro404('Mês não encontrado.');
     return m;
   };
-  app.post('/dctf-web/:id/meses/:mid', h((req, res) => {
-    const d = carregarDctf(req), m = carregarMes(req, d), b = req.body;
+  // grava os autônomos e a situação do mês (usado por "Salvar mês" e "Enviar ao eSocial")
+  function salvarMes(d, m, b) {
     const masonsObra = new Set((d.work_id ? trabalhadoresDa(d.work_id) : []).map(t => t.mason_id));
     db.prepare('DELETE FROM payroll_items WHERE payroll_month_id = ?').run(m.id);
     const ins = db.prepare('INSERT INTO payroll_items (payroll_month_id, mason_id, id_dm_dev, calc_base, payment_date, nr_rec_1200, nr_rec_1210) VALUES (?,?,?,?,?,?,?)');
@@ -685,8 +691,24 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
     db.prepare('UPDATE payroll_months SET status = ?, nr_rec_1299 = ?, is_paralyzed = ? WHERE id = ?').run(status, b.nr_rec_1299 || '', b.is_paralyzed === '1' ? 1 : 0, m.id);
     if (['enviado', 'fechado'].includes(status) && !['enviado', 'fechado'].includes(m.status)) db.prepare('UPDATE dctf_webs SET last_sent_at = ? WHERE id = ?').run(nowIso(), d.id);
     atualizarUltimoEnvio(d.id);
+  }
+  app.post('/dctf-web/:id/meses/:mid', h((req, res) => {
+    const d = carregarDctf(req), m = carregarMes(req, d);
+    salvarMes(d, m, req.body);
     flash(res, `${nomeMes(m.competencia)} salvo.`);
     res.redirect(`/dctf-web/editar/${d.id}#aba5`);
+  }));
+  // transmite o mês: tabelas que faltam (S-1005/S-1010/S-1020), S-1200 e S-1210
+  app.post('/dctf-web/:id/meses/:mid/esocial', h((req, res) => {
+    const d = carregarDctf(req), m = carregarMes(req, d);
+    if (!['fechado', 'fechado_externo'].includes(m.status)) salvarMes(d, m, { ...req.body, status: m.status });
+    try {
+      res.redirect(`/esocial/envios/${esocial.enviarMes(m.id, req.office, req.user.name)}`);
+    } catch (e) {
+      if (!(e instanceof esocial.EsocialError)) throw e;
+      flash(res, `${nomeMes(m.competencia)} não foi enviado. ${e.message}`, 'erro');
+      res.redirect(`/dctf-web/editar/${d.id}#aba5`);
+    }
   }));
   app.post('/dctf-web/:id/meses/:mid/reabrir', h((req, res) => {
     const d = carregarDctf(req), m = carregarMes(req, d);
@@ -702,6 +724,18 @@ module.exports = function registrar(app, { h, flash, contagens, exigirAdmin, cli
     atualizarUltimoEnvio(d.id);
     flash(res, `${nomeMes(m.competencia)} excluído${['enviado', 'fechado'].includes(m.status) ? ' (se já foi enviado, exclua também no eSocial - S-3000)' : ''}.`, 'alerta');
     res.redirect(`/dctf-web/editar/${d.id}#aba5`);
+  }));
+  app.post('/dctf-web/:id/fechar/esocial', h((req, res) => {
+    const d = carregarDctf(req);
+    const m = db.prepare('SELECT * FROM payroll_months WHERE id = ? AND dctf_web_id = ?').get(Number(req.body.fechar_mes), d.id);
+    if (!m) { flash(res, 'Escolha a competência.', 'erro'); return res.redirect(`/dctf-web/editar/${d.id}#aba6`); }
+    try {
+      res.redirect(`/esocial/envios/${esocial.enviarFechamento(m.id, req.office, req.user.name)}`);
+    } catch (e) {
+      if (!(e instanceof esocial.EsocialError)) throw e;
+      flash(res, `A folha de ${nomeMes(m.competencia)} não foi fechada. ${e.message}`, 'erro');
+      res.redirect(`/dctf-web/editar/${d.id}#aba6`);
+    }
   }));
   app.post('/dctf-web/:id/fechar', h((req, res) => {
     const d = carregarDctf(req);

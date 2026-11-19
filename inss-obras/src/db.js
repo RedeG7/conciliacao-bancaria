@@ -146,6 +146,9 @@ CREATE TABLE IF NOT EXISTS send_guides (
 addColumns('dctf_webs', ['lembretes INTEGER NOT NULL DEFAULT 0']);
 // andamento de cada envio ao eSocial (src/esocial.js)
 addColumns('esocial_logs', ['etapa TEXT', 'ambiente TEXT', 'usuario TEXT', 'protocolo TEXT', 'mensagem TEXT', 'updated_at TEXT']);
+// envios do mês (S-1005/1010/1020, S-1200, S-1210) e do fechamento (S-1299): o mês
+// e o lote em andamento (protocolo + o que cada evento do lote atualiza ao receber o recibo)
+addColumns('esocial_logs', ['payroll_month_id INTEGER', 'competencia TEXT', 'contexto TEXT']);
 addColumns('offices', ["esocial_ambiente TEXT NOT NULL DEFAULT 'producao_restrita'"]);
 db.exec('CREATE TABLE IF NOT EXISTS settings (chave TEXT PRIMARY KEY, valor TEXT, updated_at TEXT, updated_by TEXT)');
 const setting = chave => db.prepare('SELECT valor FROM settings WHERE chave = ?').get(chave)?.valor || '';
