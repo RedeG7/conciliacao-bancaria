@@ -605,15 +605,16 @@ app.get('/esocial/envios/:id', h((req, res) => {
   const log = carregarEnvioEsocial(req);
   const cli = db.prepare('SELECT id, nome, documento FROM clients WHERE id = ?').get(log.client_id);
   const pos = { enviando: 0, processando: 1, recebido: 2 }[log.status] ?? 0;
-  res.send(layout(req, `Envio ${log.event} ao eSocial`, html`
+  const titulo = log.competencia ? `Envio ${log.event} de ${log.competencia} ao eSocial` : `Envio ${log.event} ao eSocial`;
+  res.send(layout(req, titulo, html`
     <div class="card envio-esocial" data-envio="${log.id}" data-status="${log.status}">
       <p><b>${cli.nome}</b> (CPF ${cli.documento}) · ${log.ambiente === 'producao' ? 'Produção' : 'Produção restrita (testes)'} · enviado por ${log.usuario}</p>
       <ol class="etapas-envio">${ETAPAS_ENVIO.map(([k, t], i) => html`<li data-etapa="${k}" class="${log.status === 'erro' ? (i <= pos ? 'erro' : '') : i < pos || log.status === 'recebido' ? 'feito' : i === pos ? 'atual' : ''}"><span></span>${t}</li>`)}</ol>
       <p class="desc" id="envioEtapa">${log.etapa}${log.protocolo ? ` · protocolo ${log.protocolo}` : ''}</p>
-      <div id="envioRecibo" ${log.status === 'recebido' ? '' : 'hidden'} class="aviso">Recibo do ${log.event}: <b id="envioReciboNum">${log.receipt || ''}</b> (já gravado no cadastro do cliente).</div>
+      <div id="envioRecibo" ${log.status === 'recebido' ? '' : 'hidden'} class="aviso">${log.event === 'S-1200/S-1210' ? 'Recibos do mês' : `Recibo do ${log.event}`}: <b id="envioReciboNum">${log.receipt || ''}</b> (${log.event === 'S-1000' ? 'já gravado no cadastro do cliente' : 'já gravados no envio DCTFWeb'}).</div>
       <p class="desc">Para conferir no portal do eSocial: perfil <b>Procurador de Pessoa Física - CPF</b>, informe o CPF ${cli.documento} e abra o módulo <b>Geral</b>. O envio é feito pelo sistema (webservice), por isso aparece no Geral e não no Simplificado, que é só para empregador doméstico e segurado especial.</p>
       <pre id="envioMensagem" class="${log.status === 'erro' ? 'aviso erro' : 'aviso alerta'}" ${log.mensagem ? '' : 'hidden'}>${log.mensagem || ''}</pre>
-      <div class="acoes"><a class="botao sec" href="/clientes/${cli.id}?guia=1">Voltar ao cliente</a>
+      <div class="acoes">${log.dctf_web_id ? html`<a class="botao sec" href="/dctf-web/editar/${log.dctf_web_id}#${log.event === 'S-1299' ? 'aba6' : 'aba5'}">Voltar ao envio DCTFWeb</a>` : html`<a class="botao sec" href="/clientes/${cli.id}?guia=1">Voltar ao cliente</a>`}
         <form method="post" action="/esocial/envios/${log.id}/tentar" id="envioTentar" ${log.status === 'erro' ? '' : 'hidden'}><button class="botao">Tentar novamente</button></form></div>
     </div>`, { migalha: 'DCTF Web / eSocial' }));
 }));
@@ -621,11 +622,14 @@ app.post('/esocial/envios/:id/tentar', h((req, res) => {
   const log = carregarEnvioEsocial(req);
   const cli = db.prepare('SELECT * FROM clients WHERE id = ? AND office = ?').get(log.client_id, req.office);
   try {
-    res.redirect(`/esocial/envios/${esocial.enviarS1000(cli, req.office, req.user.name)}`);
+    const novo = log.event === 'S-1200/S-1210' ? esocial.enviarMes(log.payroll_month_id, req.office, req.user.name)
+      : log.event === 'S-1299' ? esocial.enviarFechamento(log.payroll_month_id, req.office, req.user.name)
+        : esocial.enviarS1000(cli, req.office, req.user.name);
+    res.redirect(`/esocial/envios/${novo}`);
   } catch (e) {
     if (!(e instanceof esocial.EsocialError)) throw e;
     flash(res, e.message, 'erro');
-    res.redirect(`/clientes/${cli.id}?guia=1`);
+    res.redirect(log.dctf_web_id ? `/dctf-web/editar/${log.dctf_web_id}#${log.event === 'S-1299' ? 'aba6' : 'aba5'}` : `/clientes/${cli.id}?guia=1`);
   }
 }));
 
