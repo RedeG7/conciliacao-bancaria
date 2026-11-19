@@ -138,7 +138,7 @@
       if (!b) return;
       const d = b.dataset, campo = (k, v) => { $(`[data-campo="${k}"]`, dlg).textContent = v; };
       campo('iniciais', $('i', b).textContent); campo('nome', d.nome); campo('funcao', `${d.cargo} · ${d.depto}`); campo('quadrante', d.quadrante); campo('c', num(d.c)); campo('d', num(d.d));
-      ['c', 'd'].forEach(k => { $(`[data-barra="${k}"]`, dlg).style.width = `${(Number(d[k]) / 5) * 100}%`; });
+      ['c', 'd'].forEach(k => { $(`[data-barra="${k}"]`, dlg).style.width = `${(Number(d[k]) / 10) * 100}%`; });
       $$('a[data-link]', dlg).forEach(a => { const u = d[a.dataset.link]; a.hidden = !u; if (u) a.href = u; });
       dlg.showModal();
     });

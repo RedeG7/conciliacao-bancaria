@@ -102,7 +102,7 @@ function noveBox(quadros, { semNota = 0 } = {}) {
       <div class="box9-cabeca"><i aria-hidden="true" data-campo="iniciais"></i><div><h3 id="box9Nome" data-campo="nome"></h3><p data-campo="funcao"></p></div></div>
       <p class="box9-selo" data-campo="quadrante"></p>
       ${[['Comportamento', 'c'], ['Desempenho', 'd']].map(([r, k]) => html`<div class="box9-nota"><span>${r}</span><b data-campo="${k}"></b><div class="box9-trilho"><i data-barra="${k}"></i></div></div>`)}
-      <p class="box9-legenda">Escala de 1 a 5. As marcas mostram os cortes de 2,5 e 4.</p>
+      <p class="box9-legenda">Escala de 0 a 10. As marcas mostram os cortes de 5 e 8.</p>
       <div class="acoes"><a class="botao" data-link="relatorio">Ver relatório</a><a class="botao sec" data-link="ficha">Ficha</a><a class="botao sec" data-link="pdi">Criar PDI</a></div>
     </dialog>
   </div>`;

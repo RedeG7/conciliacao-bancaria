@@ -404,3 +404,77 @@ Backup do volume (dados pessoais e de saúde: guarde com o mesmo cuidado):
 docker run --rm -v conciliacao-bancaria_rh_data:/data -v $(pwd):/b alpine \
   tar czf /b/rh-$(date +%Y%m%d).tgz -C /data .
 ```
+
+## Admissões (card "🧑‍💼 Admissões", departamento Pessoal)
+
+Atalho `admissao.redeg7.com`: o Caddy redireciona para
+`https://hub.redeg7.com/?tela=admissoes` (vale o login do Hub). Precisa do
+registro DNS **A** `admissao` apontando pro mesmo IP do Hub; outro endereço:
+`DOMINIO_ADMISSAO=...` no `.env`.
+
+Faz parte do próprio Hub (mesma imagem, mesmo Postgres): as tabelas
+`admissoes`, `admissoes_eventos` e `admissoes_chaves` são criadas sozinhas
+no primeiro acesso (`admissoes.garantir_schema()`). Regras em
+`admissoes.py`; rotas em `api.py` (`/api/admissoes/*`); tela em
+`app_conciliacao.py` (`_tela_admissoes`); agente em
+`attended_worker/admissoes_agent.py`; procedimento do DP em
+`skills/cadastro-empregado-dominio/SKILL.md`.
+
+Fluxo: canal → `POST /api/admissoes/eventos` → fila (`queued`) → agente da
+sessão RDS monta a prévia sem salvar (`awaiting_approval`) → DP aprova ou
+rejeita na tela → só então o agente recebe a tarefa em fase `gravacao` para
+salvar no Domínio e transmitir (`completed`). Pendências viram
+`awaiting_documents`, `blocked` ou `failed`, e o DP devolve pela tela.
+
+1. **Chave dos canais**: em Admissões › Canais e agente, um administrador do
+   escritório gera a chave (aparece uma vez só; o banco guarda só o hash).
+   Os conectores enviam com `X-API-Key`:
+
+   ```json
+   {"channel": "acessorias", "external_id": "AC-123", "company_ref": "101", "document_refs": ["..."]}
+   ```
+
+   `company_ref` é o **código da empresa no Domínio** cadastrado em Gerenciar
+   Clientes. Empresa fora do cadastro entra `blocked`. Repetir canal +
+   `external_id` não cria outra solicitação (resposta `duplicate: true`). Os
+   conectores de Acessórias, ONVIO e WhatsApp ainda não existem: por
+   enquanto, use "Registrar solicitação" na tela.
+2. **Agente**: crie no Hub uma conta só para ele (papel **Usuário**, com o
+   app Admissões liberado). Na sessão RDS, na pasta `attended_worker`:
+
+   ```powershell
+   $env:HUB_USUARIO = "agente-rds"
+   python admissoes_agent.py
+   ```
+
+   Nesta versão o agente **não mexe no Domínio**: toda tarefa volta como
+   `blocked` ("automação do Domínio ainda não implementada").
+3. **Aprovação**: só administrador do escritório ou super administrador, e
+   nunca a conta que preparou a prévia. A aprovação vale só para a prévia
+   que a pessoa viu (hash). Se a gravação falhar, a tarefa volta para
+   aprovação, e não para a fila: confira no Domínio o que já foi gravado
+   antes de aprovar de novo.
+
+Testes (Postgres de teste descartável; o banco é apagado a cada teste):
+
+```powershell
+docker run -d --name hub-test-db -e POSTGRES_PASSWORD=teste -e POSTGRES_DB=hub_test -p 55432:5432 postgres:16-alpine
+$env:TEST_DATABASE_URL = "postgresql://postgres:teste@127.0.0.1:55432/hub_test"
+pip install pytest httpx
+python -m pytest tests
+```
+
+### Integração com o Acessórias
+
+Cada escritório configura em **RPA Folha › Admissões › Canais e agente › Acessórias**:
+o API Token (Acessórias › engrenagem › API Token, de preferência de um usuário só
+para a integração), os departamentos e as palavras do assunto que indicam admissão.
+O token fica cifrado com a `RPA_ENC_KEY` (a mesma das credenciais do RPA).
+
+- A API do Acessórias não tem webhook: o serviço `api` consulta as solicitações
+  externas a cada `ADMISSOES_SINC_INTERVALO_S` segundos (padrão 300; `0` desliga).
+  Há também o botão "Sincronizar agora" na tela.
+- A empresa é reconhecida pelo **CNPJ** do cadastro em Gerenciar Clientes. Sem CNPJ
+  cadastrado, a solicitação entra como "Bloqueada" até o cadastro ser corrigido.
+- ONVIO e WhatsApp: os campos já ficam salvos, mas a integração ainda não consulta nada.
+

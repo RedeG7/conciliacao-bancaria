@@ -11,6 +11,13 @@
 	}
 }
 
+# Admissoes (modulo do proprio Hub): o subdominio so leva para a tela de
+# Admissoes no Hub - assim vale o login do Hub (o cookie de sessao e do
+# dominio do Hub). Precisa do registro DNS A "admissao" apontando pro VPS.
+{$DOMINIO_ADMISSAO:admissao.redeg7.com} {
+	redir https://{$DOMINIO}/?tela=admissoes 302
+}
+
 # Real 4U - Marketing & Comercial (servico "marketing" do docker-compose).
 {$DOMINIO_MARKETING:mkt.redeg7.com} {
 	reverse_proxy marketing:3000

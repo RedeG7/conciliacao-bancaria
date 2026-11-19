@@ -138,7 +138,8 @@ function importar(texto, c, usuario, k = KINDS.colaborador) {
 
 // ---------------------------------------------------------------- avaliações da Sólides
 // Uma linha por competência avaliada. Vira uma avaliação por pessoa no ciclo do
-// ano, com as notas guardadas em itens. Competências técnicas formam o Desempenho
+// ano, com as notas guardadas em itens. A Sólides dá notas de 1 a 5; o RH guarda de
+// 0 a 10, então cada nota é multiplicada por 2. Competências técnicas formam o Desempenho
 // e as comportamentais o Comportamento, os dois eixos do 9box; sem esses grupos,
 // Desempenho é a média ponderada de todas as notas.
 const coluna = (cab, nome) => cab.findIndex(h => norm(h) === norm(nome));
@@ -174,7 +175,7 @@ function importarAvaliacoes(texto, c, usuario) {
     for (const [n, ls] of pessoas) {
       const achados = colabs.filter(p => norm(p.nome) === n);
       if (achados.length !== 1) { res.erros.push(`${ls[0][col.avaliado]}: ${achados.length ? 'há mais de um cadastro' : 'não está em Colaboradores'}.`); continue; }
-      const itens = ls.map(l => ({ grupo: l[col.grupo].trim(), competencia: l[col.competencia].trim(), peso: Number(l[col.peso]) || 1, nota: Number(l[col.nota]), comentario: l[col.comentario].trim().replace(/^-$/, '') }));
+      const itens = ls.map(l => ({ grupo: l[col.grupo].trim(), competencia: l[col.competencia].trim(), peso: Number(l[col.peso]) || 1, nota: Number(l[col.nota]) * 2, comentario: l[col.comentario].trim().replace(/^-$/, '') }));
       const mediaDe = l => (l.length ? Math.round((l.reduce((s, i) => s + i.nota * i.peso, 0) / l.reduce((s, i) => s + i.peso, 0)) * 100) / 100 : null);
       const doGrupo = re => mediaDe(itens.filter(i => re.test(norm(i.grupo))));
       const atual = avaliacoes.find(a => a.ciclo_id === cicloId && a.colaborador_id === achados[0].id);
@@ -189,7 +190,7 @@ function importarAvaliacoes(texto, c, usuario) {
 }
 
 // ---------------------------------------------------------------- 9box da Sólides
-// Uma linha por pessoa, com os dois eixos de 0 a 100. Completa a avaliação mais
+// Uma linha por pessoa, com os dois eixos de 0 a 100 (no RH, de 0 a 10). Completa a avaliação mais
 // recente de cada uma, que precisa já existir: o arquivo não traz as datas do ciclo.
 const singular = s => norm(s).replace(/s$/, '');
 const ehNoveBoxSolides = texto => {
@@ -205,8 +206,8 @@ function importarNoveBox(texto, c) {
   R.tx(() => {
     for (const l of linhas) {
       const nome = l[col('Nome do Avaliado')].trim();
-      const [comportamento, desempenho] = ['Comportamento', 'Desempenho'].map(n => Math.round((Number(l[col(n)]) / 20) * 100) / 100);
-      if (!(comportamento >= 1 && comportamento <= 5 && desempenho >= 1 && desempenho <= 5)) { res.erros.push(`${nome}: notas fora da escala de 0 a 100.`); continue; }
+      const [comportamento, desempenho] = ['Comportamento', 'Desempenho'].map(n => Math.round(Number(l[col(n)]) * 10) / 100);
+      if (!(comportamento >= 0 && comportamento <= 10 && desempenho >= 0 && desempenho <= 10)) { res.erros.push(`${nome}: notas fora da escala de 0 a 100.`); continue; }
       const achados = colabs.filter(p => norm(p.nome) === norm(nome));
       if (achados.length !== 1) { res.erros.push(`${nome}: ${achados.length ? 'há mais de um cadastro' : 'não está em Colaboradores'}.`); continue; }
       const atual = avaliacoes.find(a => a.colaborador_id === achados[0].id);

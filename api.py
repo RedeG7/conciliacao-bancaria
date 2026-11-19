@@ -24,14 +24,17 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Cookie, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+import admissoes
+import admissoes_canais
 import auth
 from rpa import core as rpa_core
 
@@ -45,6 +48,9 @@ _EXE_PATH = _RAIZ / "attended_worker" / "dist" / "issnet_attended.exe"
 # Windows no deploy (.github/workflows/deploy.yml) e entra na imagem
 _VERSAO_NFGO_PATH = _RAIZ / "attended_worker" / "VERSION_NFGO"
 _EXE_NFGO_PATH = _RAIZ / "attended_worker" / "dist" / "nfgo_attended.exe"
+# agente de admissões da sessão RDS (attended_worker/gui_admissoes.py)
+_VERSAO_ADMISSOES_PATH = _RAIZ / "attended_worker" / "VERSION_ADMISSOES"
+_EXE_ADMISSOES_PATH = _RAIZ / "attended_worker" / "dist" / "admissoes_agente.exe"
 
 
 @app.on_event("startup")
@@ -55,6 +61,29 @@ def _startup() -> None:
     # antes do app novo (num banco recem-criado, por exemplo).
     auth.garantir_schema()
     rpa_core.garantir_schema()
+    admissoes.garantir_schema()
+    admissoes_canais.garantir_schema()
+    _iniciar_sinc_canais()
+
+
+# Admissões: o Acessórias não avisa quando chega solicitação (sem webhook),
+# então a API consulta os escritórios com a integração ativa de tempos em
+# tempos. ADMISSOES_SINC_INTERVALO_S=0 desliga (os testes desligam).
+_SINC_INTERVALO_S = int(os.environ.get("ADMISSOES_SINC_INTERVALO_S", "300") or 0)
+
+
+def _laco_sinc_canais() -> None:
+    while True:
+        time.sleep(_SINC_INTERVALO_S)
+        try:
+            admissoes_canais.sincronizar_todos()
+        except Exception as e:  # noqa: BLE001 - o laço nunca pode morrer
+            print(f"[admissoes] sincronização dos canais falhou: {type(e).__name__}", flush=True)
+
+
+def _iniciar_sinc_canais() -> None:
+    if _SINC_INTERVALO_S > 0:
+        threading.Thread(target=_laco_sinc_canais, name="admissoes-sinc", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +412,173 @@ def attended_download():
 # bilhete assinado (HMAC-SHA256 com MARKETING_SSO_SECRET, que o CRM também
 # recebe - ver docker-compose.yml) que vale 60s e redireciona pro CRM, que
 # confere o bilhete, cria a sessão dele e entra direto (marketing/src/sso.js).
+
+# ---------------------------------------------------------------------------
+# Admissões (canais -> fila -> agente RDS -> aprovação do DP no Hub)
+# ---------------------------------------------------------------------------
+# Regras e estados em admissoes.py. Os canais (Acessórias, ONVIO, WhatsApp)
+# entram com a chave do escritório (X-API-Key, gerada na tela Admissões); o
+# agente entra com usuário/senha do Hub (Bearer), igual ao attended_worker.
+# Aprovar/rejeitar NÃO existe aqui: só na tela do Hub, por uma pessoa.
+
+_APP_ADMISSOES = "admissoes"
+
+
+def _erro_admissao(exc: Exception) -> HTTPException:
+    if isinstance(exc, admissoes.AdmissaoNaoEncontrada):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, admissoes.SemPermissao):
+        return HTTPException(status_code=403, detail=str(exc))
+    return HTTPException(status_code=409, detail=str(exc))
+
+
+def _agente_admissoes(authorization: Optional[str]) -> dict:
+    usuario = _usuario_autenticado(authorization)
+    if not _app_permitido(usuario, _APP_ADMISSOES):
+        raise HTTPException(status_code=403, detail="Usuário sem acesso ao app Admissões")
+    return usuario
+
+
+def _admissao_para_agente(linha: dict) -> dict:
+    """Só o que o agente precisa - sem dados de auditoria de quem decidiu."""
+    fase = linha.get("fase")
+    return {
+        "id": linha["id"], "canal": linha["canal"], "id_externo": linha["id_externo"],
+        "empresa_ref": linha["empresa_ref"], "status": linha["status"], "fase": fase,
+        "resumo": linha.get("resumo") or "",
+        # empresa a ativar no Domínio (código do cadastro de clientes)
+        "empresa": admissoes.empresa_da_admissao(linha),
+        "documentos": linha.get("documentos") or [],
+        # só a fase gravacao (aprovada no Hub) libera salvar/transmitir; nela
+        # vai junto a prévia exatamente como foi aprovada
+        "liberado_para_gravar": fase == admissoes.FASE_GRAVACAO,
+        "previa_aprovada": linha.get("previa") if fase == admissoes.FASE_GRAVACAO else None,
+    }
+
+
+class AdmissaoEventoBody(BaseModel):
+    channel: str = Field(pattern="^(acessorias|onvio|whatsapp)$")
+    external_id: str = Field(min_length=1, max_length=200)
+    company_ref: str = Field(min_length=1, max_length=200)
+    event_type: str = "admission_requested"
+    document_refs: list[str] = Field(default_factory=list, max_length=admissoes.MAX_DOCUMENTOS)
+
+
+@app.post("/api/admissoes/eventos", status_code=202)
+def admissao_evento(body: AdmissaoEventoBody, x_api_key: Optional[str] = Header(None)):
+    escritorio_id = admissoes.escritorio_da_chave(x_api_key)
+    if not escritorio_id:
+        raise HTTPException(status_code=401, detail="Chave inválida")
+    if body.event_type != "admission_requested":
+        raise HTTPException(status_code=422, detail="Evento não suportado")
+    try:
+        linha, duplicada = admissoes.receber_solicitacao(
+            escritorio_id, body.channel, body.external_id, body.company_ref, body.document_refs,
+        )
+    except (admissoes.TransicaoInvalida, admissoes.SemPermissao) as exc:
+        raise _erro_admissao(exc)
+    return {"id": linha["id"], "status": linha["status"], "duplicate": duplicada}
+
+
+@app.post("/api/admissoes/agente/proxima")
+def admissao_proxima(authorization: Optional[str] = Header(None)):
+    usuario = _agente_admissoes(authorization)
+    linha = admissoes.reservar_proxima(usuario["escritorio_id"], usuario["usuario"])
+    return {"admissao": _admissao_para_agente(linha) if linha else None}
+
+
+@app.post("/api/admissoes/agente/{admissao_id}/material")
+def admissao_material(admissao_id: int, authorization: Optional[str] = Header(None)):
+    """Mensagens e anexos da solicitação para o agente ler (só de tarefa
+    reservada por ele). O Hub busca no canal: a credencial não sai daqui."""
+    usuario = _agente_admissoes(authorization)
+    try:
+        linha = admissoes.obter_reservada(admissao_id, usuario["escritorio_id"], usuario["usuario"])
+    except (admissoes.AdmissaoNaoEncontrada, admissoes.TransicaoInvalida, admissoes.SemPermissao) as exc:
+        raise _erro_admissao(exc)
+    try:
+        material = admissoes_canais.material_para_agente(usuario["escritorio_id"], linha)
+    except admissoes_canais.ErroCanal as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return {"empresa": admissoes.empresa_da_admissao(linha), **material}
+
+
+@app.post("/api/admissoes/agente/ia")
+def admissao_leitura(authorization: Optional[str] = Header(None)):
+    """Como o agente lê os documentos (aba IA de Canais e agente). A chave
+    da IA escolhida vai só para a conta do agente, a cada tarefa - trocar
+    no Hub vale na próxima admissão."""
+    usuario = _agente_admissoes(authorization)
+    return admissoes_canais.leitura_do_agente(usuario["escritorio_id"])
+
+
+class AdmissaoPreviaBody(BaseModel):
+    previa: dict
+
+
+@app.post("/api/admissoes/agente/{admissao_id}/previa")
+def admissao_previa(admissao_id: int, body: AdmissaoPreviaBody, authorization: Optional[str] = Header(None)):
+    usuario = _agente_admissoes(authorization)
+    try:
+        linha = admissoes.registrar_previa(admissao_id, usuario["escritorio_id"], usuario["usuario"], body.previa)
+    except (admissoes.AdmissaoNaoEncontrada, admissoes.TransicaoInvalida, admissoes.SemPermissao) as exc:
+        raise _erro_admissao(exc)
+    return {"id": linha["id"], "status": linha["status"]}
+
+
+class AdmissaoStatusBody(BaseModel):
+    status: str
+    motivo: str = ""
+    protocolo: str = ""
+
+
+@app.post("/api/admissoes/agente/{admissao_id}/status")
+def admissao_status(admissao_id: int, body: AdmissaoStatusBody, authorization: Optional[str] = Header(None)):
+    usuario = _agente_admissoes(authorization)
+    try:
+        linha = admissoes.atualizar_pelo_agente(
+            admissao_id, usuario["escritorio_id"], usuario["usuario"], body.status, body.motivo, body.protocolo,
+        )
+    except (admissoes.AdmissaoNaoEncontrada, admissoes.TransicaoInvalida, admissoes.SemPermissao) as exc:
+        raise _erro_admissao(exc)
+    return {"id": linha["id"], "status": linha["status"]}
+
+
+@app.get("/api/attended-admissoes/versao")
+def attended_admissoes_versao():
+    caminho = _VERSAO_ADMISSOES_PATH
+    return {"versao": caminho.read_text(encoding="utf-8").strip() if caminho.exists() else "0.0"}
+
+
+@app.get("/api/attended-admissoes/download")
+def attended_admissoes_download():
+    if not _EXE_ADMISSOES_PATH.exists():
+        raise HTTPException(status_code=404, detail="Executável não encontrado")
+    return FileResponse(_EXE_ADMISSOES_PATH, media_type="application/octet-stream",
+                        filename="admissoes_agente.exe")
+
+
+_ZIP_ADMISSOES_CACHE: dict = {}
+
+
+@app.get("/api/attended-admissoes/download-zip")
+def attended_admissoes_download_zip():
+    """Mesmo .exe dentro de .zip (antivírus costuma cortar .exe baixado
+    por programa) - igual ao /attended-nfgo/download-zip."""
+    if not _EXE_ADMISSOES_PATH.exists():
+        raise HTTPException(status_code=404, detail="Executável não encontrado")
+    import tempfile
+    import zipfile
+    chave = _EXE_ADMISSOES_PATH.stat().st_mtime_ns
+    destino = _ZIP_ADMISSOES_CACHE.get(chave)
+    if destino is None or not Path(destino).exists():
+        destino = str(Path(tempfile.gettempdir()) / f"admissoes_agente_{chave}.zip")
+        with zipfile.ZipFile(destino, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(_EXE_ADMISSOES_PATH, arcname="admissoes_agente.exe")
+        _ZIP_ADMISSOES_CACHE.clear()
+        _ZIP_ADMISSOES_CACHE[chave] = destino
+    return FileResponse(destino, media_type="application/zip", filename="admissoes_agente.zip")
+
 
 _SSO_VALIDADE_S = 60
 

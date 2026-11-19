@@ -864,8 +864,97 @@ def _parse_pdf_gerenciador_caixa(paginas_linhas: List[List[str]], origem: str) -
     return movimentos
 
 
+_CEF_PERIODO_LINHA_RE = re.compile(
+    r"^(?P<data>\d{2}/\d{2}/\d{4})\s+(?P<doc>\d{3,})\s+(?P<hist>.+?)\s+"
+    r"(?P<valor>\d{1,3}(?:\.\d{3})*,\d{2})\s+(?P<dc>[CD])\s+"
+    r"(?P<saldo>\d{1,3}(?:\.\d{3})*,\d{2})\s+(?P<saldo_dc>[CD])$"
+)
+
+
+def _parse_pdf_caixa_periodo(paginas_linhas: List[List[str]], origem: str) -> List[Movimento]:
+    """'Extrato por periodo' do Gerenciador CAIXA impresso pelo navegador:
+    uma linha por lancamento - 'DD/MM/AAAA NR.DOC HISTORICO VALOR D|C SALDO
+    D|C' (sem 'R$'). 'SALDO DIA' e 'SALDO ANTERIOR' sao checkpoints. O saldo
+    impresso confere cada valor lido (variacao do saldo = valor)."""
+    movimentos: List[Movimento] = []
+    saldo_anterior: Optional[float] = None
+    for linhas in paginas_linhas:
+        for linha in linhas:
+            m = _CEF_PERIODO_LINHA_RE.match(linha.strip())
+            if not m:
+                continue
+            saldo = _parse_valor_br(m.group("saldo"))
+            if m.group("saldo_dc") == "D":
+                saldo = -saldo
+            hist = m.group("hist").strip()
+            if re.match(r"saldo\s+(dia|anterior)\b", hist, re.IGNORECASE):
+                saldo_anterior = saldo
+                continue
+            valor = _parse_valor_br(m.group("valor"))
+            if m.group("dc") == "D":
+                valor = -valor
+            alerta = None
+            if saldo_anterior is not None and abs(round(saldo - saldo_anterior, 2) - valor) > 0.01:
+                alerta = (
+                    f"⚠️ valor lido ({fmt_money(valor)}) nao bate com a variacao do saldo impresso "
+                    f"({fmt_money(round(saldo - saldo_anterior, 2))}) - confira este lancamento no extrato."
+                )
+            saldo_anterior = saldo
+            movimentos.append(Movimento(
+                data=_parse_data_br(m.group("data")), valor=valor, descricao=hist, origem=origem,
+                alerta_valor=alerta,
+            ))
+    return movimentos
+
+
 _ITAU_DATA_RE = re.compile(r"^\d{2}/\d{2}/\d{4}$")
 _ITAU_VALOR_RE = re.compile(r"^-?\d{1,3}(?:\.\d{3})*,\d{2}$")
+
+
+_BB_LINHA_RE = re.compile(
+    r"^(?P<d1>\d{2}/\d{2}/\d{4})(?: (?P<d2>\d{2}/\d{2}/\d{4}))? (?P<ag>\d{4}) (?P<lote>\d{5}) (?P<cod>\d{3}) "
+    r"(?P<hist>.+?)(?: (?P<doc>\d{1,3}(?:\.\d{3})*))? "
+    r"(?P<valor>\d{1,3}(?:\.\d{3})*,\d{2}) (?P<dc>[DC])(?: (?P<saldo>\d{1,3}(?:\.\d{3})*,\d{2}) [DC])?$"
+)
+_BB_IGNORAR_RE = re.compile(
+    r"^(\d{2}/\d{2}/\d{4},? \d{2}:\d{2} Banco do Brasil|https?://|-{5,}|Transa|Observa)", re.IGNORECASE
+)
+# fonte do extrato impresso do navegador perde alguns acentos (vira U+FFFD)
+_BB_ACENTOS_PERDIDOS = {"F\ufffdcil": "Fácil", "\ufffdgua": "água", "\ufffdGUA": "ÁGUA"}
+
+
+def _parse_pdf_bb(paginas_linhas: List[List[str]], origem: str) -> List[Movimento]:
+    """Extrato de conta corrente do Banco do Brasil (Autoatendimento, impresso
+    em PDF): 'DD/MM/AAAA [DD/MM/AAAA] AG LOTE COD Historico DOC VALOR D|C
+    [SALDO D|C]' e, na linha seguinte, o favorecido/detalhe (que passa a fazer
+    parte da descricao). 'Saldo Anterior' (cod 000) e 'S A L D O' (cod 999) sao
+    so checkpoints. D = saida, C = entrada. Quando a linha traz duas datas, vale
+    a primeira (data do balancete = a que o saldo considera)."""
+    movimentos: List[Movimento] = []
+    atual: Optional[Movimento] = None
+    for linhas in paginas_linhas:
+        for linha in linhas:
+            linha = linha.strip()
+            if not linha or _BB_IGNORAR_RE.match(linha):
+                continue
+            m = _BB_LINHA_RE.match(linha)
+            if m:
+                atual = None
+                if m.group("cod") in ("000", "999") or re.search(r"saldo", m.group("hist"), re.IGNORECASE):
+                    continue
+                valor = _parse_valor_br(m.group("valor"))
+                if m.group("dc") == "D":
+                    valor = -valor
+                hist = m.group("hist").strip()
+                for errado, certo in _BB_ACENTOS_PERDIDOS.items():
+                    hist = hist.replace(errado, certo)
+                atual = Movimento(data=_parse_data_br(m.group("d1")), valor=valor, descricao=hist, origem=origem)
+                movimentos.append(atual)
+            elif atual is not None and not re.match(r"^\d{2}/\d{2}/\d{4}\b", linha):
+                for errado, certo in _BB_ACENTOS_PERDIDOS.items():
+                    linha = linha.replace(errado, certo)
+                atual.descricao = f"{atual.descricao} {linha}".strip()
+    return movimentos
 
 
 def _parse_pdf_itau(path: str, origem: str) -> List[Movimento]:
@@ -1061,8 +1150,11 @@ _MARCADORES_BANCO: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"\bcora\s*scfi\b"), "cora"),
     (re.compile(r"pagseguro|\bpagbank\b"), "pagbank"),
     (re.compile(r"\bsicoob\b"), "sicoob"),
-    (re.compile(r"gerenciador\s*caixa|caixa\s*econ[oô]mica\s*federal"), "caixa"),
+    (re.compile(r"gerenciador\s*caixa|caixa\s*econ[oô]mica\s*federal|gerenciador\.caixa\.gov\.br"), "caixa"),
     (re.compile(r"itau\.com\.br|ita[uú]\s+unibanco"), "itau"),
+    # BB por ultimo e com ancora forte: "banco do brasil" solto aparece como
+    # contraparte (boleto, TED) em extratos de OUTROS bancos
+    (re.compile(r"autoatendimento\.bb\.com\.br|^\d{2}/\d{2}/\d{4},? \d{2}:\d{2} banco do brasil$", re.MULTILINE), "bb"),
 ]
 
 
@@ -1114,8 +1206,12 @@ def parse_pdf_generic(path: str, origem: str = "extrato") -> List[Movimento]:
         movimentos = _parse_pdf_sicoob(paginas_linhas, origem)
     elif banco == "caixa":
         movimentos = _parse_pdf_gerenciador_caixa(paginas_linhas, origem)
+        if not movimentos:
+            movimentos = _parse_pdf_caixa_periodo(paginas_linhas, origem)
     elif banco == "itau":
         movimentos = _parse_pdf_itau(path, origem)
+    elif banco == "bb":
+        movimentos = _parse_pdf_bb(paginas_linhas, origem)
 
     if not movimentos:
         movimentos = _parse_pdf_linhas_data_valor(paginas_texto_reconstruido, origem)
@@ -1123,6 +1219,8 @@ def parse_pdf_generic(path: str, origem: str = "extrato") -> List[Movimento]:
         movimentos = _parse_pdf_extrato_dia_agrupado(paginas_texto_reconstruido, origem)
     if not movimentos:
         movimentos = _parse_pdf_gerenciador_caixa(paginas_linhas, origem)
+    if not movimentos:
+        movimentos = _parse_pdf_caixa_periodo(paginas_linhas, origem)
 
     if not movimentos:
         dica_ocr = (
@@ -1559,8 +1657,10 @@ def _numeros_de_conta(texto: str) -> set:
     """Numeros de conta/agencia citados no cabecalho do extrato, so digitos
     sem zeros a esquerda (ex.: 'conta: 36267404-3' -> '362674043')."""
     achados = set()
+    # so o cabecalho: no corpo, "Pgto conta agua 90.123" traz o numero do
+    # documento colado em "conta", que nao e numero de conta
     for m in re.finditer(
-        r"(?:conta|c/c|cc|cta|ct|ag[eê]ncia|ag)\b[^0-9\n]{0,15}(\d[\d.\-/]{3,})", texto[:3000], re.IGNORECASE
+        r"(?:conta|c/c|cc|cta|ct|ag[eê]ncia|ag)\b[^0-9\n]{0,15}(\d[\d.\-/]{3,})", texto[:900], re.IGNORECASE
     ):
         if re.match(r"^\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}$", m.group(1)):
             continue  # "CONTA CORRENTE 31/08/2026" - data de emissao, nao numero de conta

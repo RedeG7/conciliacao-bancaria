@@ -31,6 +31,9 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
+import admissoes
+import admissoes_canais
+import json
 import auth
 import clientes
 import historico
@@ -94,6 +97,8 @@ def _garantir_schema_extra() -> bool:
     clientes.garantir_schema()
     historico.garantir_schema()
     rpa_core.garantir_schema()
+    admissoes.garantir_schema()
+    admissoes_canais.garantir_schema()
     return True
 
 
@@ -854,6 +859,580 @@ def _tela_historico() -> None:
         )
 
 
+_FUSO_SP = ZoneInfo("America/Sao_Paulo")
+
+# estados que ainda pedem alguém do DP (filtro padrão da tela Admissões)
+_ADM_PENDENTES = [
+    admissoes.AWAITING_APPROVAL, admissoes.AWAITING_DOCUMENTS, admissoes.BLOCKED,
+    admissoes.FAILED, admissoes.QUEUED, admissoes.CLAIMED, admissoes.APPROVED,
+]
+
+
+def _adm_quando(valor) -> str:
+    return valor.astimezone(_FUSO_SP).strftime("%d/%m/%Y %H:%M") if valor else "—"
+
+
+def _adm_rotulo_cliente(lista_clientes: list, codigo: str) -> str:
+    return next((f"{c['codigo_dominio']} - {c['nome']}" for c in lista_clientes if c["codigo_dominio"] == codigo), codigo)
+
+
+_ADM_INTERVALO_S = 10
+
+
+def _adm_estado(escritorio_id: str) -> dict:
+    """Assinatura da lista (id -> situação, última alteração) para saber se algo mudou."""
+    return {l["id"]: (l["status"], str(l["atualizado_em"])) for l in admissoes.listar(escritorio_id, limite=200)}
+
+
+@st.dialog("Admissão aguardando aprovação")
+def _adm_dialogo_aprovar(escritorio_id: str, ids: list) -> None:
+    linhas = {l["id"]: l for l in admissoes.listar(escritorio_id, [admissoes.AWAITING_APPROVAL])}
+    mostradas = [linhas[i] for i in ids if i in linhas]
+    if not mostradas:
+        st.write("Essa solicitação já foi decidida.")
+        return
+    st.write("O agente montou a prévia. Confira e aprove para ele preencher no Domínio.")
+    for l in mostradas:
+        st.markdown(f"**Nº {l['id']}** · {l['cliente_nome'] or l.get('empresa_nome') or l['empresa_ref']}"
+                    + (f"  \n{l['resumo']}" if l.get("resumo") else ""))
+        if st.button("Abrir para conferir e aprovar", type="primary", key=f"adm_pop_{l['id']}"):
+            st.session_state["adm_abrir"] = l["id"]
+            st.rerun()
+
+
+def _adm_vigiar(escritorio_id: str, pode_aprovar: bool) -> None:
+    """Atualiza a tela sozinha quando alguma solicitação muda de situação
+    (confere a cada _ADM_INTERVALO_S s sem refazer a tela), avisa com um
+    toast e abre um pop-up quando chega prévia para aprovar."""
+    chave = f"adm_estado_{escritorio_id}"
+    avisadas = st.session_state.setdefault("adm_avisadas", set())
+    if chave not in st.session_state:
+        st.session_state[chave] = _adm_estado(escritorio_id)
+
+    @st.fragment(run_every=_ADM_INTERVALO_S)
+    def _vigia() -> None:
+        atual = _adm_estado(escritorio_id)
+        antes = st.session_state.get(chave, {})
+        if atual == antes:
+            return
+        st.session_state[chave] = atual
+        st.session_state["adm_toasts"] = [
+            f"Nº {i}: {admissoes.STATUS_ROTULO.get(atual[i][0], atual[i][0])}"
+            for i, v in atual.items() if antes.get(i) != v]
+        st.rerun()
+
+    _vigia()
+    for msg in st.session_state.pop("adm_toasts", []):
+        st.toast(msg, icon="🔔")
+    if pode_aprovar:
+        estado = st.session_state[chave]
+        novas = [i for i, (status, _) in estado.items()
+                 if status == admissoes.AWAITING_APPROVAL and i not in avisadas]
+        if novas:
+            avisadas.update(novas)
+            _adm_dialogo_aprovar(escritorio_id, novas)
+
+
+def _tela_admissoes() -> None:
+    """Admissões: solicitações que chegam dos canais (Acessórias, ONVIO,
+    WhatsApp) pela API (api.py, /api/admissoes/eventos), fila do agente da
+    sessão RDS e aprovação do DP. Regras em admissoes.py - a tela só mostra
+    e chama as funções de lá. Aprovar/rejeitar: só admin do escritório ou
+    super admin, e nunca a conta que montou a prévia. Escritório: cada um só
+    vê o próprio; super_admin_global escolhe (mesmo padrão das outras telas)."""
+    _cabecalho_app("🧑‍💼", "Admissões",
+                   "Solicitações de admissão, fila do agente e aprovação do DP antes de salvar no Domínio.",
+                   pai=_PAI_RPA_FOLHA)
+    _agente_v = _adm_versao_agente()
+    with st.expander(f"Versão {admissoes.VERSAO}" + (f" · agente v{_agente_v}" if _agente_v else "") + " — novidades"):
+        for versao, data, itens in admissoes.NOVIDADES:
+            st.markdown(f"**{versao}** ({data})" + chr(10) + chr(10).join(f"- {i}" for i in itens))
+
+    papel = st.session_state.get("papel_usuario")
+    usuario = st.session_state.get("usuario_logado")
+    escritorio_id = st.session_state.get("escritorio_id")
+    if papel == auth.PAPEL_SUPER_GLOBAL:
+        escritorios = auth.carregar_escritorios()
+        ids = list(escritorios.keys())
+        escritorio_id = st.selectbox(
+            "Escritório", ids, format_func=lambda eid: escritorios.get(eid, {}).get("nome", eid),
+            index=ids.index(escritorio_id) if escritorio_id in ids else 0, key="adm_escritorio",
+        )
+    pode_aprovar = admissoes.pode_aprovar(papel)
+    _adm_vigiar(escritorio_id, pode_aprovar)
+
+    contagem = admissoes.contagem_por_status(escritorio_id)
+    cols = st.columns(6)
+    for col, status in zip(cols, [admissoes.AWAITING_APPROVAL, admissoes.AWAITING_DOCUMENTS,
+                                  admissoes.BLOCKED, admissoes.FAILED, admissoes.QUEUED, admissoes.CLAIMED]):
+        col.metric(admissoes.STATUS_ROTULO[status], contagem.get(status, 0))
+
+    aba_lista, aba_nova, aba_empresas, aba_canais = st.tabs(
+        ["Solicitações", "Registrar solicitação", "Empresas", "Canais e agente"])
+    lista_clientes = clientes.listar_clientes(escritorio_id)
+
+    with aba_lista:
+        abrir = st.session_state.pop("adm_abrir", None)
+        if abrir:  # veio do pop-up: limpa os filtros e abre a solicitação
+            for k in ("adm_f_status", "adm_f_canal", "adm_f_cliente"):
+                st.session_state.pop(k, None)  # volta ao padrão (pendentes, todos, todas)
+            st.session_state["adm_escolhida"] = abrir
+        f1, f2, f3 = st.columns([2, 1, 1.4])
+        filtro_status = f1.multiselect(
+            "Situação", list(admissoes.STATUS_ROTULO), default=_ADM_PENDENTES,
+            format_func=admissoes.STATUS_ROTULO.get, key="adm_f_status",
+        )
+        filtro_canal = f2.selectbox(
+            "Canal", [""] + list(admissoes.CANAIS),
+            format_func=lambda c: admissoes.CANAL_ROTULO.get(c, "Todos"), key="adm_f_canal",
+        )
+        ids_clientes = [None] + [c["id"] for c in lista_clientes]
+        nomes_clientes = {c["id"]: f"{c['codigo_dominio']} - {c['nome']}" for c in lista_clientes}
+        filtro_cliente = f3.selectbox(
+            "Empresa", ids_clientes, format_func=lambda cid: nomes_clientes.get(cid, "Todas"), key="adm_f_cliente",
+        )
+        linhas = admissoes.listar(escritorio_id, filtro_status or None, filtro_canal or None, filtro_cliente)
+        if not linhas:
+            st.info("Nenhuma solicitação com esses filtros.")
+        else:
+            st.dataframe(
+                [{
+                    "Nº": l["id"],
+                    "Situação": admissoes.STATUS_ROTULO.get(l["status"], l["status"]),
+                    "Canal": admissoes.CANAL_ROTULO.get(l["canal"], l["canal"]),
+                    "Nº no canal": l["id_externo"],
+                    "Assunto": l.get("resumo") or "",
+                    "Empresa": l["cliente_nome"] or f"{l.get('empresa_nome') or l['empresa_ref']} (não cadastrada)",
+                    "Motivo": l["motivo"] or "",
+                    "Atualizada": _adm_quando(l["atualizado_em"]),
+                } for l in linhas],
+                hide_index=True, use_container_width=True,
+            )
+            rotulos = {
+                l["id"]: f"Nº {l['id']} · {admissoes.STATUS_ROTULO.get(l['status'])} · "
+                         f"{l['cliente_nome'] or l.get('empresa_nome') or l['empresa_ref']}"
+                for l in linhas
+            }
+            escolhida = st.selectbox("Abrir solicitação", list(rotulos), format_func=rotulos.get, key="adm_escolhida")
+            _detalhe_admissao(escolhida, escritorio_id, usuario, papel, pode_aprovar)
+
+    with aba_nova:
+        st.caption("Para pedidos que chegaram por um canal ainda sem integração automática (ex.: WhatsApp). "
+                   "Mesma regra dos canais: o mesmo canal com o mesmo número não cria outra solicitação.")
+        if not lista_clientes:
+            st.info("Cadastre a empresa em Gerenciar Clientes primeiro.")
+        else:
+            with st.form("adm_nova", clear_on_submit=True):
+                n_canal = st.selectbox("Canal", list(admissoes.CANAIS), format_func=admissoes.CANAL_ROTULO.get)
+                n_id = st.text_input("Nº no canal (nº da solicitação, protocolo ou id da mensagem)")
+                n_empresa = st.selectbox(
+                    "Empresa", [c["codigo_dominio"] for c in lista_clientes],
+                    format_func=lambda cod: _adm_rotulo_cliente(lista_clientes, cod),
+                )
+                n_docs = st.text_area(
+                    "Referências dos documentos (uma por linha, opcional)",
+                    help="Link ou identificador da ficha de admissão e do ASO no canal - não cole dados pessoais aqui.",
+                )
+                if st.form_submit_button("Registrar", type="primary"):
+                    try:
+                        linha, dup = admissoes.registrar_manual(
+                            escritorio_id, usuario, n_canal, n_id, n_empresa,
+                            [d for d in n_docs.splitlines() if d.strip()],
+                        )
+                    except admissoes.TransicaoInvalida as exc:
+                        st.error(str(exc))
+                    else:
+                        if dup:
+                            st.warning(f"Já existia a solicitação Nº {linha['id']} para esse canal e ID.")
+                        else:
+                            st.success(f"Solicitação Nº {linha['id']} registrada e enviada para a fila do agente.")
+
+    with aba_empresas:
+        _adm_empresas(escritorio_id, lista_clientes)
+
+    with aba_canais:
+        _adm_integracoes(escritorio_id, usuario, pode_aprovar)
+        st.divider()
+        st.markdown("**Chave dos canais**")
+        st.caption("Os conectores de Acessórias, ONVIO e WhatsApp enviam as solicitações para "
+                   "`POST /api/admissoes/eventos` com o cabeçalho `X-API-Key`.")
+        info = admissoes.info_chave_canal(escritorio_id)
+        if info:
+            st.write(f"Chave ativa `{info['prefixo']}…`, gerada por {info['criada_por']} em {_adm_quando(info['criada_em'])}.")
+        else:
+            st.write("Nenhuma chave gerada - os canais ainda não conseguem enviar solicitações.")
+        if pode_aprovar:
+            c1, c2 = st.columns(2)
+            if c1.button("Gerar nova chave" if info else "Gerar chave", key="adm_gerar_chave"):
+                st.session_state["adm_chave_nova"] = admissoes.gerar_chave_canal(escritorio_id, usuario)
+                st.rerun()
+            if info and c2.button("Revogar chave", key="adm_revogar_chave"):
+                admissoes.revogar_chave_canal(escritorio_id)
+                st.session_state.pop("adm_chave_nova", None)
+                st.rerun()
+            if st.session_state.get("adm_chave_nova"):
+                st.warning("Copie agora: a chave não aparece de novo. Gerar outra invalida esta.")
+                st.code(st.session_state["adm_chave_nova"], language=None)
+        else:
+            st.caption("Só administradores do escritório geram ou revogam a chave.")
+        _adm_download_agente()
+
+
+def _adm_versao_agente() -> str:
+    arq = Path(__file__).parent / "attended_worker" / "VERSION_ADMISSOES"
+    return arq.read_text(encoding="utf-8").strip() if arq.exists() else ""
+
+
+def _adm_download_agente() -> None:
+    """Download e instalação do programa do agente (admissoes_agente.exe,
+    montado no deploy e servido pela api.py em /api/attended-admissoes/*)."""
+    st.markdown("**Programa do agente**")
+    st.caption("Instale onde o Domínio é usado: numa sessão RDS do servidor ou num computador local "
+               "(escolha na janela do programa, em \"Onde o Domínio está\").")
+    c1, c2 = st.columns(2)
+    v = _adm_versao_agente()
+    c1.link_button(f"⬇ Baixar agente{f' v{v}' if v else ''} (.zip)", "/api/attended-admissoes/download-zip",
+                   use_container_width=True)
+    c2.link_button(f"Baixar só o .exe{f' v{v}' if v else ''}", "/api/attended-admissoes/download",
+                   use_container_width=True)
+    with st.expander("Como instalar"):
+        st.markdown(
+            "1. Em **Gerenciar Usuários**, crie uma conta só para o agente: papel **Usuário**, com o app "
+            "**Admissões** liberado. Essa conta não aprova o que ela mesma preparou.\n"
+            "2. Na **sessão RDS** (ou no **computador local**) onde o Domínio é usado, baixe o .zip acima e "
+            "extraia numa pasta fixa, por exemplo `C:\\AgenteAdmissoes`.\n"
+            "3. Abra o `admissoes_agente.exe`. Se o Windows avisar (SmartScreen), clique em **Mais informações › "
+            "Executar assim mesmo**.\n"
+            "4. Entre com a conta do agente, escolha **Onde o Domínio está** (Sessão RDS ou Este computador), "
+            "confira a pasta de trabalho (`C:\\Dominio`) e clique em **Iniciar**.\n"
+            "5. Deixe o Domínio aberto no módulo Folha. Na RDS, não minimize nem desconecte a sessão; no "
+            "computador local, não bloqueie a tela. O programa se atualiza sozinho quando sai versão nova.\n\n"
+            "A leitura dos documentos (formulário ou IA) é escolhida aqui no Hub, na aba **IA**."
+        )
+
+
+def _adm_integracoes(escritorio_id: str, usuario: str, pode_configurar: bool) -> None:
+    """Campos de integração de cada canal, por escritório (regras e cifra em
+    admissoes_canais.py). Só admin do escritório / super admin altera; os
+    tokens nunca voltam para a tela."""
+    st.markdown("**Integrações dos canais**")
+    st.caption("Cada escritório informa os próprios acessos. Tokens ficam cifrados no Hub e não aparecem de novo.")
+    abas = st.tabs([admissoes_canais.ROTULO[c] for c in admissoes_canais.CAMPOS])
+    for aba, canal in zip(abas, admissoes_canais.CAMPOS):
+        with aba:
+            cfg = admissoes_canais.obter_config(escritorio_id, canal)
+            disponivel = admissoes_canais.DISPONIVEL[canal]
+            if canal == admissoes_canais.IA:
+                st.caption("Desligada, o agente monta a prévia com os campos do formulário do Acessórias "
+                           "(Nome, CPF, Cargo, Salário...) e o DP confere o ASO nos anexos. Ligada, a IA "
+                           "escolhida lê a ficha e o ASO. A troca vale a partir da próxima admissão.")
+                if cfg["ativo"]:
+                    st.success("Leitura com IA: " + admissoes_canais.CAMPOS[canal][0]["opcoes"].get(
+                        cfg["parametros"].get("provedor"), ""))
+                else:
+                    st.caption("IA desligada: leitura pelo formulário do Acessórias.")
+            elif not disponivel:
+                st.info("Integração em desenvolvimento: já dá para guardar os dados, "
+                        "mas o Hub ainda não busca nada neste canal.")
+            elif cfg["ativo"]:
+                st.success("Integração ativa.")
+            else:
+                st.caption("Integração desligada.")
+            if cfg["ultima_sinc_em"]:
+                texto = f"Última sincronização {_adm_quando(cfg['ultima_sinc_em'])}: {cfg['ultima_sinc_msg'] or ''}"
+                (st.caption if cfg["ultima_sinc_ok"] else st.error)(texto)
+            if not pode_configurar:
+                st.caption("Só administradores do escritório alteram as integrações.")
+                continue
+            with st.form(f"adm_int_{canal}_{escritorio_id}"):
+                valores = {}
+                limpar = []
+                for campo in admissoes_canais.CAMPOS[canal]:
+                    chave = campo["chave"]
+                    if campo.get("segredo"):
+                        salvo = chave in cfg["segredos_salvos"]
+                        valores[chave] = st.text_input(
+                            campo["rotulo"] + (" (salvo - deixe em branco para manter)" if salvo else ""),
+                            type="password", help=campo.get("ajuda"), key=f"adm_int_{escritorio_id}_{canal}_{chave}",
+                        )
+                        if salvo and st.checkbox(f"Apagar {campo['rotulo']} salvo", key=f"adm_int_{escritorio_id}_{canal}_{chave}_del"):
+                            limpar.append(chave)
+                    elif campo.get("opcoes"):
+                        opcoes = list(campo["opcoes"])
+                        atual = cfg["parametros"].get(chave)
+                        valores[chave] = st.selectbox(
+                            campo["rotulo"], opcoes, index=opcoes.index(atual) if atual in opcoes else 0,
+                            format_func=campo["opcoes"].get, help=campo.get("ajuda"),
+                            key=f"adm_int_{escritorio_id}_{canal}_{chave}",
+                        )
+                    else:
+                        valores[chave] = st.text_input(
+                            campo["rotulo"], value=str(cfg["parametros"].get(chave, "")),
+                            help=campo.get("ajuda"), key=f"adm_int_{escritorio_id}_{canal}_{chave}",
+                        )
+                ativo = st.checkbox("Ler os documentos com IA" if canal == admissoes_canais.IA else "Integração ativa",
+                                    value=cfg["ativo"], disabled=not disponivel,
+                                    key=f"adm_int_{escritorio_id}_{canal}_ativo")
+                salvar = st.form_submit_button("Salvar", type="primary")
+            if salvar:
+                try:
+                    admissoes_canais.salvar_config(escritorio_id, canal, usuario, ativo, valores, tuple(limpar))
+                except admissoes_canais.ConfigInvalida as exc:
+                    st.error(str(exc))
+                else:
+                    st.toast("Integração salva.")
+                    st.rerun()
+            if canal == admissoes_canais.ACESSORIAS:
+                c1, c2 = st.columns(2)
+                if c1.button("Testar conexão", key="adm_int_acessorias_testar",
+                             disabled=admissoes_canais.CAMPOS[canal][0]["chave"] not in cfg["segredos_salvos"]):
+                    try:
+                        dptos = admissoes_canais.testar_acessorias(escritorio_id)
+                    except admissoes_canais.ErroCanal as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success("Conexão OK. Departamentos no Acessórias: " + (", ".join(dptos) or "nenhum"))
+                if c2.button("Sincronizar agora", key="adm_int_acessorias_sinc", disabled=not cfg["ativo"]):
+                    try:
+                        r = admissoes_canais.sincronizar_acessorias(escritorio_id, autor=usuario)
+                    except (admissoes_canais.ErroCanal, admissoes_canais.ConfigInvalida) as exc:
+                        st.error(str(exc))
+                    else:
+                        if r.get("em_andamento"):
+                            st.info("Já existe uma sincronização em andamento - tente em instantes.")
+                        else:
+                            st.toast(f"{r['novas']} solicitação(ões) nova(s) do Acessórias.")
+                            st.rerun()
+                st.caption("O Hub também busca sozinho a cada poucos minutos enquanto a integração estiver ativa. "
+                           "A empresa é encontrada pelo CNPJ cadastrado em Gerenciar Clientes.")
+                st.markdown("**Empresas do Acessórias**")
+                st.caption("Traz as empresas ativas do Acessórias (razão social e CNPJ) para Gerenciar Clientes, "
+                           "para o Hub reconhecer quem abriu cada solicitação e o agente saber qual empresa abrir "
+                           "no Domínio. Empresas já cadastradas sem CNPJ e com o mesmo nome ganham o CNPJ.")
+                id_codigo = st.checkbox(
+                    "O ID da empresa no Acessórias é o mesmo código dela no Domínio",
+                    key=f"adm_int_{escritorio_id}_id_codigo",
+                    help="Marque só se no Acessórias vocês usam o mesmo número da empresa no Domínio. "
+                         "Sem isso, empresas novas não são criadas (o código no Domínio é obrigatório).",
+                )
+                if st.button("Importar empresas do Acessórias", key="adm_int_acessorias_importar",
+                             disabled="token" not in cfg["segredos_salvos"]):
+                    try:
+                        r = admissoes_canais.importar_empresas_acessorias(escritorio_id, usuario, id_codigo)
+                    except admissoes_canais.ErroCanal as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success(
+                            f"{r['lidas']} empresa(s) lida(s): {r['criadas']} cadastrada(s), "
+                            f"{r['cnpj_preenchido']} ganharam o CNPJ, {r['ja_cadastradas']} já estavam cadastradas."
+                            + (f" {r['religadas']} solicitação(ões) bloqueada(s) foram ligadas à empresa." if r["religadas"] else "")
+                        )
+                        if r["sem_codigo"]:
+                            st.warning(f"{r['sem_codigo']} empresa(s) não foram cadastradas por falta do código no "
+                                       "Domínio - cadastre em Gerenciar Clientes ou marque a opção acima.")
+                        if r["codigo_em_uso"]:
+                            st.warning(f"{r['codigo_em_uso']} empresa(s) não foram cadastradas porque o código "
+                                       "já é de outra empresa no cadastro.")
+
+
+def _adm_form_empresa(empresa: dict | None, escritorio_id: str, prefixo: str) -> None:
+    """Formulário de cadastro/edição da empresa (mesmo cadastro de Gerenciar
+    Clientes). Ao salvar, solicitações bloqueadas por falta da empresa são
+    religadas."""
+    novo = empresa is None
+    with st.form(f"adm_emp_{prefixo}_{escritorio_id}", clear_on_submit=novo):
+        nome = st.text_input("Razão social", value="" if novo else empresa["nome"])
+        c1, c2 = st.columns(2)
+        codigo = c1.text_input("Código no Domínio", value="" if novo else str(empresa["codigo_dominio"]),
+                               help="Número da empresa no Domínio - é a empresa que o agente abre para cadastrar.")
+        cnpj = c2.text_input("CNPJ/CPF", value="" if novo else (empresa.get("cnpj") or ""),
+                             help="É por ele que o Hub reconhece a empresa que abriu a solicitação no Acessórias.")
+        enviar = st.form_submit_button("Cadastrar empresa" if novo else "Salvar alterações", type="primary")
+    if enviar:
+        if not nome.strip() or not codigo.strip():
+            st.error("Informe a razão social e o código no Domínio.")
+            return
+        if novo:
+            ok, msg = clientes.criar_cliente(escritorio_id, nome.strip(), codigo.strip(), cnpj)
+        else:
+            ok, msg = clientes.atualizar_cliente(empresa["id"], escritorio_id, nome.strip(), codigo.strip(), cnpj)
+        if not ok:
+            st.error(msg)
+            return
+        religadas = admissoes.religar_empresas(escritorio_id, st.session_state.get("usuario_logado") or "sistema")
+        st.toast(msg + (f" {religadas} solicitação(ões) liberada(s)." if religadas else ""))
+        st.rerun()
+
+
+def _adm_empresas(escritorio_id: str, lista: list) -> None:
+    """Empresas do escritório (o mesmo cadastro de Gerenciar Clientes), com
+    busca e edição - para conferir código no Domínio e CNPJ."""
+    st.caption("O mesmo cadastro de Gerenciar Clientes. Para trazer as empresas do Acessórias de uma vez, "
+               "use Canais e agente › Acessórias › Importar empresas.")
+    with st.expander("Cadastrar empresa"):
+        _adm_form_empresa(None, escritorio_id, "nova")
+    busca = st.text_input("Buscar por nome, código ou CNPJ", key=f"adm_emp_busca_{escritorio_id}")
+    termo = busca.strip().casefold()
+    termo_dig = clientes.so_digitos(busca)
+    achadas = [c for c in lista if not termo or termo in c["nome"].casefold()
+               or termo == str(c["codigo_dominio"]).casefold()
+               or (termo_dig and termo_dig in (c.get("cnpj") or ""))]
+    sem_cnpj = sum(1 for c in lista if not c.get("cnpj"))
+    if sem_cnpj:
+        st.warning(f"{sem_cnpj} empresa(s) sem CNPJ: solicitações delas vindas do Acessórias não serão reconhecidas.")
+    with st.expander(f"Empresas ({len(achadas)} de {len(lista)})", expanded=True):
+        st.dataframe(
+            [{"Código no Domínio": c["codigo_dominio"], "Razão social": c["nome"], "CNPJ/CPF": c.get("cnpj") or "—"}
+             for c in achadas],
+            hide_index=True, use_container_width=True,
+        )
+    if achadas:
+        ids = [c["id"] for c in achadas]
+        rotulo = {c["id"]: f"{c['codigo_dominio']} - {c['nome']}" for c in achadas}
+        escolhida = st.selectbox("Editar empresa", ids, format_func=rotulo.get, key=f"adm_emp_sel_{escritorio_id}")
+        _adm_form_empresa(next(c for c in achadas if c["id"] == escolhida), escritorio_id, f"ed{escolhida}")
+
+
+def _adm_vincular_empresa(a: dict, escritorio_id: str, usuario: str) -> None:
+    """Escolher a empresa do cadastro quando o Hub não reconheceu (ou para
+    corrigir antes de o agente começar)."""
+    lista = clientes.listar_clientes(escritorio_id)
+    if not lista:
+        st.caption("Cadastre a empresa em Gerenciar Clientes para vincular.")
+        return
+    ids = [c["id"] for c in lista]
+    rotulo = {c["id"]: f"{c['codigo_dominio']} - {c['nome']}" + (f" (CNPJ {c['cnpj']})" if c.get("cnpj") else "")
+              for c in lista}
+    with st.expander("Vincular empresa" if not a["cliente_id"] else "Trocar empresa", expanded=not a["cliente_id"]):
+        escolhido = st.selectbox("Empresa no cadastro (código no Domínio)", ids, format_func=rotulo.get,
+                                 index=ids.index(a["cliente_id"]) if a["cliente_id"] in ids else 0,
+                                 key=f"adm_vinc_{a['id']}")
+        if st.button("Vincular", key=f"adm_vinc_btn_{a['id']}"):
+            _adm_acao(lambda: admissoes.vincular_empresa(a["id"], escritorio_id, escolhido, usuario),
+                      "Empresa vinculada.")
+
+
+def _detalhe_admissao(admissao_id: int, escritorio_id: str, usuario: str, papel: str, pode_aprovar: bool) -> None:
+    a = admissoes.obter(admissao_id, escritorio_id)
+    if not a:
+        st.error("Solicitação não encontrada.")
+        return
+    # hash da prévia mostrada na renderização ANTERIOR: é a que a pessoa viu
+    # quando clicou em Aprovar (o clique roda a tela de novo, já com o banco
+    # atual) - se a prévia mudou nesse meio tempo, aprovar() recusa
+    chave_visto = f"adm_visto_{admissao_id}"
+    hash_visto = st.session_state.get(chave_visto)
+    st.session_state[chave_visto] = a["previa_hash"]
+
+    with st.container(border=True):
+        st.markdown(f"#### Nº {a['id']} · {admissoes.STATUS_ROTULO.get(a['status'], a['status'])}")
+        c1, c2, c3 = st.columns(3)
+        c1.write(f"**Canal:** {admissoes.CANAL_ROTULO.get(a['canal'], a['canal'])}")
+        c1.markdown(f"**Nº no canal:** {a['id_externo']}",
+                 help="Número da solicitação no canal de origem (ex.: nº da solicitação no Acessórias). "
+                      "É por ele que o Hub sabe que um pedido repetido é o mesmo.")
+        if a["cliente_nome"]:
+            c2.write(f"**Empresa:** {a['cliente_nome']}")
+        else:
+            c2.write(f"**Empresa:** {a.get('empresa_nome') or '—'} (não cadastrada)")
+        c2.write(f"**Ref. no canal:** {a['empresa_ref']}")
+        c2.write(f"**Recebida em:** {_adm_quando(a['criado_em'])}")
+        c3.write(f"**Agente:** {a['reservado_por'] or '—'}")
+        if a["decidido_por"]:
+            c3.write(f"**Decisão:** {a['decidido_por']} em {_adm_quando(a['decidido_em'])}")
+        if a.get("resumo"):
+            st.write(f"**Assunto no canal:** {a['resumo']}")
+        if a["fase"] is None and a["status"] in (admissoes.BLOCKED, admissoes.QUEUED, admissoes.AWAITING_DOCUMENTS):
+            _adm_vincular_empresa(a, escritorio_id, usuario)
+        if a["cliente_id"]:
+            empresa = next((c for c in clientes.listar_clientes(escritorio_id) if c["id"] == a["cliente_id"]), None)
+            if empresa:
+                with st.expander("Editar cadastro da empresa"):
+                    _adm_form_empresa(empresa, escritorio_id, f"det{a['id']}")
+        if a["protocolo"]:
+            st.success(f"Protocolo: {a['protocolo']}")
+        if a["motivo"]:
+            st.warning(a["motivo"])
+        if a["documentos"]:
+            st.write("**Documentos:**")
+            for d in a["documentos"]:
+                st.write(f"- {d}")
+
+        if a["previa"]:
+            st.markdown("**Prévia do cadastro (o que o agente vai salvar no Domínio)**")
+            st.dataframe(
+                # tudo como texto: coluna com tipos misturados quebra o Arrow do st.dataframe
+                [{"Campo": k, "Valor": v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)}
+                 for k, v in a["previa"].items()],
+                hide_index=True, use_container_width=True,
+            )
+
+        if a["status"] == admissoes.AWAITING_APPROVAL:
+            if not pode_aprovar:
+                st.info("Aguardando um administrador do escritório aprovar ou rejeitar.")
+            elif usuario == a["reservado_por"]:
+                st.info("Foi esta conta que preparou a prévia - outra pessoa precisa aprovar.")
+            else:
+                conferi = st.checkbox("Conferi a prévia com a ficha de admissão e o ASO", key=f"adm_conferi_{a['id']}")
+                obs = st.text_input("Observação (opcional)", key=f"adm_obs_{a['id']}")
+                if st.button("Aprovar e liberar para salvar", type="primary", disabled=not conferi,
+                             key=f"adm_ok_{a['id']}"):
+                    _adm_acao(lambda: admissoes.aprovar(a["id"], escritorio_id, usuario, papel, hash_visto or "", obs),
+                              "Aprovada. O agente salva no Domínio na próxima rodada.")
+                motivo = st.text_input("Motivo da rejeição", key=f"adm_rej_{a['id']}")
+                if st.button("Rejeitar", key=f"adm_rejeitar_{a['id']}"):
+                    _adm_acao(lambda: admissoes.rejeitar(a["id"], escritorio_id, usuario, papel, motivo), "Rejeitada.")
+        elif a["status"] == admissoes.APPROVED and pode_aprovar:
+            motivo = st.text_input("Motivo para desfazer a aprovação", key=f"adm_desf_{a['id']}")
+            if st.button("Desfazer aprovação (rejeitar)", key=f"adm_desfazer_{a['id']}"):
+                _adm_acao(lambda: admissoes.rejeitar(a["id"], escritorio_id, usuario, papel, motivo),
+                          "Aprovação desfeita.")
+        elif a["status"] == admissoes.COMPLETED and pode_aprovar:
+            st.caption("Conferiu e não ficou igual? Volte para a fila: o agente monta a prévia de novo "
+                       "e ela passa pela aprovação outra vez.")
+            motivo = st.text_input("O que não ficou certo?", key=f"adm_reab_{a['id']}")
+            if st.button("Voltar para a fila", key=f"adm_reabrir_{a['id']}"):
+                _adm_acao(lambda: admissoes.reabrir(a["id"], escritorio_id, usuario, papel, motivo),
+                          "Voltou para a fila.")
+        if a["status"] in (admissoes.AWAITING_DOCUMENTS, admissoes.BLOCKED, admissoes.FAILED, admissoes.CLAIMED):
+            if a["status"] == admissoes.CLAIMED:
+                st.caption(f"Se o agente parou (programa fechado, sessão caiu), devolva. Sem resposta, a tarefa volta "
+                           f"sozinha: preparo em {admissoes.PRESA_PREPARO_MIN} min, gravação em "
+                           f"{admissoes.PRESA_GRAVACAO_MIN} min (vira bloqueada).")
+            if a["fase"] == admissoes.FASE_GRAVACAO and a["status"] in (admissoes.BLOCKED, admissoes.FAILED) \
+                    and pode_aprovar:
+                st.markdown("**Conferiu e salvou no Domínio?**")
+                obs_c = st.text_input("Observação / matrícula no Domínio (opcional)", key=f"adm_conc_{a['id']}")
+                if st.button("Marcar como concluída", type="primary", key=f"adm_concluir_{a['id']}"):
+                    _adm_acao(lambda: admissoes.concluir(a["id"], escritorio_id, usuario, papel, obs_c),
+                              "Concluída.")
+            if a["fase"] == admissoes.FASE_GRAVACAO:
+                destino = "para aprovação de novo"
+                st.caption("Falhou ao salvar: confira no Domínio o que já foi gravado antes de aprovar de novo.")
+            else:
+                destino = "para a fila do agente"
+            motivo = st.text_input("O que foi resolvido?", key=f"adm_dev_{a['id']}")
+            if st.button(f"Devolver {destino}", key=f"adm_devolver_{a['id']}"):
+                _adm_acao(lambda: admissoes.devolver_a_fila(a["id"], escritorio_id, usuario, motivo), "Devolvida.")
+
+        with st.expander("Histórico"):
+            for e in admissoes.listar_eventos(a["id"], escritorio_id):
+                de = admissoes.STATUS_ROTULO.get(e["de"], e["de"]) if e["de"] else "—"
+                para = admissoes.STATUS_ROTULO.get(e["para"], e["para"])
+                st.write(f"{_adm_quando(e['quando'])} · {de} → **{para}** · {e['autor']}"
+                         + (f" · {e['motivo']}" if e["motivo"] else ""))
+
+
+def _adm_acao(fn, mensagem: str) -> None:
+    try:
+        fn()
+    except (admissoes.TransicaoInvalida, admissoes.SemPermissao, admissoes.AdmissaoNaoEncontrada) as exc:
+        st.error(str(exc))
+        return
+    st.toast(mensagem)
+    st.rerun()
+
+
 def _tela_gerenciar_clientes() -> None:
     """Tela dedicada para gerenciar os clientes (empresas) cadastrados:
     cadastrar, editar nome/código e remover. Disponível pra qualquer
@@ -861,7 +1440,7 @@ def _tela_gerenciar_clientes() -> None:
     super_admin_global escolhe qual escritório ver; os demais só enxergam
     o próprio. Remoção fica restrita a admin_escritorio/super_admin_global
     pra evitar que alguém apague por engano um código usado por outros."""
-    _cabecalho_app("🏢", "Gerenciar Clientes", "Empresas clientes usadas na Conciliação Bancária.")
+    _cabecalho_app("🏢", "Gerenciar Clientes", "Empresas clientes usadas na Conciliação Bancária e nas Admissões.")
     st.divider()
 
     eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
@@ -888,13 +1467,17 @@ def _tela_gerenciar_clientes() -> None:
     with st.form("gerenciar_cliente_form", clear_on_submit=True):
         novo_nome = st.text_input("Nome do cliente")
         novo_codigo = st.text_input("Código da empresa no Domínio")
+        novo_cnpj = st.text_input("CNPJ/CPF (opcional)", help="Usado nas Admissões para reconhecer a empresa "
+                                                               "das solicitações que chegam do Acessórias.")
         salvar = st.form_submit_button("Cadastrar", type="primary")
     if salvar:
         if not novo_nome.strip() or not novo_codigo.strip():
             st.error("Informe nome e código da empresa.")
         else:
-            ok, msg = clientes.criar_cliente(escritorio_visto, novo_nome.strip(), novo_codigo.strip())
+            ok, msg = clientes.criar_cliente(escritorio_visto, novo_nome.strip(), novo_codigo.strip(), novo_cnpj)
             if ok:
+                # solicitações de admissão que esperavam esta empresa voltam para a fila
+                admissoes.religar_empresas(escritorio_visto, st.session_state.get("usuario_logado") or "sistema")
                 _flash("flash_gerenciar_cliente", f"✅ {msg}")
                 st.rerun()
             else:
@@ -910,12 +1493,14 @@ def _tela_gerenciar_clientes() -> None:
 
     for c in lista:
         aberto = bool(st.session_state.get(f"aberto_cliente_{c['id']}"))
-        with st.expander(f"{c['nome']} — {c['codigo_dominio']}", expanded=aberto):
+        with st.expander(f"{c['nome']} — {c['codigo_dominio']}" + (f" — CNPJ {c['cnpj']}" if c.get("cnpj") else ""),
+                         expanded=aberto):
             with st.form(f"editar_cliente_{c['id']}_form"):
                 nome_edit = st.text_input("Nome", value=c["nome"], key=f"nome_cliente_{c['id']}")
                 codigo_edit = st.text_input(
                     "Código da empresa no Domínio", value=c["codigo_dominio"], key=f"codigo_cliente_{c['id']}"
                 )
+                cnpj_edit = st.text_input("CNPJ/CPF (opcional)", value=c.get("cnpj") or "", key=f"cnpj_cliente_{c['id']}")
                 salvar_edit = st.form_submit_button("💾 Salvar alterações")
             if salvar_edit:
                 if not nome_edit.strip() or not codigo_edit.strip():
@@ -923,9 +1508,10 @@ def _tela_gerenciar_clientes() -> None:
                     st.session_state[f"aberto_cliente_{c['id']}"] = True
                 else:
                     ok, msg = clientes.atualizar_cliente(
-                        c["id"], escritorio_visto, nome_edit.strip(), codigo_edit.strip()
+                        c["id"], escritorio_visto, nome_edit.strip(), codigo_edit.strip(), cnpj_edit
                     )
                     if ok:
+                        admissoes.religar_empresas(escritorio_visto, st.session_state.get("usuario_logado") or "sistema")
                         _flash("flash_gerenciar_cliente", f"✅ {msg}")
                         st.session_state[f"aberto_cliente_{c['id']}"] = False
                         st.rerun()
@@ -1672,7 +2258,8 @@ def _bloco_programa_nfgo(escritorio_id: str) -> None:
 
 
 def _tela_rpa_hub(modulos: list | None = None, titulo: str = "Hub de RPAs", icone: str = "🤖",
-                  subtitulo: str = "Fechamento mensal de REST e DMS no ISS Web.") -> None:
+                  subtitulo: str = "Fechamento mensal de REST e DMS no ISS Web.",
+                  pai: tuple | None = None) -> None:
     """Hub de RPAs do escritório: cadastro de credenciais de procurador,
     upload de planilha e acompanhamento das execuções, por módulo (ISS Web
     é o primeiro — novos módulos só entram em rpa/registry.py, esta tela
@@ -1688,7 +2275,7 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "Hub de RPAs", icon
     super_admin_global tem o seletor pra escolher QUALQUER escritório
     (mesmo padrão de _tela_historico/_tela_gerenciar_clientes), pra poder
     dar suporte sem precisar logar como o cliente."""
-    _cabecalho_app(icone, titulo, subtitulo)
+    _cabecalho_app(icone, titulo, subtitulo, pai=pai)
 
     eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
     if eh_global:
@@ -1966,6 +2553,7 @@ _APPS_HOME = [
         "descricao": "Fechamento mensal de REST e DMS no ISS Web.",
         "departamento": "Fiscal",
         "tela": "rpa_hub",
+        "grupo": "rpa_fiscal",
     },
     {
         "id": "rpa_folha",
@@ -1974,6 +2562,16 @@ _APPS_HOME = [
         "descricao": "Fechamento da folha no Domínio Folha com automação assistida.",
         "departamento": "Pessoal",
         "tela": None,
+        "grupo": "rpa_folha",
+    },
+    {
+        "id": "admissoes",
+        "icone": "🧑‍💼",
+        "titulo": "Admissões",
+        "descricao": "Solicitações de admissão dos canais, fila do agente e aprovação do DP antes de salvar no Domínio.",
+        "departamento": "Pessoal",
+        "tela": "admissoes",
+        "grupo": "rpa_folha",
     },
     {
         "id": "rpa_nfgo",
@@ -1982,6 +2580,7 @@ _APPS_HOME = [
         "descricao": "Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO.",
         "departamento": "Fiscal",
         "tela": "rpa_nfgo",
+        "grupo": "rpa_fiscal",
     },
     {
         "id": "marketing",
@@ -2036,6 +2635,53 @@ _APPS_HOME = [
 
 
 _CARDS_POR_LINHA = 3
+
+# Grupos de apps: na tela inicial aparece UM card por grupo, que abre um menu
+# com os apps filhos (os de _APPS_HOME com "grupo": <id>). Um RPA novo do
+# Fiscal so precisa de uma entrada em _APPS_HOME com "grupo": "rpa_fiscal"
+# (do Pessoal, "grupo": "rpa_folha") -
+# a permissao continua por app (o grupo aparece se o usuario tiver ao menos
+# um filho liberado).
+_GRUPOS_APPS = {
+    "rpa_fiscal": {
+        "icone": "🧾",
+        "titulo": "RPA Fiscal",
+        "departamento": "Fiscal",
+        "tela": "rpa_fiscal",
+        "subtitulo": "Escolha qual automação do Fiscal você quer usar.",
+    },
+    "rpa_folha": {
+        "icone": "📋",
+        "titulo": "RPA Folha",
+        "departamento": "Pessoal",
+        "tela": "rpa_folha",
+        "subtitulo": "Escolha qual automação do Pessoal você quer usar.",
+    },
+}
+
+
+def _filhos_do_grupo(grupo_id: str, apps_visiveis: list) -> list:
+    return [a for a in apps_visiveis if a.get("grupo") == grupo_id]
+
+
+def _apps_para_home(apps_visiveis: list) -> list:
+    """Apps da tela inicial: os sem grupo + um card por grupo que tenha ao
+    menos um filho liberado (na posicao do primeiro filho)."""
+    saida, vistos = [], set()
+    for a in apps_visiveis:
+        g = a.get("grupo")
+        if not g:
+            saida.append(a)
+        elif g not in vistos and g in _GRUPOS_APPS:
+            vistos.add(g)
+            info = _GRUPOS_APPS[g]
+            filhos = _filhos_do_grupo(g, apps_visiveis)
+            saida.append({
+                "id": g, "icone": info["icone"], "titulo": info["titulo"],
+                "descricao": " · ".join(f["titulo"].replace("RPA — ", "").replace("RPA ", "") for f in filhos),
+                "departamento": info["departamento"], "tela": info["tela"], "eh_grupo": True,
+            })
+    return saida
 
 
 def _apps_permitidos_efetivos(escritorio_id: str, usuario: str) -> set:
@@ -2211,7 +2857,8 @@ def _iniciais(nome: str) -> str:
     return (partes[0][0] + partes[-1][0]).upper()
 
 
-_TELAS_APPS = {"conciliacao", "rpa_hub", "rpa_nfgo", "historico", "gerenciar_clientes"}
+_TELAS_APPS = {"conciliacao", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "rpa_folha", "admissoes", "historico",
+               "gerenciar_clientes"}
 
 
 def _sidebar_hub(papel_usuario: str) -> None:
@@ -2276,13 +2923,19 @@ def _chip_usuario_html() -> str:
             f'<div class="p">{html.escape(_PAPEL_ROTULO.get(papel, papel or ""))}</div></div></div>')
 
 
-def _cabecalho_app(icone: str, titulo: str, subtitulo: str = "") -> None:
+def _cabecalho_app(icone: str, titulo: str, subtitulo: str = "", pai: tuple | None = None) -> None:
     """Cabecalho padrao das telas do Hub (mesmo visual da tela inicial):
-    caminho Inicio › tela, icone, titulo, subtitulo e o usuario logado."""
+    caminho Inicio › tela, icone, titulo, subtitulo e o usuario logado.
+    `pai` = (rotulo, tela) quando a tela fica dentro de um grupo (ex.: RPA
+    Fiscal): entra no caminho e ganha um botao de voltar."""
+    if pai and st.button(f"← {pai[0]}", key=f"voltar_{pai[1]}"):
+        st.session_state["tela"] = pai[1]
+        st.rerun()
+    caminho = f"Início &nbsp;›&nbsp; {html.escape(pai[0])} &nbsp;›&nbsp; " if pai else "Início &nbsp;›&nbsp; "
     c_tit, c_user = st.columns([3, 1.1])
     with c_tit:
         st.markdown(
-            f'<div class="hh-crumb">Início &nbsp;›&nbsp; {html.escape(titulo)}</div>'
+            f'<div class="hh-crumb">{caminho}{html.escape(titulo)}</div>'
             f'<div class="hh-page"><div class="hh-page-ic">{icone}</div>'
             f'<div><div class="hh-page-t">{html.escape(titulo)}</div>'
             + (f'<div class="hh-sub">{html.escape(subtitulo)}</div>' if subtitulo else "")
@@ -2339,6 +2992,8 @@ def _tela_home() -> None:
     )
 
     favoritos = set(auth.carregar_usuarios().get(usuario, {}).get("apps_favoritos") or [])
+    # quem favoritou um app que agora mora dentro de um grupo mantem o favorito no card do grupo
+    favoritos |= {a["grupo"] for a in _APPS_HOME if a.get("grupo") and a["id"] in favoritos}
     so_favoritos = st.session_state.get("home_filtro") == "favoritos"
 
     c_tit, c_busca, c_depto = st.columns([2.6, 1.3, 1.1], vertical_alignment="bottom")
@@ -2357,7 +3012,7 @@ def _tela_home() -> None:
 
     termo = (busca or "").strip().lower()
     apps = [
-        a for a in _apps_visiveis
+        a for a in _apps_para_home(_apps_visiveis)
         if (not so_favoritos or a["id"] in favoritos)
         and (depto == _FILTRO_TODOS_DEPTOS or a["departamento"] == depto)
         and (not termo or termo in (a["titulo"] + " " + a["descricao"]).lower())
@@ -2382,7 +3037,7 @@ def _tela_home() -> None:
                 unsafe_allow_html=True)
 
 
-def _card_app(coluna, app: dict, usuario: str, favoritos: set) -> None:
+def _card_app(coluna, app: dict, usuario: str, favoritos: set, com_favorito: bool = True) -> None:
     """Um card da tela inicial: icone, titulo, status, descricao,
     departamento, estrela de favorito e botao Acessar/Em breve."""
     depto = _DEPARTAMENTOS.get(app["departamento"], {"icone": "•", "cor": "#64748b"})
@@ -2398,14 +3053,18 @@ def _card_app(coluna, app: dict, usuario: str, favoritos: set) -> None:
                 f'<div class="hh-desc">{html.escape(app["descricao"])}</div></div></div>',
                 unsafe_allow_html=True,
             )
-            c_chip, c_fav, c_btn = st.columns([1.5, 0.4, 2.3], vertical_alignment="center")
+            if com_favorito:
+                c_chip, c_fav, c_btn = st.columns([1.5, 0.4, 2.3], vertical_alignment="center")
+            else:
+                c_chip, c_btn = st.columns([1.5, 2.7], vertical_alignment="center")
+                c_fav = None
             c_chip.markdown(
                 f'<span class="hh-chip" style="background:{cor}26;color:{cor};border:1px solid {cor}55">'
                 f'{depto["icone"]} {html.escape(depto.get("chip", app["departamento"]))}</span>',
                 unsafe_allow_html=True,
             )
             eh_fav = app["id"] in favoritos
-            if c_fav.button("★" if eh_fav else "☆", key=f"fav_{app['id']}",
+            if c_fav is not None and c_fav.button("★" if eh_fav else "☆", key=f"fav_{app['id']}",
                             help="Tirar dos favoritos" if eh_fav else "Adicionar aos favoritos"):
                 novos = (favoritos - {app["id"]}) if eh_fav else (favoritos | {app["id"]})
                 auth.definir_favoritos(usuario, sorted(novos))
@@ -2423,6 +3082,29 @@ def _card_app(coluna, app: dict, usuario: str, favoritos: set) -> None:
                     with st.container(key=f"embreve_{app['id']}"):
                         st.button("Em breve", key=f"home_em_breve_{app['id']}",
                                   use_container_width=True, disabled=True)
+
+
+_PAI_RPA_FISCAL = ("RPA Fiscal", "rpa_fiscal")
+_PAI_RPA_FOLHA = ("RPA Folha", "rpa_folha")
+
+
+def _tela_grupo_apps(grupo_id: str) -> None:
+    """Menu de um grupo de apps (ex.: RPA Fiscal): um card por app filho
+    que o usuario pode usar. Sem nenhum liberado, volta pra tela inicial."""
+    info = _GRUPOS_APPS[grupo_id]
+    ids = _apps_permitidos_efetivos(st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado"))
+    filhos = _filhos_do_grupo(grupo_id, [a for a in _APPS_HOME if a["id"] in ids])
+    if not filhos:
+        st.session_state["tela"] = "home"
+        st.rerun()
+    if st.button("← Início", key=f"voltar_home_{grupo_id}"):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    _cabecalho_app(info["icone"], info["titulo"], info["subtitulo"])
+    for inicio in range(0, len(filhos), _CARDS_POR_LINHA):
+        colunas = st.columns(_CARDS_POR_LINHA)
+        for coluna, app in zip(colunas, filhos[inicio:inicio + _CARDS_POR_LINHA]):
+            _card_app(coluna, app, st.session_state.get("usuario_logado"), set(), com_favorito=False)
 
 
 def _tela_logs_acesso() -> None:
@@ -2508,7 +3190,7 @@ if st.session_state.get("mostrar_trocar_senha"):
 
 # tela atual também na URL (?tela=...): F5 ou uma sessão nova do Streamlit
 # (reconexão, Hub reiniciado no deploy) voltava sempre pra tela inicial
-_TELAS_URL = {"home", "rpa_hub", "rpa_nfgo", "conciliacao", "historico", "gerenciar_clientes",
+_TELAS_URL = {"home", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
               "gerenciar_escritorios", "gerenciar_usuarios", "logs_acesso"}
 if "tela" not in st.session_state:
     _tela_url = st.query_params.get("tela", "home")
@@ -2554,13 +3236,17 @@ if st.session_state.get("tela") == "gerenciar_clientes":
     _tela_gerenciar_clientes()
     st.stop()
 
+if st.session_state.get("tela") == "rpa_fiscal":
+    _tela_grupo_apps("rpa_fiscal")
+    st.stop()
+
 if st.session_state.get("tela") == "rpa_hub":
     if "rpa_hub" not in _apps_permitidos_efetivos(
         st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
     ):
         st.session_state["tela"] = "home"
         st.rerun()
-    _tela_rpa_hub()
+    _tela_rpa_hub(titulo="RPA — Fechamento REST/DMS", pai=_PAI_RPA_FISCAL)
     st.stop()
 
 if st.session_state.get("tela") == "rpa_nfgo":
@@ -2573,7 +3259,21 @@ if st.session_state.get("tela") == "rpa_nfgo":
         modulos=[m for m, info in rpa_registry.MODULOS.items() if info.get("app_home") == "rpa_nfgo"],
         titulo="RPA NF GO", icone="🧾",
         subtitulo="Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO.",
+        pai=_PAI_RPA_FISCAL,
     )
+    st.stop()
+
+if st.session_state.get("tela") == "rpa_folha":
+    _tela_grupo_apps("rpa_folha")
+    st.stop()
+
+if st.session_state.get("tela") == "admissoes":
+    if "admissoes" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    _tela_admissoes()
     st.stop()
 
 if st.session_state.get("tela") == "conciliacao":
@@ -2875,33 +3575,43 @@ else:
 # ---------------------------------------------------------------------------
 
 
+def _versao_arquivo(caminho: str) -> tuple:
+    """(mtime, tamanho) do arquivo, usado como parte da CHAVE dos caches. O
+    upload sempre grava no mesmo caminho (extrato.pdf, balancete.pdf...); se
+    esse valor nao entrar na chave - parametro com "_" na frente NAO entra no
+    Streamlit - trocar de extrato reaproveita a analise, a conta banco e a
+    conciliacao do extrato anterior."""
+    info = Path(caminho).stat()
+    return (info.st_mtime_ns, info.st_size)
+
+
 @st.cache_data(show_spinner=False)
-def _parse_balancete_cached(path: str, _mtime: float):
+def _parse_balancete_cached(path: str, versao: tuple):
     return cb.parse_balancete(path)
 
 
 @st.cache_data(show_spinner=False)
-def _detectar_conta_banco_cached(extrato_path: str, _extrato_mtime: float,
-                                  balancete_path: str, _balancete_mtime: float):
-    contas = _parse_balancete_cached(balancete_path, _balancete_mtime)
+def _detectar_conta_banco_cached(extrato_path: str, extrato_versao: tuple,
+                                  balancete_path: str, balancete_versao: tuple):
+    contas = _parse_balancete_cached(balancete_path, balancete_versao)
     return cb.detectar_conta_banco(extrato_path, contas)
 
 
 @st.cache_data(show_spinner=False)
-def _analisar_extrato_cached(extrato_path: str, _extrato_mtime: float):
+def _analisar_extrato_cached(extrato_path: str, extrato_versao: tuple):
     return cb.analisar_extrato(extrato_path)
 
 
 @st.cache_data(show_spinner=False)
-def _diagnostico_conta_cached(extrato_path: str, _extrato_mtime: float,
-                              balancete_path: str, _balancete_mtime: float):
-    contas = _parse_balancete_cached(balancete_path, _balancete_mtime)
+def _diagnostico_conta_cached(extrato_path: str, extrato_versao: tuple,
+                              balancete_path: str, balancete_versao: tuple):
+    contas = _parse_balancete_cached(balancete_path, balancete_versao)
     return cb.diagnosticar_conta_banco(extrato_path, contas)
 
 
 def _mostrar_analise_extrato(caminho: str) -> None:
     try:
-        a = _analisar_extrato_cached(caminho, Path(caminho).stat().st_mtime)
+        a = _analisar_extrato_cached(caminho, _versao_arquivo(caminho))
     except Exception as exc:
         st.warning(f"Não consegui ler o extrato para analisar: {exc}")
         return
@@ -2930,7 +3640,7 @@ if extrato_path:
 
 if balancete_path:
     try:
-        contas_balancete = _parse_balancete_cached(balancete_path, Path(balancete_path).stat().st_mtime)
+        contas_balancete = _parse_balancete_cached(balancete_path, _versao_arquivo(balancete_path))
     except Exception as exc:
         st.error(f"Erro ao ler o balancete: {exc}")
         contas_balancete = []
@@ -2954,8 +3664,8 @@ if balancete_path:
         conta_auto = None
         if extrato_path:
             conta_auto = _detectar_conta_banco_cached(
-                extrato_path, Path(extrato_path).stat().st_mtime,
-                balancete_path, Path(balancete_path).stat().st_mtime,
+                extrato_path, _versao_arquivo(extrato_path),
+                balancete_path, _versao_arquivo(balancete_path),
             )
 
         _assinatura_extrato = Path(extrato_path).stat().st_size if extrato_path else None
@@ -2980,8 +3690,8 @@ if balancete_path:
                             "confirme qual é, abaixo (o balancete continua sendo a fonte de verdade).")
                 try:
                     st.info(_diagnostico_conta_cached(
-                        extrato_path, Path(extrato_path).stat().st_mtime,
-                        balancete_path, Path(balancete_path).stat().st_mtime,
+                        extrato_path, _versao_arquivo(extrato_path),
+                        balancete_path, _versao_arquivo(balancete_path),
                     ))
                 except Exception:
                     pass
@@ -3019,14 +3729,14 @@ if not pronto:
 
 if pronto:
 
-    def _mtime(path: Optional[str]) -> float:
-        return Path(path).stat().st_mtime if path else 0.0
+    def _mtime(path: Optional[str]) -> tuple:
+        return _versao_arquivo(path) if path else (0, 0)
 
     @st.cache_data(show_spinner=False)
     def _processar_cached(
         extrato_path, razao_path, balancete_path, conta_contabil, competencia,
         saldo_inicial_razao, saldo_inicial_extrato, dias_tolerancia,
-        _extrato_mtime, _razao_mtime, _balancete_mtime, usar_sugestoes=True,
+        extrato_versao, razao_versao, balancete_versao, usar_sugestoes=True,
     ):
         log = []
         _print_original = print
