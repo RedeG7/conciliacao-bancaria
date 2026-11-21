@@ -478,3 +478,61 @@ O token fica cifrado com a `RPA_ENC_KEY` (a mesma das credenciais do RPA).
   cadastrado, a solicitação entra como "Bloqueada" até o cadastro ser corrigido.
 - ONVIO e WhatsApp: os campos já ficam salvos, mas a integração ainda não consulta nada.
 
+## WhatsApp Disparos / AutoEnvioPro (autoenviopro.com.br)
+
+App trazido do Replit ("WhatsApp Planilha Envio"), pasta `whatsapp/` (monorepo
+pnpm: front React/Vite + API Express, ver `whatsapp/replit.md`): serviço
+`whatsapp` do `docker-compose.yml`, imagem `ghcr.io/redeg7/whatsapp-disparos:latest`
+(buildada pelo mesmo workflow). Usa um banco próprio (`whatsapp`) **dentro do
+mesmo Postgres do Hub**, criado sozinho pelo container na primeira subida
+(`whatsapp/lib/db/ensure-db.mjs` + `drizzle-kit push`). A sessão do WhatsApp
+conectado e as imagens dos modelos ficam no volume `whatsapp_data`. Na home do
+Hub aparece o card "💬 WhatsApp Disparos" (Marketing & Comercial), que entra
+**já logado** (`/api/sso/whatsapp` em `api.py`): o super administrador do Hub
+entra como super_admin, os demais como usuário comum.
+
+Ativar (uma vez só):
+
+1. No DNS do `autoenviopro.com.br` (mesmo provedor, servidorestavel.net),
+   registros **A** do domínio e do `www` apontando pro mesmo IP do Hub
+   (192.96.217.88 - já feito). O Caddy emite o HTTPS sozinho; o `www`
+   redireciona para o domínio sem www.
+2. Nada a fazer no `.env`: o deploy acrescenta `whatsapp` em
+   `COMPOSE_PROFILES` e gera `WHATSAPP_SSO_SECRET`, `WHATSAPP_SESSION_SECRET` e
+   `WHATSAPP_ADMIN_PASSWORD` (senha do usuário `admin`, criado só com o banco
+   vazio - veja com `grep WHATSAPP_ADMIN_PASSWORD /opt/conciliacao-bancaria/.env`).
+   (Outro endereço: `DOMINIO_WHATSAPP=...` no `.env`.)
+3. Depois do primeiro deploy, entre pelo card como super administrador, abra
+   **Configurações** e leia o QR Code com o celular do WhatsApp que vai
+   disparar. A conexão é **uma só para o app inteiro** e fica com o usuário
+   que leu o QR Code: para os demais usuários ela aparece como desconectada
+   (regra do próprio app, que veio assim do Replit).
+
+**Trazer os dados do Replit (opcional):** no Shell do Repl, gere o dump e
+baixe o arquivo; depois, na VPS, restaure **antes** do primeiro acesso (com o
+banco ainda vazio, para não misturar com o `admin` criado sozinho):
+
+```bash
+# no Shell do Replit
+pg_dump "$DATABASE_URL" --no-owner --no-acl --data-only > whatsapp-replit.sql
+
+# na VPS (depois que o container subiu e criou as tabelas)
+docker exec -i conciliacao-db psql -U conciliacao -d whatsapp \
+  -c "TRUNCATE users, templates, campaigns, contacts, global_contacts, conversations, messages RESTART IDENTITY CASCADE"
+docker exec -i conciliacao-db psql -U conciliacao -d whatsapp < whatsapp-replit.sql
+```
+
+A sessão do WhatsApp do Replit **não** é copiada (pasta `whatsapp-session`,
+credenciais da conta - nunca vai pro git): basta ler o QR Code de novo na VPS.
+Desconecte o app do Replit antes, para os dois não disputarem a mesma conta.
+
+Liberar/bloquear por escritório ou usuário: id `whatsapp` em Gerenciar
+Escritórios/Usuários do Hub (mesma regra dos outros apps).
+
+Backup:
+
+```bash
+docker exec conciliacao-db pg_dump -U conciliacao whatsapp > whatsapp-$(date +%Y%m%d).sql
+docker run --rm -v conciliacao-bancaria_whatsapp_data:/data -v $(pwd):/b alpine \
+  tar czf /b/whatsapp-data-$(date +%Y%m%d).tgz -C /data .
+```

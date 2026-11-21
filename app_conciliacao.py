@@ -2631,6 +2631,18 @@ _APPS_HOME = [
         # subdominio DOMINIO_RH - entra ja logado via /api/sso/rh (api.py).
         "url": "/api/sso/rh" if os.environ.get("DOMINIO_RH") else None,
     },
+    {
+        "id": "whatsapp",
+        "icone": "💬",
+        "titulo": "WhatsApp Disparos",
+        "descricao": "Campanhas de WhatsApp a partir de planilha, modelos de mensagem, contatos e conversas. Abre em outra aba, já logado.",
+        "departamento": "Marketing & Comercial",
+        "tela": None,
+        # app separado (pasta whatsapp/, servico "whatsapp" do
+        # docker-compose), no subdominio DOMINIO_WHATSAPP - entra ja logado
+        # via /api/sso/whatsapp (api.py).
+        "url": "/api/sso/whatsapp" if os.environ.get("DOMINIO_WHATSAPP") else None,
+    },
 ]
 
 
