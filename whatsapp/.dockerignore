@@ -1,0 +1,7 @@
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+whatsapp-session
+**/whatsapp-session
+**/uploads
+.env

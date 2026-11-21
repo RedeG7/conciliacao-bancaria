@@ -39,6 +39,9 @@ services:
       - DOMINIO_INSSOBRAS=${DOMINIO_INSSOBRAS:-inssobras.redeg7.com}
       # RH (pasta rh/) - o card dele na home passa por /api/sso/rh (api.py)
       - DOMINIO_RH=${DOMINIO_RH:-rh.redeg7.com}
+      # WhatsApp Disparos (pasta whatsapp/) - o card dele na home passa por
+      # /api/sso/whatsapp (api.py)
+      - DOMINIO_WHATSAPP=${DOMINIO_WHATSAPP:-autoenviopro.com.br}
     depends_on:
       db:
         condition: service_healthy
@@ -79,6 +82,10 @@ services:
       # pelo deploy (deploy.yml)
       - DOMINIO_RH=${DOMINIO_RH:-rh.redeg7.com}
       - RH_SSO_SECRET=${RH_SSO_SECRET:-}
+      # login unico no WhatsApp Disparos (/api/sso/whatsapp) - o segredo e
+      # gerado sozinho no .env pelo deploy (deploy.yml)
+      - DOMINIO_WHATSAPP=${DOMINIO_WHATSAPP:-autoenviopro.com.br}
+      - WHATSAPP_SSO_SECRET=${WHATSAPP_SSO_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -199,6 +206,35 @@ services:
     expose:
       - "3000"
 
+  # WhatsApp Disparos (pasta whatsapp/, monorepo Node vindo do Replit): banco
+  # proprio ("whatsapp") dentro do mesmo Postgres do Hub - criado sozinho pelo
+  # container na primeira subida. A sessao do WhatsApp conectado (Baileys) e
+  # as imagens dos modelos ficam no volume whatsapp_data: sem ele seria
+  # preciso ler o QR Code de novo a cada deploy. Login pelo card do Hub (SSO)
+  # ou usuario/senha proprios. Profile "whatsapp": o deploy liga sozinho
+  # quando a imagem ja pode ser baixada (mesma logica do Marketing).
+  whatsapp:
+    image: ghcr.io/redeg7/whatsapp-disparos:latest
+    profiles: ["whatsapp"]
+    container_name: whatsapp-disparos
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - DATABASE_URL=postgresql://conciliacao:${POSTGRES_PASSWORD}@db:5432/whatsapp
+      - SESSION_SECRET=${WHATSAPP_SESSION_SECRET:-}
+      - SSO_SECRET=${WHATSAPP_SSO_SECRET:-}
+      # senha do primeiro super_admin ("admin"), criado so com o banco vazio
+      - AUTH_PASSWORD=${WHATSAPP_ADMIN_PASSWORD:-}
+      - COOKIE_SECURE=1
+      - TRUST_PROXY=1
+    volumes:
+      - whatsapp_data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "3000"
+
   caddy:
     image: caddy:2-alpine
     container_name: conciliacao-caddy
@@ -217,6 +253,8 @@ services:
       - DOMINIO_RH=${DOMINIO_RH:-rh.redeg7.com}
       # atalho para a tela de Admissoes do Hub (registro DNS A apontando pro VPS)
       - DOMINIO_ADMISSAO=${DOMINIO_ADMISSAO:-admissao.redeg7.com}
+      # subdominio do WhatsApp Disparos (registro DNS A apontando pro VPS)
+      - DOMINIO_WHATSAPP=${DOMINIO_WHATSAPP:-autoenviopro.com.br}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -232,3 +270,4 @@ volumes:
   marketing_data:
   inssobras_data:
   rh_data:
+  whatsapp_data:

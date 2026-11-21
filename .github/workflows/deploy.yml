@@ -112,6 +112,15 @@ jobs:
           cache-from: type=gha,scope=rh
           cache-to: type=gha,mode=max,scope=rh
 
+      # WhatsApp Disparos (pasta whatsapp/, monorepo pnpm vindo do Replit)
+      - uses: docker/build-push-action@v5
+        with:
+          context: whatsapp
+          push: true
+          tags: ghcr.io/redeg7/whatsapp-disparos:latest
+          cache-from: type=gha,scope=whatsapp
+          cache-to: type=gha,mode=max,scope=whatsapp
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -184,6 +193,26 @@ jobs:
             else
               echo "Imagem rh nao acessivel - RH nao ligado"
             fi
+            # idem WhatsApp Disparos (profile "whatsapp")
+            if docker pull -q ghcr.io/redeg7/whatsapp-disparos:latest >/dev/null 2>&1; then
+              if ! grep -q '^COMPOSE_PROFILES=' .env; then
+                printf '\nCOMPOSE_PROFILES=whatsapp\n' >> .env
+              elif ! grep -qE '^COMPOSE_PROFILES=(.*,)?whatsapp(,|$)' .env; then
+                sed -i 's/^COMPOSE_PROFILES=\(.*\)$/COMPOSE_PROFILES=\1,whatsapp/' .env
+              fi
+            else
+              echo "Imagem whatsapp-disparos nao acessivel - WhatsApp Disparos nao ligado"
+            fi
+            # segredos do WhatsApp Disparos, gerados uma vez e guardados no
+            # .env: login unico Hub -> WhatsApp (api.py e
+            # whatsapp/artifacts/api-server/src/routes/sso.ts), cookie de
+            # sessao do app e senha do primeiro super_admin "admin"
+            for VAR in WHATSAPP_SSO_SECRET WHATSAPP_SESSION_SECRET WHATSAPP_ADMIN_PASSWORD; do
+              if ! grep -q "^$VAR=." .env; then
+                sed -i "/^$VAR=/d" .env
+                printf '\n%s=%s\n' "$VAR" "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
+              fi
+            done
             # segredo do login unico Hub -> RH (api.py e rh/src/sso.js):
             # gerado uma vez e guardado no .env
             if ! grep -q '^RH_SSO_SECRET=.' .env; then
