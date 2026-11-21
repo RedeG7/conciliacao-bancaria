@@ -508,3 +508,25 @@ def sso_rh(sessao_token: Optional[str] = Cookie(None)):
         return HTMLResponse("Seu usuário não tem acesso ao RH.", status_code=403)
     auth.registrar_acesso(dados["usuario"], dados.get("escritorio_id"), "RH")
     return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Login unico no WhatsApp Disparos (autoenviopro.com.br, pasta whatsapp/)
+# ---------------------------------------------------------------------------
+# Mesmo bilhete do Marketing, com segredo proprio (WHATSAPP_SSO_SECRET),
+# conferido em whatsapp/artifacts/api-server/src/routes/sso.ts. Super
+# administrador do Hub entra como super_admin; os demais como usuario comum.
+
+@app.get("/api/sso/whatsapp")
+def sso_whatsapp(sessao_token: Optional[str] = Cookie(None)):
+    dominio = os.environ.get("DOMINIO_WHATSAPP", "")
+    segredo = os.environ.get("WHATSAPP_SSO_SECRET", "")
+    if not dominio or not segredo:
+        return HTMLResponse("Acesso ao WhatsApp Disparos ainda não configurado no servidor.", status_code=503)
+    dados = auth.validar_sessao(sessao_token or "")
+    if not dados:
+        return RedirectResponse("/", status_code=302)
+    if not _app_permitido(dados, "whatsapp"):
+        return HTMLResponse("Seu usuário não tem acesso ao WhatsApp Disparos.", status_code=403)
+    auth.registrar_acesso(dados["usuario"], dados.get("escritorio_id"), "WhatsApp Disparos")
+    return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)

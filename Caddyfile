@@ -41,3 +41,15 @@ honorarioscontrol.com.br, www.honorarioscontrol.com.br {
 {$DOMINIO_RH:rh.redeg7.com} {
 	reverse_proxy rh:3000
 }
+
+# WhatsApp Disparos / AutoEnvioPro (servico "whatsapp" do docker-compose,
+# pasta whatsapp/), no dominio proprio autoenviopro.com.br. Precisa dos
+# registros DNS A do dominio e do "www" apontando pro VPS; o "www" so
+# redireciona para o dominio sem www.
+{$DOMINIO_WHATSAPP:autoenviopro.com.br} {
+	reverse_proxy whatsapp:3000
+}
+
+www.{$DOMINIO_WHATSAPP:autoenviopro.com.br} {
+	redir https://{$DOMINIO_WHATSAPP:autoenviopro.com.br}{uri} permanent
+}
