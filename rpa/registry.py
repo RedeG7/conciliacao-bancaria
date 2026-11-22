@@ -193,3 +193,29 @@ def fazer_login(modulo: str, page, credencial: dict) -> None:
         )
         return
     raise ValueError(f"Módulo de RPA desconhecido: {modulo}")
+
+
+def planilha_modelo(modulo: str) -> bytes:
+    """Planilha em branco (cabeçalho + 1 linha de exemplo) com as colunas
+    esperadas do módulo. Data de criação fixa: o arquivo sai igual toda vez."""
+    import datetime as _dt
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    info = MODULOS[modulo]
+    colunas = [c.replace(" (opcional)", "") for c in info["colunas_planilha"]]
+    wb = Workbook()
+    wb.properties.created = wb.properties.modified = _dt.datetime(2026, 1, 1)
+    ws = wb.active
+    ws.title = "Empresas"
+    ws.append(colunas)
+    exemplo = {
+        "Código da Empresa": "68", "CNPJ/CPF": "00.000.000/0001-00",
+        "Razão Social": "Empresa Exemplo LTDA", "Município": info["municipio_alvo"].split(" / ")[0],
+        "CNPJ": "00.000.000/0001-00", "Inscrição Estadual": "10.123.456-7",
+    }
+    ws.append([exemplo.get(c, "") for c in colunas])
+    saida = BytesIO()
+    wb.save(saida)
+    return saida.getvalue()

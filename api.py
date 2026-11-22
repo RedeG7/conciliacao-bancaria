@@ -392,9 +392,54 @@ def attended_nfgo_download_zip():
         destino = str(Path(tempfile.gettempdir()) / f"nfgo_attended_{chave}.zip")
         with zipfile.ZipFile(destino, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(_EXE_NFGO_PATH, arcname="nfgo_attended.exe")
+            leia = _RAIZ / "attended_worker" / "LEIA-ME_NFGO.txt"
+            if leia.exists():
+                zf.write(leia, arcname="LEIA-ME.txt")
         _ZIP_NFGO_CACHE.clear()
         _ZIP_NFGO_CACHE[chave] = destino
-    return FileResponse(destino, media_type="application/zip", filename="nfgo_attended.zip")
+    return FileResponse(destino, media_type="application/zip", filename="rpa_nf_go.zip")
+
+
+@app.get("/api/modelo-planilha/{modulo}")
+def modelo_planilha(modulo: str):
+    """Planilha modelo do módulo, por endereço fixo (sem login: só cabeçalho
+    e uma linha de exemplo). O Hub usa um link pra cá em vez do botão de
+    download do Streamlit, cujo arquivo temporário podia expirar ("O arquivo
+    não estava disponível no site")."""
+    from fastapi.responses import Response
+    from rpa import registry as rpa_registry
+    if modulo not in rpa_registry.MODULOS:
+        raise HTTPException(status_code=404, detail="Módulo não encontrado")
+    return Response(
+        rpa_registry.planilha_modelo(modulo),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="modelo_empresas_{modulo}.xlsx"'},
+    )
+
+
+_ZIP_ISSNET_CACHE: dict = {}
+
+
+@app.get("/api/attended/download-zip")
+def attended_download_zip():
+    """Programa "Prefeituras DMS_REST" (ISS Net) + LEIA-ME num .zip, por
+    endereço fixo - usado pelo botão da tela do Hub."""
+    if not _EXE_PATH.exists():
+        raise HTTPException(status_code=404, detail="Executável não encontrado")
+    import tempfile
+    import zipfile
+    chave = _EXE_PATH.stat().st_mtime_ns
+    destino = _ZIP_ISSNET_CACHE.get(chave)
+    if destino is None or not Path(destino).exists():
+        destino = str(Path(tempfile.gettempdir()) / f"issnet_attended_{chave}.zip")
+        with zipfile.ZipFile(destino, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(_EXE_PATH, arcname="issnet_attended.exe")
+            leia = _RAIZ / "attended_worker" / "LEIA-ME.txt"
+            if leia.exists():
+                zf.write(leia, arcname="LEIA-ME.txt")
+        _ZIP_ISSNET_CACHE.clear()
+        _ZIP_ISSNET_CACHE[chave] = destino
+    return FileResponse(destino, media_type="application/zip", filename="issnet_attended.zip")
 
 
 @app.get("/api/attended/download")
