@@ -132,6 +132,16 @@ jobs:
           cache-from: type=gha,scope=calculadorartc
           cache-to: type=gha,mode=max,scope=calculadorartc
 
+      # Calculadora RTC - Simples Nacional (pasta calculadora-rtc-sn/: baixa o
+      # motor do Simples e as tabelas do Regime Regular nas versoes fixadas)
+      - uses: docker/build-push-action@v5
+        with:
+          context: calculadora-rtc-sn
+          push: true
+          tags: ghcr.io/redeg7/calculadora-rtc-sn:latest
+          cache-from: type=gha,scope=calculadorartcsn
+          cache-to: type=gha,mode=max,scope=calculadorartcsn
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -223,6 +233,16 @@ jobs:
               fi
             else
               echo "Imagem calculadora-rtc nao acessivel - Calculadora RTC nao ligada"
+            fi
+            # idem Calculadora RTC - Simples Nacional (profile "calculadorartcsn")
+            if docker pull -q ghcr.io/redeg7/calculadora-rtc-sn:latest >/dev/null 2>&1; then
+              if ! grep -q '^COMPOSE_PROFILES=' .env; then
+                printf '\nCOMPOSE_PROFILES=calculadorartcsn\n' >> .env
+              elif ! grep -qE '^COMPOSE_PROFILES=(.*,)?calculadorartcsn(,|$)' .env; then
+                sed -i 's/^COMPOSE_PROFILES=\(.*\)$/COMPOSE_PROFILES=\1,calculadorartcsn/' .env
+              fi
+            else
+              echo "Imagem calculadora-rtc-sn nao acessivel - Calculadora RTC Simples nao ligada"
             fi
             # segredos do WhatsApp Disparos, gerados uma vez e guardados no
             # .env: login unico Hub -> WhatsApp (api.py e

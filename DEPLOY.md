@@ -562,3 +562,31 @@ licença MIT), sem alteração no código dela:
   `docker compose exec app python -c "import calculadora_rtc as c; print(c.versao())"`.
 - Escritório/usuário com lista de apps restrita só vê o card depois de liberar
   "Calculadora RTC — Regime Regular" em Gerenciar Escritórios/Usuários.
+
+## Calculadora RTC — Simples Nacional (card dentro do "🧾 RPA Fiscal")
+
+CBS e IBS do optante pelo Simples (LC 214/2025, NT 2026.005) pela calculadora
+oficial da Receita
+([ReceitaFederal/calculadora-rtc-simples-nacional](https://github.com/ReceitaFederal/calculadora-rtc-simples-nacional),
+licença MIT), sem alteração no código dela. Funciona como a do Regime Regular:
+
+- `calculadora-rtc-sn/Dockerfile` baixa o motor do Simples (`SN_REF`) e gera o
+  banco com o Flyway do repo do Regime Regular (`RTC_REF`, como manda o README
+  da Receita: o repo do Simples não traz o banco). Imagem
+  `ghcr.io/redeg7/calculadora-rtc-sn`, profile `calculadorartcsn` ligado
+  sozinho pelo deploy.
+- Serviço `calculadora-rtc-sn` só na rede interna, porta 8082; o Hub fala com
+  ele por `CALCULADORA_RTC_SN_URL` (`http://calculadora-rtc-sn:8082/api`).
+- Usa o cálculo **não assistido** (`/calculadora/observabilidade/simples-nacional/nao-assistido`):
+  o usuário informa as alíquotas efetivas de CBS/IBS de cada anexo (as do
+  PGDAS-D). O assistido (alíquotas do PGDAS pelo CNPJ) só existe na versão
+  online da Receita. O CBS/IBS do Simples começa em 2027: a tela não aceita
+  data anterior.
+- A lista de cClassTrib da tela vem da calculadora do Regime Regular (se ela
+  estiver fora, o cClassTrib é digitado).
+- Tela em `_tela_calculadora_rtc_sn` (app_conciliacao.py); pedido e resposta
+  em `calculadora_rtc_sn.py` (testes em `tests/test_calculadora_rtc_sn.py`).
+  Atualizar: troque `SN_REF`/`RTC_REF` no Dockerfile, suba `VERSAO`/`NOVIDADES`
+  em `calculadora_rtc_sn.py` e faça o push na `main`.
+- Conferir no VPS: `docker compose ps calculadora-rtc-sn` e
+  `docker compose exec app python -c "import calculadora_rtc_sn as c; print(c.versao())"`.
