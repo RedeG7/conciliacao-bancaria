@@ -129,6 +129,8 @@ _TEXTOS_SEM_RESULTADO = [
     "nenhum registro", "nenhum documento", "nenhuma nota", "nenhum resultado",
     "não foram encontrad", "nao foram encontrad", "não foi encontrad", "nao foi encontrad",
     "não existem", "nao existem", "não há documentos", "nao ha documentos",
+    # faixa vermelha da Consulta de Notas Recebidas da SEFAZ-GO quando não há notas
+    "sem resultado",
 ]
 
 # Ordem importa: do padrão mais específico pro mais genérico. Todos
