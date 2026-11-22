@@ -45,6 +45,8 @@ services:
       # Calculadora RTC - Regime Regular (servico calculadora-rtc abaixo, so
       # na rede interna) - usada pela tela do RPA Fiscal (calculadora_rtc.py)
       - CALCULADORA_RTC_URL=http://calculadora-rtc:8080/api/calculadora
+      # Calculadora RTC - Simples Nacional (servico calculadora-rtc-sn abaixo)
+      - CALCULADORA_RTC_SN_URL=http://calculadora-rtc-sn:8082/api
     depends_on:
       db:
         condition: service_healthy
@@ -255,6 +257,21 @@ services:
     mem_limit: 768m
     expose:
       - "8080"
+
+  # Calculadora RTC - Simples Nacional: a calculadora OFICIAL da Receita para
+  # o Simples (calculadora-rtc-sn/Dockerfile), mesmas regras da de cima: sem
+  # login, so na rede interna. Profile "calculadorartcsn", ligado pelo deploy
+  # quando a imagem ja pode ser baixada.
+  calculadora-rtc-sn:
+    image: ghcr.io/redeg7/calculadora-rtc-sn:latest
+    profiles: ["calculadorartcsn"]
+    container_name: calculadora-rtc-sn
+    restart: unless-stopped
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xms128m -Xmx512m -XX:-UseBASE64Intrinsics
+    mem_limit: 768m
+    expose:
+      - "8082"
 
   caddy:
     image: caddy:2-alpine
