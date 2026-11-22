@@ -1558,28 +1558,6 @@ def _nome_pasta_empresa(empresa: dict) -> str:
     return nome.translate(_CARACTERES_INVALIDOS_PASTA)
 
 
-def _planilha_modelo(modulo_info: dict) -> bytes:
-    """Planilha em branco (só cabeçalho + 1 linha de exemplo) com as colunas
-    esperadas do módulo selecionado, pra baixar e preencher com os dados
-    reais — evita ter que descobrir o nome exato das colunas na mão."""
-    from openpyxl import Workbook
-
-    colunas = [c.replace(" (opcional)", "") for c in modulo_info["colunas_planilha"]]
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Empresas"
-    ws.append(colunas)
-    linha_exemplo = {
-        "Código da Empresa": "68", "CNPJ/CPF": "00.000.000/0001-00",
-        "Razão Social": "Empresa Exemplo LTDA", "Município": modulo_info["municipio_alvo"].split(" / ")[0],
-        "CNPJ": "00.000.000/0001-00", "Inscrição Estadual": "10.123.456-7",
-    }
-    ws.append([linha_exemplo.get(c, "") for c in colunas])
-    buffer = io.BytesIO()
-    wb.save(buffer)
-    return buffer.getvalue()
-
-
 def _gerar_relatorio_geral(execucao: dict, empresas_exec: list[dict]) -> bytes:
     """Relatorio_Geral_Processamento.xlsx: uma linha por empresa/obrigação
     processada na execução, com status, movimento, quantidade de notas
@@ -1684,19 +1662,9 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
             "Baixe, extraia e dê duplo clique no .exe: abre uma janela onde você escolhe o "
             "município, faz login no portal e informa a planilha/pasta — sem precisar de terminal."
         )
-        _pasta_attended = Path(__file__).parent / "attended_worker"
-        _zip_attended = io.BytesIO()
-        with zipfile.ZipFile(_zip_attended, "w", zipfile.ZIP_DEFLATED) as zf:
-            for _nome_arquivo in ["dist/issnet_attended.exe", "LEIA-ME.txt"]:
-                _caminho = _pasta_attended / _nome_arquivo
-                if _caminho.exists():
-                    zf.write(_caminho, arcname=Path(_nome_arquivo).name)
-        st.download_button(
-            "📥 Baixar script de automação (.zip)",
-            _zip_attended.getvalue(),
-            file_name="issnet_attended.zip",
-            type="primary",
-        )
+        # link pra API (endereço fixo) - o arquivo temporário do
+        # st.download_button podia expirar ("não estava disponível no site")
+        st.link_button("📥 Baixar script de automação (.zip)", "/api/attended/download-zip", type="primary")
         st.caption(
             "O .zip traz um .exe pronto — não precisa instalar Python. O Windows pode avisar "
             "'aplicativo desconhecido' (SmartScreen) por não ter certificado de editor; clique em "
@@ -1736,10 +1704,7 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
     competencia_escolhida = f"{_data_competencia.month:02d}/{_data_competencia.year}"
 
     st.caption("Colunas esperadas: " + " · ".join(modulo_info["colunas_planilha"]))
-    st.download_button(
-        "📥 Baixar planilha modelo (.xlsx)", _planilha_modelo(modulo_info),
-        file_name=f"modelo_empresas_{modulo_id}.xlsx", key=f"modelo_manual_{modulo_id}",
-    )
+    st.link_button("📥 Baixar planilha modelo (.xlsx)", f"/api/modelo-planilha/{modulo_id}")
     up_planilha = st.file_uploader(
         "Planilha de empresas (.xlsx)", type=["xlsx"], key=f"up_planilha_manual_{modulo_id}",
     )
@@ -2236,12 +2201,6 @@ def _bloco_programa_nfgo(escritorio_id: str) -> None:
     if not _exe.exists():
         st.warning("O programa ainda não está disponível para download nesta versão do Hub.")
         return
-    _zip = io.BytesIO()
-    with zipfile.ZipFile(_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(_exe, arcname="nfgo_attended.exe")
-        _leia = _pasta_attended / "LEIA-ME_NFGO.txt"
-        if _leia.exists():
-            zf.write(_leia, arcname="LEIA-ME.txt")
     _contato = rpa_core.ultimo_contato_pc(escritorio_id, "sefazgo_nfe")
     if _contato and _contato["segundos"] is not None and _contato["segundos"] <= 90:
         st.success(f"🟢 Programa aberto no PC e aguardando a fila (último contato há {_contato['segundos']} s).")
@@ -2249,9 +2208,11 @@ def _bloco_programa_nfgo(escritorio_id: str) -> None:
         st.caption(f"⚪ Programa do PC sem contato desde {_contato['visto_em']:%d/%m/%Y %H:%M} — abra o RPA NF GO no PC para processar a fila.")
     _versao_arq = _pasta_attended / "VERSION_NFGO"
     _versao = _versao_arq.read_text(encoding="utf-8").strip() if _versao_arq.exists() else ""
-    st.download_button(
+    # link pra API (endereço fixo, aceita retomar) - não monta 25 MB na
+    # memória a cada atualização da tela nem depende do arquivo temporário
+    st.link_button(
         f"📥 Baixar programa RPA NF GO{f' v{_versao}' if _versao else ''} (.zip)",
-        _zip.getvalue(), file_name="rpa_nf_go.zip", type="primary", key="download_programa_nfgo",
+        "/api/attended-nfgo/download-zip", type="primary",
     )
     st.caption(
         "Extraia e dê duplo clique no .exe (cria o atalho \"RPA NF GO\" na Área de Trabalho e se "
@@ -2385,10 +2346,9 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "Hub de RPAs", icon
     st.subheader("Nova execução")
     _eh_nfgo = modulo_id == "sefazgo_nfe"
     st.caption("Colunas esperadas: " + " · ".join(modulo_info["colunas_planilha"]))
-    st.download_button(
-        "📥 Baixar planilha modelo (.xlsx)", _planilha_modelo(modulo_info),
-        file_name=f"modelo_empresas_{modulo_id}.xlsx", key=f"modelo_{modulo_id}",
-    )
+    # link pra API (endereço fixo) - o arquivo temporário do st.download_button
+    # podia expirar entre atualizações da tela ("não estava disponível no site")
+    st.link_button("📥 Baixar planilha modelo (.xlsx)", f"/api/modelo-planilha/{modulo_id}")
     if not cred:
         st.info("Cadastre a credencial do procurador acima antes de enviar uma planilha.")
     else:
