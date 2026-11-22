@@ -752,6 +752,16 @@ def _autenticar(win, log) -> None:
 _ULTIMO_VOLTAR = {"quando": 0.0}
 
 
+def _sem_permissao(textos: str) -> bool:
+    t = (textos or "").lower()
+    return "não tem permissão" in t or "nao tem permissao" in t
+
+
+class ErroSemPermissao(ErroAttended):
+    """O portal respondeu "Você não tem permissão para acessar esta página"
+    (às vezes junto com "Sem Resultados!") - NÃO é consulta sem movimento."""
+
+
 def _voltar_se_sem_permissao(win, textos: str, log, qualquer_mensagem: bool = False) -> bool:
     """Mensagem de Atenção / "Você não tem permissão para acessar esta
     página" com opção Voltar: clica em Voltar (volta pra tela anterior).
@@ -761,8 +771,11 @@ def _voltar_se_sem_permissao(win, textos: str, log, qualquer_mensagem: bool = Fa
     if not qualquer_mensagem and not ("não tem permissão" in t or "nao tem permissao" in t
                                       or "atenção" in t or "atencao" in t):
         return False
-    if arquivos.sem_resultado(textos) or "consulta de notas" in t or "histórico de downloads" in t:
-        return False  # "Sem Resultados!" também vem com Atenção - é resultado, não erro
+    if not _sem_permissao(textos) and (
+            arquivos.sem_resultado(textos) or "consulta de notas" in t or "histórico de downloads" in t):
+        # "Sem Resultados!" sozinho também vem com Atenção - é resultado, não
+        # erro. Com "não tem permissão" junto (print do escritório), volta.
+        return False
     if time.time() - _ULTIMO_VOLTAR["quando"] < 20:  # nunca fica indo e voltando
         return False
     voltar = _achar(win, ["Voltar"], tipos=("Button", "Hyperlink", "Text"), exato=True)
@@ -933,6 +946,8 @@ def pesquisar(win, data_inicial: str, data_final: str, ie: str, tipo: str, log):
     def resultado():
         w = conectar_janela()
         textos = _todos_os_textos(w)
+        if _sem_permissao(textos):
+            return "sem_permissao"
         if _achar(w, ["Baixar todos"]) is not None or arquivos.sem_resultado(textos):
             return w
         return None
@@ -940,6 +955,13 @@ def pesquisar(win, data_inicial: str, data_final: str, ie: str, tipo: str, log):
     win = _esperar(resultado, TIMEOUT_PESQUISA_S, 1.5)
     if win is None:
         raise ErroAttended("[consulta] o resultado da pesquisa não apareceu a tempo")
+    if win == "sem_permissao":
+        # "Sem Resultados!" + "Você não tem permissão..." não é sem movimento:
+        # Voltar e a consulta é refeita (ver processar_consulta)
+        w = conectar_janela()
+        _ULTIMO_VOLTAR["quando"] = 0.0
+        _voltar_se_sem_permissao(w, _todos_os_textos(w), log)
+        raise ErroSemPermissao("[consulta] o portal respondeu 'Você não tem permissão para acessar esta página'")
     return win
 
 
@@ -1417,8 +1439,16 @@ def processar_consulta(empresa: dict, competencia: dict, pasta_raiz: Path, log) 
     ).split("/"))
     pasta.mkdir(parents=True, exist_ok=True)
 
-    win = garantir_formulario(conectar_janela(), log=log)
-    win = pesquisar(win, competencia["data_inicial"], competencia["data_final"], ie, tipo, log)
+    for tentativa in (1, 2):
+        win = garantir_formulario(conectar_janela(), log=log)
+        try:
+            win = pesquisar(win, competencia["data_inicial"], competencia["data_final"], ie, tipo, log)
+            break
+        except ErroSemPermissao:
+            if tentativa == 2:
+                raise
+            log("  ⚠️  O portal disse 'sem permissão' — cliquei em Voltar e vou refazer a consulta...")
+            time.sleep(2)
 
     textos = _todos_os_textos(win)
     print_png = print_da_janela(win)
