@@ -3223,10 +3223,29 @@ def _rtc_aba_calculo() -> None:
         if ano >= 2029 and not (aliquotas[1] or aliquotas[2]):
             st.warning("Informe as alíquotas do IBS estadual e municipal do ano escolhido.")
     else:
-        st.caption("Em 2026 valem as alíquotas de teste já cadastradas pela Receita (CBS 0,9% e IBS estadual 0,1%). "
-                   "O Imposto Seletivo só começa em 2027.")
+        simular = st.toggle("Simular com outra alíquota (ex.: CBS ainda em votação)", key="rtc_simular_2026",
+                            help="Sem isto, vale o que a Receita já cadastrou para 2026: CBS 0,9% e IBS estadual 0,1%.")
+        if simular:
+            st.info("A calculadora da Receita só aceita alíquota informada a partir de 2027. Para simular, o Hub "
+                    "calcula no modo **simulado** da Receita (regras de 01/01/2027) com as alíquotas abaixo; o "
+                    "resultado e o PDF saem marcados como simulação. Imposto Seletivo não entra (começa em 2027).")
+            a1, a2, a3 = st.columns(3)
+            aliquotas = (
+                a1.number_input("CBS (%)", 0.0, 100.0, 0.9, 0.1, format="%.4f", key="rtc_cbs_sim2026"),
+                a2.number_input("IBS estadual (%)", 0.0, 100.0, 0.1, 0.05, format="%.4f", key="rtc_ibsuf_sim2026"),
+                a3.number_input("IBS municipal (%)", 0.0, 100.0, 0.0, 0.05, format="%.4f", key="rtc_ibsmun_sim2026"),
+            )
+        else:
+            st.caption("Em 2026 valem as alíquotas de teste já cadastradas pela Receita (CBS 0,9% e IBS estadual "
+                       "0,1%). O Imposto Seletivo só começa em 2027.")
+    data_calc = calculadora_rtc.data_para_calculo(data_fato, aliquotas is not None)
+    observacao = ""
+    if data_calc != data_fato:
+        observacao = (f"Simulação: fato gerador em {data_fato.strftime('%d/%m/%Y')}, calculado no modo simulado "
+                      f"da Receita (regras de {data_calc.strftime('%d/%m/%Y')}) com CBS {_rtc_pct(aliquotas[0])}, "
+                      f"IBS estadual {_rtc_pct(aliquotas[1])} e IBS municipal {_rtc_pct(aliquotas[2])}.")
 
-    classif = _rtc_classificacoes(data_fato.isoformat())
+    classif = _rtc_classificacoes(data_calc.isoformat())
     opcoes = [f"{c['cClassTrib']} — {c['descricao'][:110]}" for c in classif]
     padrao = next((o for o in opcoes if o.startswith("000001")), opcoes[0] if opcoes else None)
     if "rtc_itens" not in st.session_state:
@@ -3254,7 +3273,9 @@ def _rtc_aba_calculo() -> None:
                     on_click=_rtc_limpar, help="Apaga os itens e o resultado para começar um cálculo novo")
     if b_calc.button("Calcular", type="primary", key="rtc_calcular", icon=":material/calculate:",
                      use_container_width=True):
-        operacao = calculadora_rtc.montar_operacao(data_fato, uf, municipio, itens, aliquotas)
+        if observacao:  # simulação de 2026: sem Imposto Seletivo
+            itens = [{**i, "is_aliquota": None} for i in itens]
+        operacao = calculadora_rtc.montar_operacao(data_calc, uf, municipio, itens, aliquotas)
         if not operacao["itens"]:
             st.warning("Preencha ao menos um item com cClassTrib e base de cálculo.")
         else:
@@ -3262,7 +3283,7 @@ def _rtc_aba_calculo() -> None:
                 with st.spinner("Calculando na calculadora da Receita..."):
                     resposta, aviso = calculadora_rtc.calcular(operacao)
                 st.session_state["rtc_resultado"] = (operacao, resposta, aviso,
-                                                     str(nomes_mun.get(municipio, "")))
+                                                     str(nomes_mun.get(municipio, "")), data_fato, observacao)
                 st.session_state.pop("rtc_xml_gerado", None)
             except calculadora_rtc.ErroCalculadora as e:
                 st.session_state.pop("rtc_resultado", None)
@@ -3278,10 +3299,13 @@ def _rtc_limpar() -> None:
         st.session_state.pop(chave, None)
 
 
-def _rtc_resultado(operacao: dict, resposta: dict, aviso, local: str = "") -> None:
+def _rtc_resultado(operacao: dict, resposta: dict, aviso, local: str = "", data_fato=None,
+                   observacao: str = "") -> None:
     linhas = calculadora_rtc.linhas_resultado(resposta)
     tot = calculadora_rtc.totais(resposta)
     st.markdown('<div class="hh-sep" style="margin:14px 0"></div>', unsafe_allow_html=True)
+    if observacao:
+        st.warning(observacao, icon=":material/science:")
     if aviso or any(l["situacao"] == calculadora_rtc.ESTADOS["CALCULO_SIMULADO"] for l in linhas):
         st.caption("Resultado simulado: calculado com as alíquotas informadas, ainda não publicadas oficialmente.")
     m = st.columns(2)
@@ -3320,7 +3344,7 @@ def _rtc_resultado(operacao: dict, resposta: dict, aviso, local: str = "") -> No
     c_pdf, c_xml = st.columns(2)
     try:
         pdf = calculadora_rtc.gerar_pdf(operacao, resposta, local, st.session_state.get("rtc_versao_rf"), aviso,
-                                        st.session_state.get("escritorio_nome") or "")
+                                        st.session_state.get("escritorio_nome") or "", data_fato, observacao)
         c_pdf.download_button("Baixar relatório (PDF)", pdf, file_name="calculo_rtc.pdf", mime="application/pdf",
                               use_container_width=True, icon=":material/picture_as_pdf:", key="rtc_pdf")
     except Exception as e:  # noqa: BLE001 - o PDF não pode derrubar a tela do resultado

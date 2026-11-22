@@ -51,6 +51,12 @@ def test_2026_nao_manda_aliquotas():
     assert rtc.aliquotas_sugeridas(2030)[1:] == (0.0, 0.0)
 
 
+def test_simular_aliquota_propria_em_2026_vai_para_o_modo_simulado():
+    assert rtc.data_para_calculo(date(2026, 11, 22), False) == date(2026, 11, 22)
+    assert rtc.data_para_calculo(date(2026, 11, 22), True) == date(2027, 1, 1)
+    assert rtc.data_para_calculo(date(2028, 5, 2), True) == date(2028, 5, 2)
+
+
 RESPOSTA = {
     "objetos": [
         {"nObj": 1, "estadoItem": "CALCULO_SIMULADO", "tribCalc": {"IBSCBS": {

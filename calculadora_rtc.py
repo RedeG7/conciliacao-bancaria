@@ -29,8 +29,12 @@ from zoneinfo import ZoneInfo
 # A versão da calculadora da Receita (motor e banco de tabelas) é outra e
 # aparece na tela lida da própria API (/dados-abertos/versao); para trocar,
 # mude RTC_REF em calculadora-rtc/Dockerfile.
-VERSAO = "1.3"
+VERSAO = "1.4"
 NOVIDADES = [
+    ("1.4", "22/11/2026", [
+        "Em 2026, opção \"Simular com outra alíquota\": informe a CBS e o IBS que quiser (ex.: a CBS ainda em "
+        "votação); o cálculo sai no modo simulado da Receita e o PDF fica marcado como simulação.",
+    ]),
     ("1.3", "22/11/2026", [
         "Memória de cálculo volta a aparecer (CBS, IBS estadual, IBS municipal e Imposto Seletivo por item).",
         "Botão Limpar: apaga os itens e o resultado para fazer um cálculo novo.",
@@ -223,6 +227,21 @@ def so_digitos(txt: Any) -> str:
 def aliquotas_obrigatorias(data_fato: date) -> bool:
     """A partir de 2027 as alíquotas têm de ir no pedido (em 2026 são proibidas)."""
     return data_fato.year >= 2027
+
+
+#: em 2026 a calculadora da Receita só usa as alíquotas de teste (CBS 0,9% e
+#: IBS 0,1%) e zera o item se vierem alíquotas no pedido. Para simular outra
+#: alíquota (ex.: a CBS ainda em votação) o cálculo vai no modo simulado da
+#: Receita, que só existe a partir desta data.
+DATA_SIMULACAO_2026 = date(2027, 1, 1)
+
+
+def data_para_calculo(data_fato: date, simular_aliquota: bool) -> date:
+    """Data que vai para a calculadora: a informada ou, ao simular alíquota
+    própria em 2026, a primeira data em que a Receita aceita alíquotas."""
+    if simular_aliquota and not aliquotas_obrigatorias(data_fato):
+        return DATA_SIMULACAO_2026
+    return data_fato
 
 
 def aliquotas_sugeridas(ano: int) -> tuple[float, float, float]:
@@ -423,7 +442,8 @@ def _esc(txt: Any) -> str:
 
 
 def gerar_pdf(operacao: dict, resposta: dict, municipio_nome: str = "", versao_rf: Optional[dict] = None,
-              aviso: Any = None, escritorio: str = "") -> bytes:
+              aviso: Any = None, escritorio: str = "", data_informada: Optional[date] = None,
+              observacao: str = "") -> bytes:
     """Relatório do cálculo (A4 deitado): parâmetros da operação, totais,
     itens, inconsistências e memória de cálculo. Montado com o PyMuPDF (já
     é dependência do Hub), a partir de HTML."""
@@ -437,7 +457,9 @@ def gerar_pdf(operacao: dict, resposta: dict, municipio_nome: str = "", versao_r
         data_fato = datetime.fromisoformat(operacao["dhFatoGerador"]).strftime("%d/%m/%Y")
     except (KeyError, ValueError):
         data_fato = ""
-    aliq = (operacao.get("itens") or [{}])[0].get("aliquotasNominais")
+    if data_informada:
+        data_fato = data_informada.strftime("%d/%m/%Y")
+    aliq =(operacao.get("itens") or [{}])[0].get("aliquotasNominais")
     simulado = bool(aviso) or any(l["situacao"] == ESTADOS["CALCULO_SIMULADO"] for l in linhas)
     agora = datetime.now(FUSO).strftime("%d/%m/%Y %H:%M")
 
@@ -472,6 +494,8 @@ def gerar_pdf(operacao: dict, resposta: dict, municipio_nome: str = "", versao_r
     if simulado:
         p.append("<p class='aviso'>Resultado simulado: calculado com alíquotas informadas, ainda não publicadas "
                  "oficialmente pela Receita.</p>")
+    if observacao:
+        p.append(f"<p class='aviso'>{_esc(observacao)}</p>")
 
     p.append("<h2>Totais</h2><table class='tot'><tr>"
              f"<td>Base de cálculo<br/><b>{moeda(tot['base'])}</b></td>"
