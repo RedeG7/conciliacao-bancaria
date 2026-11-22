@@ -142,6 +142,16 @@ jobs:
           cache-from: type=gha,scope=calculadorartcsn
           cache-to: type=gha,mode=max,scope=calculadorartcsn
 
+      # Gerador de DANFSe (pasta gerador-danfse/: baixa o gerador da Receita
+      # na versao fixada no Dockerfile e compila)
+      - uses: docker/build-push-action@v5
+        with:
+          context: gerador-danfse
+          push: true
+          tags: ghcr.io/redeg7/gerador-danfse:latest
+          cache-from: type=gha,scope=geradordanfse
+          cache-to: type=gha,mode=max,scope=geradordanfse
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -243,6 +253,16 @@ jobs:
               fi
             else
               echo "Imagem calculadora-rtc-sn nao acessivel - Calculadora RTC Simples nao ligada"
+            fi
+            # idem Gerador de DANFSe (profile "geradordanfse")
+            if docker pull -q ghcr.io/redeg7/gerador-danfse:latest >/dev/null 2>&1; then
+              if ! grep -q '^COMPOSE_PROFILES=' .env; then
+                printf '\nCOMPOSE_PROFILES=geradordanfse\n' >> .env
+              elif ! grep -qE '^COMPOSE_PROFILES=(.*,)?geradordanfse(,|$)' .env; then
+                sed -i 's/^COMPOSE_PROFILES=\(.*\)$/COMPOSE_PROFILES=\1,geradordanfse/' .env
+              fi
+            else
+              echo "Imagem gerador-danfse nao acessivel - Gerador de DANFSe nao ligado"
             fi
             # segredos do WhatsApp Disparos, gerados uma vez e guardados no
             # .env: login unico Hub -> WhatsApp (api.py e

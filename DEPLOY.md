@@ -590,3 +590,29 @@ licença MIT), sem alteração no código dela. Funciona como a do Regime Regula
   em `calculadora_rtc_sn.py` e faça o push na `main`.
 - Conferir no VPS: `docker compose ps calculadora-rtc-sn` e
   `docker compose exec app python -c "import calculadora_rtc_sn as c; print(c.versao())"`.
+
+## Gerador de DANFSe (card dentro do "🧾 RPA Fiscal")
+
+PDF do DANFSe (NT 008 SE/CGNFS-e) a partir do XML da NFS-e nacional, pelo
+gerador oficial da Receita
+([ReceitaFederal/calculadora-rtc-gerador-danfse](https://github.com/ReceitaFederal/calculadora-rtc-gerador-danfse),
+licença MIT), sem alteração no código dela:
+
+- `gerador-danfse/Dockerfile` baixa o repo na versão fixada (`DANFSE_REF`) e
+  compila o serviço Go como o Dockerfile da Receita. Imagem
+  `ghcr.io/redeg7/gerador-danfse`, profile `geradordanfse` ligado sozinho pelo
+  deploy.
+- Serviço `gerador-danfse` só na rede interna, porta 8083; o Hub fala com ele
+  por `GERADOR_DANFSE_URL` (`http://gerador-danfse:8083`): `POST /api/danfse`
+  com o XML (`stc` = 0 válida, 1 substituída, 2 cancelada; `canhoto`).
+- A tela aceita vários XMLs (soltos ou em .zip, até 500 notas, 5 MB por XML) e
+  devolve um PDF ou um .zip com todos. Nada fica gravado: os arquivos ficam só
+  na sessão do usuário.
+- Tela em `_tela_gerador_danfse` (app_conciliacao.py); leitura dos XMLs e .zip
+  em `gerador_danfse.py` (testes em `tests/test_gerador_danfse.py`). Atualizar:
+  troque `DANFSE_REF` no Dockerfile (e `MOTOR` em `gerador_danfse.py`), suba
+  `VERSAO`/`NOVIDADES` e faça o push na `main`.
+- Conferir no VPS: `docker compose ps gerador-danfse` e
+  `docker compose exec app python -c "import gerador_danfse as g; print(g.disponivel())"`.
+- Escritório/usuário com lista de apps restrita só vê o card depois de liberar
+  "Gerador de DANFSe" em Gerenciar Escritórios/Usuários.

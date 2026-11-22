@@ -35,6 +35,7 @@ import admissoes
 import admissoes_canais
 import calculadora_rtc
 import calculadora_rtc_sn
+import gerador_danfse
 import json
 import auth
 import clientes
@@ -2603,6 +2604,15 @@ _APPS_HOME = [
         "grupo": "rpa_fiscal",
     },
     {
+        "id": "gerador_danfse",
+        "icone": "📄",
+        "titulo": "Gerador de DANFSe",
+        "descricao": "PDF do DANFSe a partir do XML da NFS-e nacional, pelo gerador oficial da Receita Federal.",
+        "departamento": "Fiscal",
+        "tela": "gerador_danfse",
+        "grupo": "rpa_fiscal",
+    },
+    {
         "id": "marketing",
         "icone": "📣",
         "titulo": "Marketing & Comercial",
@@ -2889,7 +2899,7 @@ def _iniciais(nome: str) -> str:
     return (partes[0][0] + partes[-1][0]).upper()
 
 
-_TELAS_APPS = {"conciliacao", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "rpa_folha", "admissoes", "historico",
+_TELAS_APPS = {"conciliacao", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "historico",
                "gerenciar_clientes"}
 
 
@@ -3744,6 +3754,122 @@ def _rtcsn_aba_atividades() -> None:
     st.caption(f"{len(linhas)} atividade(s). O código é o cAtivSN da NT 2026.005 (na DPS da NFS-e, cAtvSN).")
 
 
+# ---------------------------------------------------------------- Gerador de DANFSe
+
+def _tela_gerador_danfse() -> None:
+    """Gerador de DANFSe: PDF da NFS-e nacional pelo gerador oficial da
+    Receita (serviço gerador-danfse do docker-compose). O PDF é todo do
+    gerador; leitura dos XMLs e montagem do .zip em gerador_danfse.py."""
+    gd = gerador_danfse
+    _cabecalho_app("📄", "Gerador de DANFSe",
+                   "PDF da NFS-e nacional (NT 008 SE/CGNFS-e) pelo gerador oficial da Receita Federal.",
+                   pai=_PAI_RPA_FISCAL)
+    with st.expander(f"Versão {gd.VERSAO} · gerador da Receita {gd.MOTOR} — novidades"):
+        for versao_, data_, itens in gd.NOVIDADES:
+            st.markdown(f"**{versao_}** ({data_})" + chr(10) + chr(10).join(f"- {i}" for i in itens))
+    if not gd.disponivel():
+        st.error("O gerador de DANFSe da Receita não respondeu. Tente de novo em alguns minutos; "
+                 "se continuar, avise o suporte (serviço gerador-danfse na VPS).")
+        return
+
+    rodada = st.session_state.setdefault("gdanfse_rodada", 0)
+    enviados = st.file_uploader("XMLs das NFS-e (soltos ou em .zip)", type=["xml", "zip"],
+                                accept_multiple_files=True, key=f"gdanfse_up_{rodada}",
+                                help="XML da NFS-e nacional (raiz NFSe), como baixado do Emissor Nacional ou do "
+                                     f"Portal da NFS-e. Até {gd.MAX_ARQUIVOS} notas por vez.")
+    if not enviados:
+        st.caption("O DANFSe é a representação em PDF da NFS-e do padrão nacional. Ele não substitui a nota: "
+                   "vale o XML assinado.")
+        return
+
+    xmls, avisos = gd.ler_arquivos([(a.name, a.getvalue()) for a in enviados])
+    for a in avisos:
+        st.warning(a)
+    if not xmls:
+        return
+    resumos = [gd.resumo(x) for _, x in xmls]
+
+    c_sit, c_can, c_limpar = st.columns([1.3, 1, 1])
+    sit_padrao = c_sit.selectbox("Situação das notas", list(gd.SITUACOES), format_func=gd.SITUACOES.get,
+                                 key="gdanfse_sit", help="Substituída e Cancelada saem com a marca d'água no PDF. "
+                                                         "Dá para mudar nota a nota na tabela.")
+    canhoto = c_can.toggle("Imprimir o canhoto", value=True, key="gdanfse_canhoto")
+    c_limpar.button("Limpar", key="gdanfse_limpar", icon=":material/restart_alt:", use_container_width=True,
+                    on_click=_gdanfse_limpar, help="Tira os arquivos e o resultado para começar de novo")
+
+    linhas = [{
+        "Gerar": not r["erro"],
+        "Nota": r["numero"],
+        "Emissão": gd.data_br(r["emissao"]),
+        "Prestador": r["prestador"],
+        "Tomador": r["tomador"],
+        "Valor": gd.moeda(r["valor"]),
+        "Situação": gd.SITUACOES[sit_padrao],
+        "Arquivo": nome,
+        "Problema": r["erro"],
+    } for (nome, _), r in zip(xmls, resumos)]
+    editado = st.data_editor(
+        linhas, use_container_width=True, hide_index=True, num_rows="fixed",
+        key=f"gdanfse_tabela_{rodada}_{sit_padrao}",
+        disabled=["Nota", "Emissão", "Prestador", "Tomador", "Valor", "Arquivo", "Problema"],
+        column_config={
+            "Gerar": st.column_config.CheckboxColumn("Gerar", width="small"),
+            "Situação": st.column_config.SelectboxColumn("Situação", options=list(gd.SITUACOES.values()),
+                                                         required=True),
+            "Problema": st.column_config.TextColumn("Problema", width="medium"),
+        },
+    )
+    escolhidas = [i for i, l in enumerate(editado) if l["Gerar"]]
+    st.caption(f"{len(xmls)} XML(s) lido(s) · {len(escolhidas)} marcado(s) para gerar.")
+
+    if st.button("Gerar DANFSe", type="primary", key="gdanfse_gerar", icon=":material/picture_as_pdf:",
+                 disabled=not escolhidas):
+        por_rotulo = {v: k for k, v in gd.SITUACOES.items()}
+        pdfs, erros = [], []
+        barra = st.progress(0.0, text="Gerando no gerador da Receita...")
+        for n, i in enumerate(escolhidas, 1):
+            nome, xml = xmls[i]
+            try:
+                pdf = gd.gerar_pdf(xml, por_rotulo[editado[i]["Situação"]], canhoto)
+                pdfs.append((gd.nome_pdf(resumos[i], nome), pdf))
+            except gd.ErroDanfse as e:
+                erros.append((nome, str(e)))
+                if e.status is None:  # gerador caiu: não adianta tentar as outras
+                    break
+            barra.progress(n / len(escolhidas), text=f"Gerando no gerador da Receita... {n}/{len(escolhidas)}")
+        barra.empty()
+        nomes = gd.nomes_unicos([n for n, _ in pdfs])
+        st.session_state["gdanfse_resultado"] = ([(nm, p) for nm, (_, p) in zip(nomes, pdfs)], erros)
+
+    if "gdanfse_resultado" in st.session_state:
+        _gdanfse_resultado(*st.session_state["gdanfse_resultado"])
+
+
+def _gdanfse_limpar() -> None:
+    st.session_state["gdanfse_rodada"] = st.session_state.get("gdanfse_rodada", 0) + 1
+    st.session_state.pop("gdanfse_resultado", None)
+
+
+def _gdanfse_resultado(pdfs: list, erros: list) -> None:
+    st.markdown('<div class="hh-sep" style="margin:14px 0"></div>', unsafe_allow_html=True)
+    for nome, msg in erros:
+        st.error(f"{nome}: {msg}")
+    if not pdfs:
+        return
+    st.success(f"{len(pdfs)} DANFSe gerado(s).")
+    if len(pdfs) == 1:
+        nome, pdf = pdfs[0]
+        st.download_button(f"Baixar {nome}", pdf, file_name=nome, mime="application/pdf", type="primary",
+                           key="gdanfse_baixar_um", icon=":material/download:")
+        return
+    st.download_button(f"Baixar todos ({len(pdfs)} PDFs em .zip)", gerador_danfse.zip_pdfs(pdfs),
+                       file_name="DANFSe.zip", mime="application/zip", type="primary", key="gdanfse_baixar_zip",
+                       icon=":material/download:")
+    with st.expander("Baixar um por um"):
+        for n, (nome, pdf) in enumerate(pdfs):
+            st.download_button(nome, pdf, file_name=nome, mime="application/pdf", key=f"gdanfse_baixar_{n}")
+
+
 def _tela_logs_acesso() -> None:
     """Ultimos acessos (login no Hub e entrada no Marketing pelo card).
     super_admin_global ve todos os escritorios; admin de escritorio so o
@@ -3827,7 +3953,7 @@ if st.session_state.get("mostrar_trocar_senha"):
 
 # tela atual também na URL (?tela=...): F5 ou uma sessão nova do Streamlit
 # (reconexão, Hub reiniciado no deploy) voltava sempre pra tela inicial
-_TELAS_URL = {"home", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
+_TELAS_URL = {"home", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
               "gerenciar_escritorios", "gerenciar_usuarios", "logs_acesso"}
 if "tela" not in st.session_state:
     _tela_url = st.query_params.get("tela", "home")
@@ -3916,6 +4042,15 @@ if st.session_state.get("tela") == "calculadora_rtc_sn":
         st.session_state["tela"] = "home"
         st.rerun()
     _tela_calculadora_rtc_sn()
+    st.stop()
+
+if st.session_state.get("tela") == "gerador_danfse":
+    if "gerador_danfse" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    _tela_gerador_danfse()
     st.stop()
 
 if st.session_state.get("tela") == "rpa_folha":

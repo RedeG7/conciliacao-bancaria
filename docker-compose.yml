@@ -47,6 +47,8 @@ services:
       - CALCULADORA_RTC_URL=http://calculadora-rtc:8080/api/calculadora
       # Calculadora RTC - Simples Nacional (servico calculadora-rtc-sn abaixo)
       - CALCULADORA_RTC_SN_URL=http://calculadora-rtc-sn:8082/api
+      # Gerador de DANFSe (servico gerador-danfse abaixo) - gerador_danfse.py
+      - GERADOR_DANFSE_URL=http://gerador-danfse:8083
     depends_on:
       db:
         condition: service_healthy
@@ -272,6 +274,22 @@ services:
     mem_limit: 768m
     expose:
       - "8082"
+
+  # Gerador de DANFSe: o gerador OFICIAL da Receita que monta o PDF da NFS-e
+  # nacional a partir do XML (gerador-danfse/Dockerfile, servico em Go). Sem
+  # login, so na rede interna. Profile "geradordanfse", ligado pelo deploy
+  # quando a imagem ja pode ser baixada.
+  gerador-danfse:
+    image: ghcr.io/redeg7/gerador-danfse:latest
+    profiles: ["geradordanfse"]
+    container_name: gerador-danfse
+    restart: unless-stopped
+    environment:
+      - SERVER_PORT=8083
+      - LOG_LEVEL=warn
+    mem_limit: 256m
+    expose:
+      - "8083"
 
   caddy:
     image: caddy:2-alpine
