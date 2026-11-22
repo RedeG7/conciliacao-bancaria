@@ -29,8 +29,13 @@ from zoneinfo import ZoneInfo
 # A versão da calculadora da Receita (motor e banco de tabelas) é outra e
 # aparece na tela lida da própria API (/dados-abertos/versao); para trocar,
 # mude RTC_REF em calculadora-rtc/Dockerfile.
-VERSAO = "1.2"
+VERSAO = "1.3"
 NOVIDADES = [
+    ("1.3", "22/11/2026", [
+        "Memória de cálculo volta a aparecer (CBS, IBS estadual, IBS municipal e Imposto Seletivo por item).",
+        "Botão Limpar: apaga os itens e o resultado para fazer um cálculo novo.",
+        "Relatório em PDF (operação, totais, itens e memória de cálculo) no lugar do download em JSON.",
+    ]),
     ("1.2", "22/11/2026", [
         "Cartão do NCM/NBS: marcador dos níveis da classificação corrigido (aparecia como \"l,\").",
     ]),
@@ -318,6 +323,33 @@ def _reducao(grupo: dict) -> tuple[Optional[float], Optional[float]]:
     return _numero(red.get("pRedAliq")), _numero(red.get("pAliqEfet"))
 
 
+_ROTULOS_MEMORIA = {"is": "Imposto Seletivo", "cbs": "CBS", "ibsuf": "IBS estadual", "ibsmun": "IBS municipal"}
+
+
+def memoria_calculo(trib: dict) -> list[tuple[str, str]]:
+    """[(tributo, texto)] da memória de cálculo de um item. Na 1.7.x a
+    Receita manda a da CBS/IBS num objeto só (IBSCBS.memoriaCalculo = {cbs,
+    ibsUF, ibsMun}) e a do IS como texto em IS.memoriaCalculo; versões
+    antigas punham um texto dentro de cada grupo (gCBS, gIBSUF, gIBSMun)."""
+    saida: list[tuple[str, str]] = []
+
+    def junta(rotulo: str, valor: Any) -> None:
+        if isinstance(valor, dict):
+            for k, v in valor.items():
+                junta(_ROTULOS_MEMORIA.get(k.lower(), k), v)
+        elif isinstance(valor, str) and valor.strip():
+            saida.append((rotulo, valor.strip()))
+
+    is_ = trib.get("IS") or {}
+    junta("Imposto Seletivo", is_.get("memoriaCalculo"))
+    ibscbs = trib.get("IBSCBS") or {}
+    junta("CBS/IBS", ibscbs.get("memoriaCalculo"))
+    g = ibscbs.get("gIBSCBS") or {}
+    for chave, rotulo in (("gCBS", "CBS"), ("gIBSUF", "IBS estadual"), ("gIBSMun", "IBS municipal")):
+        junta(rotulo, (g.get(chave) or {}).get("memoriaCalculo"))
+    return saida
+
+
 def linhas_resultado(resposta: dict) -> list[dict]:
     """Uma linha por item da resposta, com o que a tela mostra."""
     linhas = []
@@ -350,8 +382,7 @@ def linhas_resultado(resposta: dict) -> list[dict]:
             "ibs": _f(g.get("vIBS")),
             "is": _f(is_.get("vIS")),
             "erros": "; ".join(str(e) for e in erros if e),
-            "memoria": [t for t in (is_.get("memoriaCalculo"), cbs.get("memoriaCalculo"),
-                                    uf.get("memoriaCalculo"), mun.get("memoriaCalculo")) if t],
+            "memoria": memoria_calculo(trib),
         }
         linha["red_ibs"] = red_uf if red_uf is not None else red_mun
         linha["total"] = round(linha["cbs"] + linha["ibs"] + linha["is"], 2)
@@ -374,3 +405,128 @@ def totais(resposta: dict) -> dict:
     }
     tot["total"] = round(tot["cbs"] + tot["ibs"] + tot["is"], 2)
     return tot
+
+
+# ---------------------------------------------------------------- relatório em PDF
+
+def moeda(v: Any) -> str:
+    return "R$ " + f"{float(v or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def pct(v: Any) -> str:
+    return "" if v is None else f"{float(v):.4f}".rstrip("0").rstrip(".").replace(".", ",") + "%"
+
+
+def _esc(txt: Any) -> str:
+    import html as _html
+    return _html.escape(str(txt if txt is not None else ""))
+
+
+def gerar_pdf(operacao: dict, resposta: dict, municipio_nome: str = "", versao_rf: Optional[dict] = None,
+              aviso: Any = None, escritorio: str = "") -> bytes:
+    """Relatório do cálculo (A4 deitado): parâmetros da operação, totais,
+    itens, inconsistências e memória de cálculo. Montado com o PyMuPDF (já
+    é dependência do Hub), a partir de HTML."""
+    import io
+    import pymupdf
+
+    linhas = linhas_resultado(resposta)
+    tot = totais(resposta)
+    codigos = {i["numero"]: (i.get("ncm") or i.get("nbs") or "") for i in operacao.get("itens") or []}
+    try:
+        data_fato = datetime.fromisoformat(operacao["dhFatoGerador"]).strftime("%d/%m/%Y")
+    except (KeyError, ValueError):
+        data_fato = ""
+    aliq = (operacao.get("itens") or [{}])[0].get("aliquotasNominais")
+    simulado = bool(aviso) or any(l["situacao"] == ESTADOS["CALCULO_SIMULADO"] for l in linhas)
+    agora = datetime.now(FUSO).strftime("%d/%m/%Y %H:%M")
+
+    css = """
+    * {font-family: sans-serif;}
+    body {font-size: 9pt; color: #1e293b;}
+    h1 {font-size: 16pt; color: #0f172a; margin: 0 0 2pt 0;}
+    h2 {font-size: 11pt; color: #0f766e; margin: 12pt 0 4pt 0; border-bottom: 1px solid #99f6e4;}
+    .sub {color: #64748b; font-size: 8.5pt; margin-bottom: 6pt;}
+    table {border-collapse: collapse; width: 100%;}
+    th {background-color: #0f766e; color: #ffffff; font-size: 8pt; padding: 3pt; text-align: left;}
+    td {border-bottom: 1px solid #e2e8f0; padding: 3pt; font-size: 8.5pt;}
+    td.n, th.n {text-align: right;}
+    .tot td {font-size: 10pt; padding: 4pt;}
+    .tot b {font-size: 11pt;}
+    .aviso {color: #92400e; background-color: #fef3c7; padding: 4pt; font-size: 8.5pt;}
+    .erro {color: #991b1b; font-size: 8.5pt;}
+    .mem {font-size: 8.5pt; margin: 2pt 0 2pt 0;}
+    .rod {color: #64748b; font-size: 7.5pt; margin-top: 12pt;}
+    """
+    p = [f"<h1>Calculadora RTC — Regime Regular</h1>"
+         f"<div class='sub'>CBS, IBS e Imposto Seletivo (LC 214/2025) · gerado em {agora}"
+         + (f" · {_esc(escritorio)}" if escritorio else "") + "</div>"]
+
+    p.append("<h2>Operação</h2>"
+             f"<p class='mem'><b>Data do fato gerador:</b> {_esc(data_fato)}</p>"
+             f"<p class='mem'><b>Local:</b> {_esc(municipio_nome)} ({_esc(operacao.get('municipio'))}) — "
+             f"{_esc(operacao.get('uf'))}</p>")
+    if aliq:
+        p.append(f"<p class='mem'><b>Alíquotas informadas:</b> CBS {pct(aliq.get('cbs'))} · "
+                 f"IBS estadual {pct(aliq.get('ibsEstadual'))} · IBS municipal {pct(aliq.get('ibsMunicipal'))}</p>")
+    if simulado:
+        p.append("<p class='aviso'>Resultado simulado: calculado com alíquotas informadas, ainda não publicadas "
+                 "oficialmente pela Receita.</p>")
+
+    p.append("<h2>Totais</h2><table class='tot'><tr>"
+             f"<td>Base de cálculo<br/><b>{moeda(tot['base'])}</b></td>"
+             f"<td>CBS<br/><b>{moeda(tot['cbs'])}</b></td>"
+             f"<td>IBS<br/><b>{moeda(tot['ibs'])}</b><br/>UF {moeda(tot['ibs_uf'])} · Mun {moeda(tot['ibs_mun'])}</td>"
+             f"<td>Imposto Seletivo<br/><b>{moeda(tot['is'])}</b></td>"
+             f"<td>Total dos tributos<br/><b>{moeda(tot['total'])}</b></td></tr></table>")
+
+    cab = ["Item", "NCM/NBS", "CST", "cClassTrib", "Situação", "Base", "CBS %", "Red. %", "CBS",
+           "IBS UF %", "IBS UF", "IBS Mun %", "IBS Mun", "IS", "Total"]
+    numericas = {"Base", "CBS %", "Red. %", "CBS", "IBS UF %", "IBS UF", "IBS Mun %", "IBS Mun", "IS", "Total"}
+    p.append("<h2>Itens</h2><table><tr>" + "".join(
+        f"<th class='{'n' if c in numericas else ''}'>{c}</th>" for c in cab) + "</tr>")
+    for l in linhas:
+        efet = lambda e, a: pct(e if e is not None else a)
+        celulas = [l["item"], codigos.get(l["item"], ""), l["cst"], l["cClassTrib"], l["situacao"], moeda(l["base"]),
+                   efet(l["efet_cbs"], l["aliq_cbs"]), pct(l["red_cbs"]), moeda(l["cbs"]),
+                   efet(l["efet_ibs_uf"], l["aliq_ibs_uf"]), moeda(l["ibs_uf"]),
+                   efet(l["efet_ibs_mun"], l["aliq_ibs_mun"]), moeda(l["ibs_mun"]), moeda(l["is"]), moeda(l["total"])]
+        p.append("<tr>" + "".join(f"<td class='{'n' if c in numericas else ''}'>{_esc(v)}</td>"
+                                  for c, v in zip(cab, celulas)) + "</tr>")
+    p.append("</table>")
+
+    erros = [l for l in linhas if l["erros"]]
+    if erros:
+        p.append("<h2>Itens com inconsistência</h2>")
+        p += [f"<p class='erro'><b>Item {l['item']}:</b> {_esc(l['erros'])}</p>" for l in erros]
+
+    p.append("<h2>Memória de cálculo</h2>")
+    tem_memoria = False
+    for l in linhas:
+        if l["memoria"]:
+            tem_memoria = True
+            p.append(f"<p class='mem'><b>Item {l['item']}</b></p>")
+            p += [f"<p class='mem'><b>{_esc(r)}:</b> {_esc(t)}</p>" for r, t in l["memoria"]]
+    if not tem_memoria:
+        p.append("<p class='mem'>A calculadora não devolveu memória de cálculo para estes itens.</p>")
+
+    v = versao_rf or {}
+    p.append("<p class='rod'>Cálculo feito pela calculadora oficial da Receita Federal "
+             f"(calculadora-rtc-regime-regular {_esc(v.get('versaoApp', ''))}, tabelas {_esc(v.get('versaoDb', ''))}"
+             f" de {_esc(v.get('dataVersaoDb', ''))}) · Hub APP — Calculadora RTC {VERSAO}. "
+             "Documento de simulação, sem valor fiscal.</p>")
+
+    html = f"<html><head><style>{css}</style></head><body>{''.join(p)}</body></html>"
+    buf = io.BytesIO()
+    escritor = pymupdf.DocumentWriter(buf)
+    historia = pymupdf.Story(html=html)
+    pagina = pymupdf.paper_rect("a4-l")
+    area = pagina + (28, 28, -28, -28)
+    mais = True
+    while mais:
+        dispositivo = escritor.begin_page(pagina)
+        mais, _ = historia.place(area)
+        historia.draw(dispositivo)
+        escritor.end_page()
+    escritor.close()
+    return buf.getvalue()

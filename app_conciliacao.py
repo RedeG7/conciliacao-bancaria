@@ -3168,6 +3168,7 @@ def _tela_calculadora_rtc() -> None:
                    pai=_PAI_RPA_FISCAL)
     try:
         v_rf = calculadora_rtc.versao()
+        st.session_state["rtc_versao_rf"] = v_rf
     except calculadora_rtc.ErroCalculadora as e:
         v_rf = None
         erro_conexao = str(e)
@@ -3248,7 +3249,11 @@ def _rtc_aba_calculo() -> None:
         },
     )
 
-    if st.button("Calcular", type="primary", key="rtc_calcular", icon=":material/calculate:"):
+    b_calc, b_limpar, _ = st.columns([1, 1, 4])
+    b_limpar.button("Limpar", key="rtc_limpar", icon=":material/restart_alt:", use_container_width=True,
+                    on_click=_rtc_limpar, help="Apaga os itens e o resultado para começar um cálculo novo")
+    if b_calc.button("Calcular", type="primary", key="rtc_calcular", icon=":material/calculate:",
+                     use_container_width=True):
         operacao = calculadora_rtc.montar_operacao(data_fato, uf, municipio, itens, aliquotas)
         if not operacao["itens"]:
             st.warning("Preencha ao menos um item com cClassTrib e base de cálculo.")
@@ -3256,7 +3261,8 @@ def _rtc_aba_calculo() -> None:
             try:
                 with st.spinner("Calculando na calculadora da Receita..."):
                     resposta, aviso = calculadora_rtc.calcular(operacao)
-                st.session_state["rtc_resultado"] = (operacao, resposta, aviso)
+                st.session_state["rtc_resultado"] = (operacao, resposta, aviso,
+                                                     str(nomes_mun.get(municipio, "")))
                 st.session_state.pop("rtc_xml_gerado", None)
             except calculadora_rtc.ErroCalculadora as e:
                 st.session_state.pop("rtc_resultado", None)
@@ -3266,7 +3272,13 @@ def _rtc_aba_calculo() -> None:
         _rtc_resultado(*st.session_state["rtc_resultado"])
 
 
-def _rtc_resultado(operacao: dict, resposta: dict, aviso) -> None:
+def _rtc_limpar() -> None:
+    """Botão Limpar: volta a tela de cálculo ao início (itens e resultado)."""
+    for chave in ("rtc_resultado", "rtc_xml_gerado", "rtc_itens", "rtc_editor"):
+        st.session_state.pop(chave, None)
+
+
+def _rtc_resultado(operacao: dict, resposta: dict, aviso, local: str = "") -> None:
     linhas = calculadora_rtc.linhas_resultado(resposta)
     tot = calculadora_rtc.totais(resposta)
     st.markdown('<div class="hh-sep" style="margin:14px 0"></div>', unsafe_allow_html=True)
@@ -3298,13 +3310,21 @@ def _rtc_resultado(operacao: dict, resposta: dict, aviso) -> None:
         if l["erros"]:
             st.warning(f"Item {l['item']}: {l['erros']}")
     with st.expander("Memória de cálculo"):
-        for l in linhas:
-            if l["memoria"]:
-                st.markdown(f"**Item {l['item']}**" + chr(10) + chr(10).join(f"- {t}" for t in l["memoria"]))
+        com_memoria = [l for l in linhas if l["memoria"]]
+        if not com_memoria:
+            st.caption("A calculadora não devolveu memória de cálculo para estes itens.")
+        for l in com_memoria:
+            st.markdown(f"**Item {l['item']}** · cClassTrib {l['cClassTrib']}" + chr(10) + chr(10).join(
+                f"- **{rotulo}:** {texto}" for rotulo, texto in l["memoria"]))
 
-    c_json, c_xml = st.columns(2)
-    c_json.download_button("Baixar resultado (JSON)", json.dumps(resposta, ensure_ascii=False, indent=2),
-                           file_name="calculo_rtc.json", mime="application/json", use_container_width=True)
+    c_pdf, c_xml = st.columns(2)
+    try:
+        pdf = calculadora_rtc.gerar_pdf(operacao, resposta, local, st.session_state.get("rtc_versao_rf"), aviso,
+                                        st.session_state.get("escritorio_nome") or "")
+        c_pdf.download_button("Baixar relatório (PDF)", pdf, file_name="calculo_rtc.pdf", mime="application/pdf",
+                              use_container_width=True, icon=":material/picture_as_pdf:", key="rtc_pdf")
+    except Exception as e:  # noqa: BLE001 - o PDF não pode derrubar a tela do resultado
+        c_pdf.error(f"Não deu para gerar o PDF: {e}")
     if any(l["erros"] for l in linhas):
         c_xml.button("Gerar XML da NF-e", disabled=True, use_container_width=True, key="rtc_xml_off",
                      help="Corrija os itens com erro para gerar o XML.")

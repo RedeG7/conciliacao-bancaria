@@ -76,8 +76,24 @@ def test_le_itens_e_erros_da_resposta():
     assert ok["situacao"] == "Calculado (simulado)" and ok["cst"] == "200"
     assert (ok["base"], ok["cbs"], ok["ibs_uf"], ok["ibs_mun"], ok["ibs"]) == (1200.0, 42.24, 0.24, 0.24, 0.48)
     assert (ok["red_cbs"], ok["efet_cbs"], ok["red_ibs"]) == (60.0, 3.52, 60.0)
-    assert ok["total"] == 42.72 and ok["memoria"] == ["base 1200 x 3,52%"]
+    assert ok["total"] == 42.72 and ok["memoria"] == [("CBS", "base 1200 x 3,52%")]
     assert erro["situacao"] == "Erro nos dados" and "02013000" in erro["erros"] and erro["total"] == 0
+
+
+def test_memoria_de_calculo_no_formato_da_1_7_2():
+    # na 1.7.2 a memória vem em IBSCBS.memoriaCalculo = {cbs, ibsUF, ibsMun} e IS.memoriaCalculo (texto)
+    trib = {"IS": {"memoriaCalculo": "150 x 10% = 15,00"},
+            "IBSCBS": {"memoriaCalculo": {"cbs": "1000 x 0,9%", "ibsUF": "1000 x 0,1%", "ibsMun": ""}}}
+    assert rtc.memoria_calculo(trib) == [("Imposto Seletivo", "150 x 10% = 15,00"), ("CBS", "1000 x 0,9%"),
+                                         ("IBS estadual", "1000 x 0,1%")]
+    assert rtc.memoria_calculo({}) == []
+
+
+def test_relatorio_pdf():
+    op = rtc.montar_operacao(date(2027, 3, 10), "GO", 5208707,
+                             [{"codigo": "122011200", "cClassTrib": "200028", "base": 1200}], (8.8, 0.05, 0.05))
+    pdf = rtc.gerar_pdf(op, RESPOSTA, "Goiânia", {"versaoApp": "1.7.2"}, None, "Escritório Teste")
+    assert pdf[:5] == b"%PDF-" and len(pdf) > 2000
 
 
 def test_totais_da_operacao():
