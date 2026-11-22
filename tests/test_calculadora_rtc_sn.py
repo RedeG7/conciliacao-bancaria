@@ -142,3 +142,16 @@ def test_le_resposta():
     assert sn.avisos_gerais(RESPOSTA) == []
     # NFS-e: a resposta não traz o grupo IS nem totalIs
     assert sn.totais({"total": {"vRBSNtot": "10000.00", "totalTributos": "239.00"}})["is"] == 0.0
+
+
+def test_relatorio_pdf():
+    aliq = sn.montar_aliquotas({"I": {"cbs": 1.1612, "ibs": 0.0129}}, None, False)
+    op = sn.montar_operacao(date(2027, 3, 15), "55", {"CRT": "1"},
+                            [{"atividade": "01", "cClassTrib": "000001", "codigo": "22030000", "base": 1000}], aliq, "2")
+    assert sn.descricao_regime(op) == "Simples Nacional (CRT 1)"
+    pdf = sn.gerar_pdf(op, RESPOSTA, {"versaoApp": "1.0.2", "versaoDb": "V0073"}, "Escritório Teste")
+    assert pdf[:5] == b"%PDF-" and len(pdf) > 2000
+    nfse = {"tpDoc": "91", "data": "2027-05-10", "opSimpNac": "3", "regApIBSCBSSN": "1", "regApTribSN": "1",
+            "itens": []}
+    assert "ME/EPP" in sn.descricao_regime(nfse)
+    assert sn.gerar_pdf(nfse, {"objetos": [], "total": {}})[:5] == b"%PDF-"

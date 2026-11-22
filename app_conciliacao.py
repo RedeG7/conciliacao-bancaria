@@ -3503,6 +3503,7 @@ def _tela_calculadora_rtc_sn() -> None:
                    pai=_PAI_RPA_FISCAL)
     try:
         v_rf = calculadora_rtc_sn.versao()
+        st.session_state["rtcsn_versao_rf"] = v_rf
     except calculadora_rtc.ErroCalculadora as e:
         v_rf = None
         erro_conexao = str(e)
@@ -3638,7 +3639,11 @@ def _rtcsn_aba_calculo() -> None:
         aliquotas = sn.montar_aliquotas(valores, fator_r, sublimite)
 
     chave_res = f"rtcsn_resultado_{tp_doc}"
-    if st.button("Calcular", type="primary", key="rtcsn_calcular", icon=":material/calculate:"):
+    b_calc, b_limpar, _ = st.columns([1, 1, 4])
+    b_limpar.button("Limpar", key="rtcsn_limpar", icon=":material/restart_alt:", use_container_width=True,
+                    on_click=_rtcsn_limpar, help="Apaga os itens, as alíquotas e o resultado para começar de novo")
+    if b_calc.button("Calcular", type="primary", key="rtcsn_calcular", icon=":material/calculate:",
+                     use_container_width=True):
         operacao = sn.montar_operacao(data_fato, tp_doc, regime, itens, aliquotas, ente or None)
         if not operacao["itens"]:
             st.warning("Preencha ao menos um item com cClassTrib e base de cálculo.")
@@ -3654,6 +3659,16 @@ def _rtcsn_aba_calculo() -> None:
 
     if chave_res in st.session_state:
         _rtcsn_resultado(*st.session_state[chave_res])
+
+
+def _rtcsn_limpar() -> None:
+    """Botão Limpar: volta a tela de cálculo ao início (itens, alíquotas e
+    resultado de todos os documentos)."""
+    for chave in [k for k in st.session_state if k.startswith(("rtcsn_itens_", "rtcsn_editor_", "rtcsn_resultado_"))]:
+        st.session_state.pop(chave, None)
+    for anexo in calculadora_rtc_sn.ANEXOS:  # campos de alíquota voltam a ficar vazios
+        for campo in ("cbs", "ibs", "cbs_sem", "ibs_sem"):
+            st.session_state[f"rtcsn_{anexo}_{campo}"] = None
 
 
 def _rtcsn_resultado(operacao: dict, resposta: dict) -> None:
@@ -3700,10 +3715,17 @@ def _rtcsn_resultado(operacao: dict, resposta: dict) -> None:
     with st.expander("Memória de cálculo"):
         for l in linhas:
             if l["memoria"]:
-                st.markdown(f"**Item {l['item']}**" + chr(10) + chr(10).join(f"- {t}" for t in l["memoria"]))
-    st.download_button("Baixar resultado (JSON)",
-                       json.dumps({"operacao": operacao, "resultado": resposta}, ensure_ascii=False, indent=2),
-                       file_name="calculo_rtc_simples.json", mime="application/json", key="rtcsn_json")
+                st.markdown(f"**Item {l['item']}**" + chr(10) + chr(10).join(
+                    f"- **{rotulo}:** {texto}" for rotulo, texto in l["memoria"]))
+    c_pdf, _ = st.columns(2)
+    try:
+        pdf = sn.gerar_pdf(operacao, resposta, st.session_state.get("rtcsn_versao_rf"),
+                           st.session_state.get("escritorio_nome") or "")
+        c_pdf.download_button("Baixar relatório (PDF)", pdf, file_name="calculo_rtc_simples.pdf",
+                              mime="application/pdf", use_container_width=True, icon=":material/picture_as_pdf:",
+                              key="rtcsn_pdf")
+    except Exception as e:  # noqa: BLE001 - o PDF não pode derrubar a tela do resultado
+        c_pdf.error(f"Não deu para gerar o PDF: {e}")
 
 
 def _rtcsn_aba_atividades() -> None:

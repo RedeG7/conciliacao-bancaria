@@ -38,8 +38,13 @@ from calculadora_rtc import ErroCalculadora, mensagem_de_erro, so_digitos
 # A versão da calculadora da Receita (motor e banco de tabelas) é outra e
 # aparece na tela lida da própria API (/versao); para trocar, mude SN_REF /
 # RTC_REF em calculadora-rtc-sn/Dockerfile.
-VERSAO = "1.0"
+VERSAO = "1.1"
 NOVIDADES = [
+    ("1.1", "22/11/2026", [
+        "Relatório em PDF (operação, alíquotas efetivas informadas, totais, itens, avisos e memória de "
+        "cálculo), igual ao do Regime Regular, no lugar do download em JSON.",
+        "Botão Limpar para começar um cálculo novo.",
+    ]),
     ("1.0", "22/11/2026", [
         "Novo app no RPA Fiscal: Calculadora RTC - Simples Nacional, com a calculadora oficial da Receita "
         "Federal (versão 1.0.2) rodando na VPS.",
@@ -374,7 +379,7 @@ def linhas_resultado(resposta: dict) -> list[dict]:
             "motivo": motivo,
             "avisos": list(r.get("avisos") or []),
             "erros": "; ".join(str(e) for e in erros if e),
-            "memoria": [txt for txt in (mem.get("cbs"), mem.get("ibs")) if txt],
+            "memoria": [(rotulo, mem[chave]) for rotulo, chave in (("CBS", "cbs"), ("IBS", "ibs")) if mem.get(chave)],
         }
         linhas.append(linha)
     return linhas
@@ -398,3 +403,161 @@ def totais(resposta: dict) -> dict:
 
 def avisos_gerais(resposta: dict) -> list[str]:
     return list((resposta.get("resolucaoAliquotas") or {}).get("avisos") or [])
+
+
+# ---------------------------------------------------------------- relatório em PDF
+
+def descricao_regime(operacao: dict) -> str:
+    """Regime do emitente em texto, a partir do que foi no pedido."""
+    if operacao.get("opSimpNac"):
+        return (f"{OP_SIMP_NAC.get(operacao['opSimpNac'], operacao['opSimpNac'])} · IBS/CBS: "
+                f"{REG_AP_IBSCBS.get(operacao.get('regApIBSCBSSN'), '')} · Federais/ISS: "
+                f"{REG_AP_TRIB.get(operacao.get('regApTribSN'), '')}")
+    chave = (operacao.get("CRT"), operacao.get("tpRegimeIBSCBS"))
+    return next((r for r, v in REGIMES_CRT.items() if v == chave), f"CRT {operacao.get('CRT', '')}")
+
+
+def gerar_pdf(operacao: dict, resposta: dict, versao_rf: Optional[dict] = None, escritorio: str = "") -> bytes:
+    """Relatório do cálculo (A4 deitado): operação, alíquotas efetivas
+    informadas, totais, itens, itens não calculados/com inconsistência e
+    memória de cálculo. Mesmo modelo do relatório do Regime Regular
+    (calculadora_rtc.gerar_pdf), com PyMuPDF a partir de HTML."""
+    import io
+    from datetime import datetime
+
+    import pymupdf
+
+    from calculadora_rtc import FUSO, _esc, moeda, pct
+
+    linhas = linhas_resultado(resposta)
+    tot = totais(resposta)
+    nfse = operacao.get("tpDoc") == NFSE
+    codigos = {i["numero"]: (i.get("ncm") or i.get("nbs") or "") for i in operacao.get("itens") or []}
+    try:
+        data_fato = date.fromisoformat(operacao["data"]).strftime("%d/%m/%Y")
+    except (KeyError, ValueError):
+        data_fato = ""
+    agora = datetime.now(FUSO).strftime("%d/%m/%Y %H:%M")
+
+    css = """
+    * {font-family: sans-serif;}
+    body {font-size: 9pt; color: #1e293b;}
+    h1 {font-size: 16pt; color: #0f172a; margin: 0 0 2pt 0;}
+    h2 {font-size: 11pt; color: #0f766e; margin: 12pt 0 4pt 0; border-bottom: 1px solid #99f6e4;}
+    .sub {color: #64748b; font-size: 8.5pt; margin-bottom: 6pt;}
+    table {border-collapse: collapse; width: 100%;}
+    th {background-color: #0f766e; color: #ffffff; font-size: 8pt; padding: 3pt; text-align: left;}
+    td {border-bottom: 1px solid #e2e8f0; padding: 3pt; font-size: 8.5pt;}
+    td.n, th.n {text-align: right;}
+    .tot td {font-size: 10pt; padding: 4pt;}
+    .tot b {font-size: 11pt;}
+    .aviso {color: #92400e; background-color: #fef3c7; padding: 4pt; font-size: 8.5pt;}
+    .erro {color: #991b1b; font-size: 8.5pt;}
+    .mem {font-size: 8.5pt; margin: 2pt 0 2pt 0;}
+    .rod {color: #64748b; font-size: 7.5pt; margin-top: 12pt;}
+    """
+    p = ["<h1>Calculadora RTC — Simples Nacional</h1>"
+         f"<div class='sub'>CBS e IBS do optante pelo Simples (LC 214/2025, NT 2026.005) · gerado em {agora}"
+         + (f" · {_esc(escritorio)}" if escritorio else "") + "</div>"]
+
+    p.append("<h2>Operação</h2>"
+             f"<p class='mem'><b>Data do fato gerador:</b> {_esc(data_fato)}</p>"
+             f"<p class='mem'><b>Documento:</b> {_esc(DOCUMENTOS.get(operacao.get('tpDoc'), operacao.get('tpDoc')))}</p>"
+             f"<p class='mem'><b>Regime do emitente:</b> {_esc(descricao_regime(operacao))}</p>")
+    if operacao.get("tpEnteGov"):
+        p.append(f"<p class='mem'><b>Compra governamental:</b> {_esc(ENTE_GOV.get(operacao['tpEnteGov'], ''))}</p>")
+
+    aliq = operacao.get("aliquotasEfetivas")
+    if aliq:
+        extras = []
+        if aliq.get("fatorR") is not None:
+            extras.append("Fator \"r\" de 28% ou mais (Anexo III)" if aliq["fatorR"]
+                          else "Fator \"r\" abaixo de 28% (Anexo V)")
+        if aliq.get("impedimentoSublimite"):
+            extras.append("sublimite excedido (IBS fora do Simples)")
+        p.append("<h2>Alíquotas efetivas informadas (PGDAS-D)</h2>")
+        if extras:
+            p.append(f"<p class='mem'>{_esc('; '.join(extras))}.</p>")
+        com_iss = any(aliq.get("anexo" + a) for a in ANEXOS_COM_ISS)
+        p.append("<table><tr><th>Anexo</th><th class='n'>CBS</th><th class='n'>IBS</th>"
+                 + ("<th class='n'>CBS sem redistribuição do ISS</th><th class='n'>IBS sem redistribuição do ISS</th>"
+                    if com_iss else "") + "</tr>")
+        for anexo in ANEXOS:
+            par = aliq.get("anexo" + anexo)
+            if not par:
+                continue
+            sem = par.get("semRedistribuicaoISS") or {}
+            celulas = [pct(par.get("pCBSSN")), pct(par.get("pIBSSN"))]
+            if com_iss:
+                celulas += [pct(sem.get("pCBSSN")), pct(sem.get("pIBSSN"))]
+            p.append(f"<tr><td>{anexo}</td>" + "".join(f"<td class='n'>{_esc(c)}</td>" for c in celulas) + "</tr>")
+        p.append("</table>")
+    elif not regime_calcula(operacao):
+        p.append("<p class='aviso'>O optante apura o IBS e a CBS pelo regime regular: a calculadora devolve só a "
+                 "receita bruta do Simples, sem tributos.</p>")
+
+    pend = tot["cbs_pend"] + tot["ibs_pend"]
+    terceiro = (f"<td>Pendente/suspenso<br/><b>{moeda(pend)}</b></td>" if nfse or pend
+                else f"<td>Imposto Seletivo<br/><b>{moeda(tot['is'])}</b></td>")
+    p.append("<h2>Totais</h2><table class='tot'><tr>"
+             f"<td>Receita bruta do Simples<br/><b>{moeda(tot['receita'])}</b></td>"
+             f"<td>Base de cálculo<br/><b>{moeda(tot['base'])}</b></td>"
+             f"<td>CBS<br/><b>{moeda(tot['cbs'])}</b></td>"
+             f"<td>IBS<br/><b>{moeda(tot['ibs'])}</b></td>"
+             f"{terceiro}"
+             f"<td>Total dos tributos<br/><b>{moeda(tot['total'])}</b></td></tr></table>")
+
+    cab = ["Item", "Atividade", "NCM/NBS", "Situação", "Anexo", "Par de alíquotas", "Receita bruta", "Base",
+           "CBS %", "CBS", "IBS %", "IBS", "Pend./susp."] + ([] if nfse else ["IS"]) + ["Total"]
+    numericas = {"Receita bruta", "Base", "CBS %", "CBS", "IBS %", "IBS", "Pend./susp.", "IS", "Total"}
+    p.append("<h2>Itens</h2><table><tr>" + "".join(
+        f"<th class='{'n' if c in numericas else ''}'>{c}</th>" for c in cab) + "</tr>")
+    for l in linhas:
+        celulas = ([l["item"], l["atividade"], codigos.get(l["item"], ""), l["situacao"], l["anexo"], l["regra"],
+                    moeda(l["receita"]), moeda(l["base"]), pct(l["aliq_cbs"]), moeda(l["cbs"]), pct(l["aliq_ibs"]),
+                    moeda(l["ibs"]), moeda(l["cbs_pend"] + l["ibs_pend"])]
+                   + ([] if nfse else [moeda(l["is"])]) + [moeda(l["total"])])
+        p.append("<tr>" + "".join(f"<td class='{'n' if c in numericas else ''}'>{_esc(v)}</td>"
+                                  for c, v in zip(cab, celulas)) + "</tr>")
+    p.append("</table>")
+
+    obs = [l for l in linhas if l["erros"] or l["motivo"] or l["avisos"]]
+    gerais = avisos_gerais(resposta)
+    if obs or gerais:
+        p.append("<h2>Itens não calculados, inconsistências e avisos</h2>")
+        p += [f"<p class='aviso'>{_esc(a)}</p>" for a in gerais]
+        for l in obs:
+            if l["erros"]:
+                p.append(f"<p class='erro'><b>Item {l['item']}:</b> {_esc(l['erros'])}</p>")
+            if l["motivo"]:
+                p.append(f"<p class='mem'><b>Item {l['item']} não calculado:</b> {_esc(l['motivo'])}</p>")
+            p += [f"<p class='mem'><b>Item {l['item']}:</b> {_esc(a)}</p>" for a in l["avisos"]]
+
+    p.append("<h2>Memória de cálculo</h2>")
+    com_memoria = [l for l in linhas if l["memoria"]]
+    for l in com_memoria:
+        p.append(f"<p class='mem'><b>Item {l['item']}</b></p>")
+        p += [f"<p class='mem'><b>{rotulo}:</b> {_esc(t)}</p>" for rotulo, t in l["memoria"]]
+    if not com_memoria:
+        p.append("<p class='mem'>A calculadora não devolveu memória de cálculo para estes itens.</p>")
+
+    v = versao_rf or {}
+    p.append("<p class='rod'>Cálculo feito pela calculadora oficial da Receita Federal "
+             f"(calculadora-rtc-simples-nacional {_esc(v.get('versaoApp', ''))}, tabelas {_esc(v.get('versaoDb', ''))}"
+             f" de {_esc(v.get('dataVersaoDb', ''))}) · Hub APP — Calculadora RTC Simples Nacional {VERSAO}. "
+             "Documento de simulação, sem valor fiscal.</p>")
+
+    html = f"<html><head><style>{css}</style></head><body>{''.join(p)}</body></html>"
+    buf = io.BytesIO()
+    escritor = pymupdf.DocumentWriter(buf)
+    historia = pymupdf.Story(html=html)
+    pagina = pymupdf.paper_rect("a4-l")
+    area = pagina + (28, 28, -28, -28)
+    mais = True
+    while mais:
+        dispositivo = escritor.begin_page(pagina)
+        mais, _ = historia.place(area)
+        historia.draw(dispositivo)
+        escritor.end_page()
+    escritor.close()
+    return buf.getvalue()
