@@ -3395,7 +3395,7 @@ def _rtc_cartao_ncm_nbs(tipo: str, codigo: str, dados: dict, data_ref: date) -> 
         f'<div style="flex:none;width:96px;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;'
         f'color:#94a3b8;padding-top:2px">{html.escape(nome)}</div>'
         f'<div style="flex:1;min-width:0;color:#e2e8f0;font-size:14px;line-height:1.45;'
-        f'padding-left:{min(i, 4) * 10}px">{"" if i == 0 else "↳ "}{html.escape(texto)}</div></div>'
+        f'padding-left:{min(i, 4) * 10}px">{"" if i == 0 else "› "}{html.escape(texto)}</div></div>'
         for i, (nome, texto) in enumerate(niveis))
 
     def selo(txt, ok):

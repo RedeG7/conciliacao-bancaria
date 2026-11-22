@@ -29,8 +29,11 @@ from zoneinfo import ZoneInfo
 # A versão da calculadora da Receita (motor e banco de tabelas) é outra e
 # aparece na tela lida da própria API (/dados-abertos/versao); para trocar,
 # mude RTC_REF em calculadora-rtc/Dockerfile.
-VERSAO = "1.1"
+VERSAO = "1.2"
 NOVIDADES = [
+    ("1.2", "22/11/2026", [
+        "Cartão do NCM/NBS: marcador dos níveis da classificação corrigido (aparecia como \"l,\").",
+    ]),
     ("1.1", "22/11/2026", [
         "Consulta de NCM/NBS em cartão: código formatado, a classificação do capítulo ao subitem e selo "
         "dizendo se o item é tributado pelo Imposto Seletivo (no lugar do texto em formato de código).",
