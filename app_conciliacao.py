@@ -33,6 +33,7 @@ import streamlit as st
 
 import admissoes
 import admissoes_canais
+import calculadora_rtc
 import json
 import auth
 import clientes
@@ -2583,6 +2584,15 @@ _APPS_HOME = [
         "grupo": "rpa_fiscal",
     },
     {
+        "id": "calculadora_rtc",
+        "icone": "🧮",
+        "titulo": "Calculadora RTC — Regime Regular",
+        "descricao": "CBS, IBS e Imposto Seletivo pela calculadora oficial da Receita Federal (LC 214/2025).",
+        "departamento": "Fiscal",
+        "tela": "calculadora_rtc",
+        "grupo": "rpa_fiscal",
+    },
+    {
         "id": "marketing",
         "icone": "📣",
         "titulo": "Marketing & Comercial",
@@ -2869,7 +2879,7 @@ def _iniciais(nome: str) -> str:
     return (partes[0][0] + partes[-1][0]).upper()
 
 
-_TELAS_APPS = {"conciliacao", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "rpa_folha", "admissoes", "historico",
+_TELAS_APPS = {"conciliacao", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "rpa_folha", "admissoes", "historico",
                "gerenciar_clientes"}
 
 
@@ -3119,6 +3129,259 @@ def _tela_grupo_apps(grupo_id: str) -> None:
             _card_app(coluna, app, st.session_state.get("usuario_logado"), set(), com_favorito=False)
 
 
+# ---------------------------------------------------------------- Calculadora RTC
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _rtc_ufs() -> list:
+    return calculadora_rtc.ufs()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _rtc_municipios(sigla_uf: str) -> list:
+    return calculadora_rtc.municipios(sigla_uf)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _rtc_classificacoes(data_iso: str) -> list:
+    return calculadora_rtc.lista_classificacoes(calculadora_rtc.situacoes_cbs_ibs(date.fromisoformat(data_iso)))
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _rtc_classificacoes_detalhe(data_iso: str) -> list:
+    return calculadora_rtc.classificacoes_cbs_ibs(date.fromisoformat(data_iso))
+
+
+def _rtc_moeda(v) -> str:
+    return "R$ " + f"{float(v or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _rtc_pct(v) -> str:
+    return "" if v is None else f"{v:.4f}".rstrip("0").rstrip(".").replace(".", ",") + "%"
+
+
+def _tela_calculadora_rtc() -> None:
+    """Calculadora RTC - Regime Regular: tela sobre a calculadora oficial da
+    Receita Federal (serviço calculadora-rtc do docker-compose). O cálculo é
+    todo da API da Receita; regras de montagem/leitura em calculadora_rtc.py."""
+    _cabecalho_app("🧮", "Calculadora RTC — Regime Regular",
+                   "CBS, IBS e Imposto Seletivo (LC 214/2025) pela calculadora oficial da Receita Federal.",
+                   pai=_PAI_RPA_FISCAL)
+    try:
+        v_rf = calculadora_rtc.versao()
+    except calculadora_rtc.ErroCalculadora as e:
+        v_rf = None
+        erro_conexao = str(e)
+    rotulo_rf = (f" · calculadora da Receita {v_rf.get('versaoApp', '?')}, tabelas {v_rf.get('versaoDb', '?')} "
+                 f"de {v_rf.get('dataVersaoDb', '?')}") if v_rf else ""
+    with st.expander(f"Versão {calculadora_rtc.VERSAO}{rotulo_rf} — novidades"):
+        if v_rf and v_rf.get("descricaoVersaoDb"):
+            st.caption(f"Tabelas oficiais: {v_rf['descricaoVersaoDb']}")
+        for versao_, data_, itens in calculadora_rtc.NOVIDADES:
+            st.markdown(f"**{versao_}** ({data_})" + chr(10) + chr(10).join(f"- {i}" for i in itens))
+    if not v_rf:
+        st.error(f"A calculadora da Receita não respondeu: {erro_conexao} Tente de novo em alguns minutos; "
+                 "se continuar, avise o suporte (serviço calculadora-rtc na VPS).")
+        return
+
+    aba_calc, aba_base, aba_tab = st.tabs(["Cálculo da operação", "Base de cálculo (NF-e/NFC-e)", "Consultar tabelas"])
+    with aba_calc:
+        _rtc_aba_calculo()
+    with aba_base:
+        _rtc_aba_base()
+    with aba_tab:
+        _rtc_aba_tabelas()
+
+
+def _rtc_aba_calculo() -> None:
+    c_data, c_uf, c_mun = st.columns([1, 1, 2])
+    data_fato = c_data.date_input("Data do fato gerador", value=date.today(), min_value=date(2026, 1, 1),
+                                  max_value=date(2040, 12, 31), format="DD/MM/YYYY", key="rtc_data")
+    lista_ufs = _rtc_ufs()
+    siglas = [u["sigla"] for u in lista_ufs]
+    uf = c_uf.selectbox("UF", siglas, index=siglas.index("GO") if "GO" in siglas else 0, key="rtc_uf")
+    lista_mun = _rtc_municipios(uf)
+    cod_mun = [m["codigo"] for m in lista_mun]
+    nomes_mun = {m["codigo"]: m["nome"] for m in lista_mun}
+    padrao_mun = cod_mun.index(5208707) if 5208707 in cod_mun else 0  # Goiânia
+    municipio = c_mun.selectbox("Município", cod_mun, index=padrao_mun, key=f"rtc_mun_{uf}",
+                                format_func=lambda c: f"{nomes_mun.get(c, c)} ({c})")
+
+    aliquotas = None
+    if calculadora_rtc.aliquotas_obrigatorias(data_fato):
+        sug = calculadora_rtc.aliquotas_sugeridas(data_fato.year)
+        st.info(f"De 2027 em diante a Receita ainda não publicou as alíquotas de referência: informe as alíquotas "
+                f"(o resultado sai como **simulado**). Já vêm preenchidas a CBS de {_rtc_pct(sug[0])} (estimativa "
+                "usada pela Receita nos exemplos) e, em 2027/2028, o IBS de 0,05% + 0,05% previsto na lei.")
+        a1, a2, a3 = st.columns(3)
+        ano = data_fato.year
+        aliquotas = (
+            a1.number_input("CBS (%)", 0.0, 100.0, float(sug[0]), 0.1, format="%.4f", key=f"rtc_cbs_{ano}"),
+            a2.number_input("IBS estadual (%)", 0.0, 100.0, float(sug[1]), 0.05, format="%.4f", key=f"rtc_ibsuf_{ano}"),
+            a3.number_input("IBS municipal (%)", 0.0, 100.0, float(sug[2]), 0.05, format="%.4f", key=f"rtc_ibsmun_{ano}"),
+        )
+        if ano >= 2029 and not (aliquotas[1] or aliquotas[2]):
+            st.warning("Informe as alíquotas do IBS estadual e municipal do ano escolhido.")
+    else:
+        st.caption("Em 2026 valem as alíquotas de teste já cadastradas pela Receita (CBS 0,9% e IBS estadual 0,1%). "
+                   "O Imposto Seletivo só começa em 2027.")
+
+    classif = _rtc_classificacoes(data_fato.isoformat())
+    opcoes = [f"{c['cClassTrib']} — {c['descricao'][:110]}" for c in classif]
+    padrao = next((o for o in opcoes if o.startswith("000001")), opcoes[0] if opcoes else None)
+    if "rtc_itens" not in st.session_state:
+        st.session_state["rtc_itens"] = [{"codigo": "", "cClassTrib": padrao, "base": 1000.0,
+                                          "quantidade": None, "unidade": "UN", "is_aliquota": None}]
+    st.markdown("**Itens da operação**")
+    st.caption("O CST sai do cClassTrib (os 3 primeiros dígitos). NCM tem 8 dígitos e NBS, 9. A base é o valor "
+               "do item já sem ICMS, ISS, PIS e Cofins (use a aba Base de cálculo para chegar nela).")
+    itens = st.data_editor(
+        st.session_state["rtc_itens"], num_rows="dynamic", use_container_width=True, key="rtc_editor",
+        column_order=["codigo", "cClassTrib", "base", "quantidade", "unidade", "is_aliquota"],
+        column_config={
+            "codigo": st.column_config.TextColumn("NCM / NBS", help="NCM (8 dígitos) do produto ou NBS (9) do serviço"),
+            "cClassTrib": st.column_config.SelectboxColumn("cClassTrib", options=opcoes, required=True, width="large"),
+            "base": st.column_config.NumberColumn("Base (R$)", min_value=0.0, step=0.01, format="%.2f", required=True),
+            "quantidade": st.column_config.NumberColumn("Qtd.", min_value=0.0),
+            "unidade": st.column_config.TextColumn("Unid.", max_chars=6),
+            "is_aliquota": st.column_config.NumberColumn(
+                "IS ad valorem (%)", min_value=0.0, help="Só para itens com Imposto Seletivo (a partir de 2027)"),
+        },
+    )
+
+    if st.button("Calcular", type="primary", key="rtc_calcular", icon=":material/calculate:"):
+        operacao = calculadora_rtc.montar_operacao(data_fato, uf, municipio, itens, aliquotas)
+        if not operacao["itens"]:
+            st.warning("Preencha ao menos um item com cClassTrib e base de cálculo.")
+        else:
+            try:
+                with st.spinner("Calculando na calculadora da Receita..."):
+                    resposta, aviso = calculadora_rtc.calcular(operacao)
+                st.session_state["rtc_resultado"] = (operacao, resposta, aviso)
+                st.session_state.pop("rtc_xml_gerado", None)
+            except calculadora_rtc.ErroCalculadora as e:
+                st.session_state.pop("rtc_resultado", None)
+                st.error(f"A calculadora recusou a operação: {e}")
+
+    if "rtc_resultado" in st.session_state:
+        _rtc_resultado(*st.session_state["rtc_resultado"])
+
+
+def _rtc_resultado(operacao: dict, resposta: dict, aviso) -> None:
+    linhas = calculadora_rtc.linhas_resultado(resposta)
+    tot = calculadora_rtc.totais(resposta)
+    st.markdown('<div class="hh-sep" style="margin:14px 0"></div>', unsafe_allow_html=True)
+    if aviso or any(l["situacao"] == calculadora_rtc.ESTADOS["CALCULO_SIMULADO"] for l in linhas):
+        st.caption("Resultado simulado: calculado com as alíquotas informadas, ainda não publicadas oficialmente.")
+    m = st.columns(2)
+    m[0].metric("Base de cálculo", _rtc_moeda(tot["base"]))
+    m[1].metric("Total dos tributos", _rtc_moeda(tot["total"]))
+    m = st.columns(3)
+    m[0].metric("CBS", _rtc_moeda(tot["cbs"]))
+    m[1].metric("IBS", _rtc_moeda(tot["ibs"]),
+                help=f"Estadual {_rtc_moeda(tot['ibs_uf'])} · Municipal {_rtc_moeda(tot['ibs_mun'])}")
+    m[2].metric("Imposto Seletivo", _rtc_moeda(tot["is"]))
+
+    tabela = [{
+        "Item": l["item"], "Situação": l["situacao"], "CST": l["cst"], "cClassTrib": l["cClassTrib"],
+        "Base": _rtc_moeda(l["base"]),
+        "CBS %": _rtc_pct(l["aliq_cbs"]), "Redução %": _rtc_pct(l["red_cbs"]),
+        "CBS efetiva %": _rtc_pct(l["efet_cbs"] if l["efet_cbs"] is not None else l["aliq_cbs"]),
+        "CBS": _rtc_moeda(l["cbs"]),
+        "IBS UF %": _rtc_pct(l["efet_ibs_uf"] if l["efet_ibs_uf"] is not None else l["aliq_ibs_uf"]),
+        "IBS UF": _rtc_moeda(l["ibs_uf"]),
+        "IBS Mun %": _rtc_pct(l["efet_ibs_mun"] if l["efet_ibs_mun"] is not None else l["aliq_ibs_mun"]),
+        "IBS Mun": _rtc_moeda(l["ibs_mun"]),
+        "IS": _rtc_moeda(l["is"]), "Total": _rtc_moeda(l["total"]),
+    } for l in linhas]
+    st.dataframe(tabela, use_container_width=True, hide_index=True)
+    for l in linhas:
+        if l["erros"]:
+            st.warning(f"Item {l['item']}: {l['erros']}")
+    with st.expander("Memória de cálculo"):
+        for l in linhas:
+            if l["memoria"]:
+                st.markdown(f"**Item {l['item']}**" + chr(10) + chr(10).join(f"- {t}" for t in l["memoria"]))
+
+    c_json, c_xml = st.columns(2)
+    c_json.download_button("Baixar resultado (JSON)", json.dumps(resposta, ensure_ascii=False, indent=2),
+                           file_name="calculo_rtc.json", mime="application/json", use_container_width=True)
+    if any(l["erros"] for l in linhas):
+        c_xml.button("Gerar XML da NF-e", disabled=True, use_container_width=True, key="rtc_xml_off",
+                     help="Corrija os itens com erro para gerar o XML.")
+    elif c_xml.button("Gerar XML da NF-e (grupo de tributação)", use_container_width=True, key="rtc_xml"):
+        try:
+            st.session_state["rtc_xml_gerado"] = calculadora_rtc.gerar_xml_nfe(operacao)
+        except calculadora_rtc.ErroCalculadora as e:
+            st.error(f"Não deu para gerar o XML: {e}")
+    if st.session_state.get("rtc_xml_gerado"):
+        c_xml.download_button("Baixar XML", st.session_state["rtc_xml_gerado"], file_name="grupo_ibscbs_nfe.xml",
+                              mime="application/xml", use_container_width=True, key="rtc_xml_baixar")
+
+
+def _rtc_aba_base() -> None:
+    st.caption("Monta a base de cálculo unificada da NF-e/NFC-e: a calculadora aplica a vigência de cada valor ao "
+               "ano (ex.: PIS e Cofins só existem em 2026; ICMS sai da base até ser extinto) e avisa o que ignorou.")
+    c1, c2, c3 = st.columns(3)
+    ano = c1.number_input("Ano do fato gerador", 2026, 2040, date.today().year, key="rtc_b_ano")
+    tipo = c2.selectbox("Documento", [55, 65], format_func=lambda t: "NF-e (55)" if t == 55 else "NFC-e (65)",
+                        key="rtc_b_tipo")
+    natureza = c3.selectbox("Natureza", ["bem", "servico"], format_func=lambda n: "Bem" if n == "bem" else "Serviço",
+                            key="rtc_b_nat")
+    campos = [("vProd", "Valor dos produtos"), ("vFrete", "Frete"), ("vSeg", "Seguro"), ("vOutro", "Outras despesas"),
+              ("vDesc", "Desconto"), ("vIS", "Imposto Seletivo"), ("vICMS", "ICMS"), ("vFCP", "FCP"),
+              ("vPIS", "PIS"), ("vCOFINS", "Cofins")]
+    valores = {}
+    cols = st.columns(5)
+    for i, (campo, rotulo) in enumerate(campos):
+        valores[campo] = cols[i % 5].number_input(rotulo, 0.0, None, 0.0, 0.01, format="%.2f", key=f"rtc_b_{campo}")
+    if st.button("Calcular base", key="rtc_b_calc", icon=":material/calculate:"):
+        try:
+            r = calculadora_rtc.base_calculo_unificada(
+                {"anoFatoGerador": int(ano), "tipoDocumento": int(tipo), "natureza": natureza, **valores})
+        except calculadora_rtc.ErroCalculadora as e:
+            st.error(f"A calculadora recusou os valores: {e}")
+        else:
+            m = st.columns(3)
+            m[0].metric("Base CBS/IBS (regime regular)", _rtc_moeda(r.get("baseRG")))
+            m[1].metric("Base do Imposto Seletivo", _rtc_moeda(r.get("baseIS")))
+            m[2].metric("Base do Simples Nacional", _rtc_moeda(r.get("baseSN")))
+            for a in r.get("avisos") or []:
+                st.caption(f"⚠️ {a}")
+
+
+def _rtc_aba_tabelas() -> None:
+    data_ref = st.date_input("Data de referência", value=date.today(), min_value=date(2026, 1, 1),
+                             format="DD/MM/YYYY", key="rtc_t_data")
+    st.markdown("**Classificações tributárias (cClassTrib) de CBS/IBS**")
+    busca = st.text_input("Buscar por código ou descrição", key="rtc_t_busca", placeholder="ex.: 200028, educação, cesta")
+    termo = (busca or "").strip().lower()
+    linhas = [{
+        "cClassTrib": c.get("codigo"), "Descrição": c.get("descricao"),
+        "Tratamento": c.get("descricaoTratamentoTributario"), "Tipo de alíquota": c.get("tipoAliquota"),
+        "Redução CBS %": c.get("percentualReducaoCbs"), "Redução IBS UF %": c.get("percentualReducaoIbsUf"),
+        "Redução IBS Mun %": c.get("percentualReducaoIbsMun"), "Crédito na entrada": c.get("creditoOperacaoAntecedente"),
+        "Exige": c.get("nomenclatura"),
+    } for c in _rtc_classificacoes_detalhe(data_ref.isoformat())
+        if not termo or termo in f"{c.get('codigo', '')} {c.get('descricao', '')}".lower()]
+    st.dataframe(linhas, use_container_width=True, hide_index=True, height=360)
+    st.caption(f"{len(linhas)} classificação(ões).")
+
+    st.markdown("**NCM ou NBS**")
+    c_cod, c_btn = st.columns([3, 1], vertical_alignment="bottom")
+    codigo = c_cod.text_input("Código (NCM com 8 dígitos ou NBS com 9)", key="rtc_t_cod")
+    if c_btn.button("Consultar", key="rtc_t_consultar", use_container_width=True):
+        dig = calculadora_rtc.so_digitos(codigo)
+        try:
+            if len(dig) == 8:
+                st.json(calculadora_rtc.consultar_ncm(dig, data_ref))
+            elif len(dig) == 9:
+                st.json(calculadora_rtc.consultar_nbs(dig, data_ref))
+            else:
+                st.warning("Digite um NCM (8 dígitos) ou uma NBS (9 dígitos).")
+        except calculadora_rtc.ErroCalculadora as e:
+            st.warning(str(e))
+
+
 def _tela_logs_acesso() -> None:
     """Ultimos acessos (login no Hub e entrada no Marketing pelo card).
     super_admin_global ve todos os escritorios; admin de escritorio so o
@@ -3202,7 +3465,7 @@ if st.session_state.get("mostrar_trocar_senha"):
 
 # tela atual também na URL (?tela=...): F5 ou uma sessão nova do Streamlit
 # (reconexão, Hub reiniciado no deploy) voltava sempre pra tela inicial
-_TELAS_URL = {"home", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
+_TELAS_URL = {"home", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
               "gerenciar_escritorios", "gerenciar_usuarios", "logs_acesso"}
 if "tela" not in st.session_state:
     _tela_url = st.query_params.get("tela", "home")
@@ -3273,6 +3536,15 @@ if st.session_state.get("tela") == "rpa_nfgo":
         subtitulo="Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO.",
         pai=_PAI_RPA_FISCAL,
     )
+    st.stop()
+
+if st.session_state.get("tela") == "calculadora_rtc":
+    if "calculadora_rtc" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    _tela_calculadora_rtc()
     st.stop()
 
 if st.session_state.get("tela") == "rpa_folha":

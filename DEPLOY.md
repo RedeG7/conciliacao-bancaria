@@ -536,3 +536,29 @@ docker exec conciliacao-db pg_dump -U conciliacao whatsapp > whatsapp-$(date +%Y
 docker run --rm -v conciliacao-bancaria_whatsapp_data:/data -v $(pwd):/b alpine \
   tar czf /b/whatsapp-data-$(date +%Y%m%d).tgz -C /data .
 ```
+
+## Calculadora RTC — Regime Regular (card dentro do "🧾 RPA Fiscal")
+
+Cálculo da CBS, do IBS e do Imposto Seletivo (LC 214/2025) pela **calculadora
+oficial da Receita Federal**
+([ReceitaFederal/calculadora-rtc-regime-regular](https://github.com/ReceitaFederal/calculadora-rtc-regime-regular),
+licença MIT), sem alteração no código dela:
+
+- `calculadora-rtc/Dockerfile` baixa o código da Receita na versão fixada em
+  `RTC_REF`, gera o banco SQLite das tabelas oficiais (Flyway) e compila o
+  `.jar` (Java 25). O deploy publica a imagem `ghcr.io/redeg7/calculadora-rtc`
+  e liga sozinho o profile `calculadorartc` no `.env` do VPS.
+- O serviço `calculadora-rtc` fica **só na rede interna** do Docker (a API da
+  Receita não tem login): sem porta publicada e sem rota no Caddy. O Hub fala
+  com ela por `CALCULADORA_RTC_URL` (`http://calculadora-rtc:8080/api/calculadora`).
+  Usa até ~512 MB de heap Java (`mem_limit: 768m`).
+- A tela fica em `_tela_calculadora_rtc` (app_conciliacao.py); a montagem do
+  pedido e a leitura da resposta em `calculadora_rtc.py` (testes em
+  `tests/test_calculadora_rtc.py`, sem banco).
+- **Atualizar a calculadora** (versão nova da Receita, tabela cClassTrib nova):
+  troque `RTC_REF` no Dockerfile, suba `VERSAO`/`NOVIDADES` em
+  `calculadora_rtc.py` e faça o push na `main`.
+- Conferir no VPS: `docker compose ps calculadora-rtc` e
+  `docker compose exec app python -c "import calculadora_rtc as c; print(c.versao())"`.
+- Escritório/usuário com lista de apps restrita só vê o card depois de liberar
+  "Calculadora RTC — Regime Regular" em Gerenciar Escritórios/Usuários.

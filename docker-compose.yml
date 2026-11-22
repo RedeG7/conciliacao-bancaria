@@ -42,6 +42,9 @@ services:
       # WhatsApp Disparos (pasta whatsapp/) - o card dele na home passa por
       # /api/sso/whatsapp (api.py)
       - DOMINIO_WHATSAPP=${DOMINIO_WHATSAPP:-autoenviopro.com.br}
+      # Calculadora RTC - Regime Regular (servico calculadora-rtc abaixo, so
+      # na rede interna) - usada pela tela do RPA Fiscal (calculadora_rtc.py)
+      - CALCULADORA_RTC_URL=http://calculadora-rtc:8080/api/calculadora
     depends_on:
       db:
         condition: service_healthy
@@ -234,6 +237,24 @@ services:
         condition: service_healthy
     expose:
       - "3000"
+
+  # Calculadora RTC - Regime Regular: a calculadora OFICIAL da Receita Federal
+  # (API Java + banco SQLite das tabelas oficiais, montada por
+  # calculadora-rtc/Dockerfile). A API nao tem login, entao fica SO na rede
+  # interna: sem "ports" e sem rota no Caddy - so o Hub (app) fala com ela.
+  # Nome com hifen (nao "_"): o Tomcat da API recusa Host com sublinhado.
+  # Profile "calculadorartc": o deploy liga sozinho quando a imagem ja pode
+  # ser baixada (mesma logica do Marketing, ver deploy.yml).
+  calculadora-rtc:
+    image: ghcr.io/redeg7/calculadora-rtc:latest
+    profiles: ["calculadorartc"]
+    container_name: calculadora-rtc
+    restart: unless-stopped
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xms128m -Xmx512m
+    mem_limit: 768m
+    expose:
+      - "8080"
 
   caddy:
     image: caddy:2-alpine

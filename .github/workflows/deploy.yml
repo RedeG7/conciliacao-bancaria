@@ -121,6 +121,17 @@ jobs:
           cache-from: type=gha,scope=whatsapp
           cache-to: type=gha,mode=max,scope=whatsapp
 
+      # Calculadora RTC - Regime Regular (calculadora oficial da Receita,
+      # pasta calculadora-rtc/: baixa o codigo da Receita na versao fixada
+      # no Dockerfile e compila)
+      - uses: docker/build-push-action@v5
+        with:
+          context: calculadora-rtc
+          push: true
+          tags: ghcr.io/redeg7/calculadora-rtc:latest
+          cache-from: type=gha,scope=calculadorartc
+          cache-to: type=gha,mode=max,scope=calculadorartc
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -202,6 +213,16 @@ jobs:
               fi
             else
               echo "Imagem whatsapp-disparos nao acessivel - WhatsApp Disparos nao ligado"
+            fi
+            # idem Calculadora RTC (profile "calculadorartc")
+            if docker pull -q ghcr.io/redeg7/calculadora-rtc:latest >/dev/null 2>&1; then
+              if ! grep -q '^COMPOSE_PROFILES=' .env; then
+                printf '\nCOMPOSE_PROFILES=calculadorartc\n' >> .env
+              elif ! grep -qE '^COMPOSE_PROFILES=(.*,)?calculadorartc(,|$)' .env; then
+                sed -i 's/^COMPOSE_PROFILES=\(.*\)$/COMPOSE_PROFILES=\1,calculadorartc/' .env
+              fi
+            else
+              echo "Imagem calculadora-rtc nao acessivel - Calculadora RTC nao ligada"
             fi
             # segredos do WhatsApp Disparos, gerados uma vez e guardados no
             # .env: login unico Hub -> WhatsApp (api.py e
