@@ -8,7 +8,9 @@
 # nova etc.): troque RTC_REF pelo commit/tag novo, suba a VERSAO em
 # calculadora_rtc.py com a novidade e faça o deploy normal.
 
-FROM eclipse-temurin:25-jdk AS build
+# imagem do Maven (já com Java 25): o repo da Receita não traz o .jar do
+# Maven Wrapper e o ./mvnw não consegue baixá-lo na imagem só com o JDK
+FROM maven:3.9.16-eclipse-temurin-25 AS build
 ARG RTC_REPO=https://github.com/ReceitaFederal/calculadora-rtc-regime-regular.git
 # 1.7.2 (19/11/2026)
 ARG RTC_REF=f1eebd7ce3157423b1a6aaca7dc1d6c3395452c4
@@ -16,9 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /
 WORKDIR /src
 RUN git init -q . && git remote add origin "$RTC_REPO" \
     && git fetch -q --depth 1 origin "$RTC_REF" && git checkout -q FETCH_HEAD
-RUN chmod +x mvnw && mkdir -p calculadora/db \
-    && ./mvnw -q --batch-mode --errors flyway:migrate -Dflyway.configFiles=./flyway/flyway-pro.conf \
-    && ./mvnw -q --batch-mode --errors -DskipTests package \
+RUN mkdir -p calculadora/db \
+    && mvn -q --batch-mode --errors flyway:migrate -Dflyway.configFiles=./flyway/flyway-pro.conf \
+    && mvn -q --batch-mode --errors -DskipTests package \
     && cp target/*.jar /app.jar
 
 FROM eclipse-temurin:25-jre
