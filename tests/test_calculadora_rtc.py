@@ -86,6 +86,15 @@ def test_totais_da_operacao():
                  "total": 72.4}
 
 
+def test_cartao_ncm_nbs_formata_codigo_e_niveis():
+    assert rtc.formatar_codigo("NCM", "22011000") == "2201.10.00"
+    assert rtc.formatar_codigo("NBS", "122011200") == "1.2201.12.00"
+    dados = {"capitulo": "Bebidas.", "posicao": "Águas", "subposicao": "", "subitem": "Águas minerais",
+             "tributadoPeloImpostoSeletivo": False}
+    assert rtc.niveis_classificacao(dados) == [("Capítulo", "Bebidas."), ("Posição", "Águas"),
+                                               ("Subitem", "Águas minerais")]
+
+
 def test_mensagem_de_erro_da_api():
     assert rtc.mensagem_de_erro({"title": "NCM não encontrada", "detail": "NCM 99999999 não encontrada"}) == \
         "NCM não encontrada — NCM 99999999 não encontrada"

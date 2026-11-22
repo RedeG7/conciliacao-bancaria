@@ -29,8 +29,12 @@ from zoneinfo import ZoneInfo
 # A versão da calculadora da Receita (motor e banco de tabelas) é outra e
 # aparece na tela lida da própria API (/dados-abertos/versao); para trocar,
 # mude RTC_REF em calculadora-rtc/Dockerfile.
-VERSAO = "1.0"
+VERSAO = "1.1"
 NOVIDADES = [
+    ("1.1", "22/11/2026", [
+        "Consulta de NCM/NBS em cartão: código formatado, a classificação do capítulo ao subitem e selo "
+        "dizendo se o item é tributado pelo Imposto Seletivo (no lugar do texto em formato de código).",
+    ]),
     ("1.0", "22/11/2026", [
         "Novo app no RPA Fiscal: Calculadora RTC - Regime Regular, com a calculadora oficial da Receita "
         "Federal (versão 1.7.2) rodando na VPS.",
@@ -163,6 +167,28 @@ def consultar_ncm(ncm: str, data: date) -> dict:
 
 def consultar_nbs(nbs: str, data: date) -> dict:
     return _requisitar("GET", "/dados-abertos/nbs", {"nbs": so_digitos(nbs), "data": data.isoformat()})[0] or {}
+
+
+# Níveis da classificação devolvidos pela consulta de NCM/NBS, do mais amplo
+# ao mais específico (os que vierem vazios ficam de fora)
+NIVEIS_NCM_NBS = (("capitulo", "Capítulo"), ("posicao", "Posição"), ("subposicao", "Subposição"),
+                  ("item", "Item"), ("subitem", "Subitem"))
+
+
+def formatar_codigo(tipo: str, codigo: str) -> str:
+    """NCM 22011000 -> 2201.10.00; NBS 122011200 -> 1.2201.12.00."""
+    d = so_digitos(codigo)
+    if tipo == "NCM" and len(d) == 8:
+        return f"{d[:4]}.{d[4:6]}.{d[6:]}"
+    if tipo == "NBS" and len(d) == 9:
+        return f"{d[0]}.{d[1:5]}.{d[5:7]}.{d[7:]}"
+    return d
+
+
+def niveis_classificacao(dados: dict) -> list[tuple[str, str]]:
+    """[(rótulo, descrição)] da consulta de NCM/NBS, do capítulo ao subitem."""
+    return [(rotulo, str(dados[chave]).strip()) for chave, rotulo in NIVEIS_NCM_NBS
+            if str(dados.get(chave) or "").strip()]
 
 
 def lista_classificacoes(situacoes: list[dict]) -> list[dict]:

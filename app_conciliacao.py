@@ -3373,13 +3373,59 @@ def _rtc_aba_tabelas() -> None:
         dig = calculadora_rtc.so_digitos(codigo)
         try:
             if len(dig) == 8:
-                st.json(calculadora_rtc.consultar_ncm(dig, data_ref))
+                _rtc_cartao_ncm_nbs("NCM", dig, calculadora_rtc.consultar_ncm(dig, data_ref), data_ref)
             elif len(dig) == 9:
-                st.json(calculadora_rtc.consultar_nbs(dig, data_ref))
+                _rtc_cartao_ncm_nbs("NBS", dig, calculadora_rtc.consultar_nbs(dig, data_ref), data_ref)
             else:
                 st.warning("Digite um NCM (8 dígitos) ou uma NBS (9 dígitos).")
         except calculadora_rtc.ErroCalculadora as e:
             st.warning(str(e))
+
+
+def _rtc_cartao_ncm_nbs(tipo: str, codigo: str, dados: dict, data_ref: date) -> None:
+    """Resultado da consulta de NCM/NBS em cartão: código formatado, a
+    hierarquia da classificação (capítulo › ... › subitem) e se o item é
+    tributado pelo Imposto Seletivo."""
+    rotulo = calculadora_rtc.formatar_codigo(tipo, codigo)
+    niveis = calculadora_rtc.niveis_classificacao(dados)
+    titulo = niveis[-1][1] if niveis else "Sem descrição"
+    passos = "".join(
+        f'<div style="display:flex;gap:12px;align-items:flex-start;padding:9px 0;'
+        f'{"" if i == 0 else "border-top:1px solid rgba(255,255,255,0.06);"}">'
+        f'<div style="flex:none;width:96px;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;'
+        f'color:#94a3b8;padding-top:2px">{html.escape(nome)}</div>'
+        f'<div style="flex:1;min-width:0;color:#e2e8f0;font-size:14px;line-height:1.45;'
+        f'padding-left:{min(i, 4) * 10}px">{"" if i == 0 else "↳ "}{html.escape(texto)}</div></div>'
+        for i, (nome, texto) in enumerate(niveis))
+
+    def selo(txt, ok):
+        cor, fundo = ("#fbbf24", "rgba(251,191,36,0.12)") if ok else ("#4ade80", "rgba(34,224,138,0.12)")
+        return (f'<span style="display:inline-block;font-size:12px;font-weight:600;padding:4px 10px;'
+                f'border-radius:20px;color:{cor};background:{fundo};border:1px solid {cor}55;'
+                f'margin:0 6px 6px 0">{html.escape(txt)}</span>')
+
+    tem_is = bool(dados.get("tributadoPeloImpostoSeletivo"))
+    selos = selo("Tributado pelo Imposto Seletivo" if tem_is else "Fora do Imposto Seletivo", tem_is)
+    if tem_is:
+        if dados.get("temAliquotaAdValorem"):
+            selos += selo("IS com alíquota ad valorem (%)", True)
+        if dados.get("temAliquotaAdRem"):
+            selos += selo("IS com alíquota ad rem (por unidade)", True)
+
+    st.markdown(
+        f'<div style="border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.03);'
+        f'border-radius:16px;padding:18px 20px;margin-top:8px">'
+        f'<div style="display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline;margin-bottom:6px">'
+        f'<span style="font-size:12px;font-weight:700;color:#38bdf8;background:rgba(56,189,248,0.12);'
+        f'border:1px solid rgba(56,189,248,0.35);padding:3px 9px;border-radius:8px">{tipo}</span>'
+        f'<span style="font-size:22px;font-weight:700;color:#f5f7fa;letter-spacing:.02em">{rotulo}</span>'
+        f'<span style="font-size:12.5px;color:#94a3b8">vigente em {data_ref.strftime("%d/%m/%Y")}</span></div>'
+        f'<div style="font-size:16px;font-weight:600;color:#f5f7fa;margin-bottom:12px">{html.escape(titulo)}</div>'
+        f'<div style="margin-bottom:12px">{selos}</div>'
+        f'<div style="font-size:12.5px;font-weight:600;color:#cbd5e1;margin-bottom:2px">Classificação</div>'
+        f'{passos}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def _tela_logs_acesso() -> None:
