@@ -59,8 +59,14 @@ log = logging.getLogger(__name__)
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.3"
+VERSAO = "1.4"
 NOVIDADES = [
+    ("1.4", "23/11/2026", [
+        "Sai o item do menu do Hub: o app abre pelo card em Aplicativos.",
+        "Com o app aberto, as telas dele (Dashboard, Obrigações, Empresas, Colaboradores, Envios, Alertas, "
+        "Relatórios e Integração) ficam no menu lateral, logo abaixo de \"Aplicativos\".",
+        "O app sempre abre no Dashboard.",
+    ]),
     ("1.3", "23/11/2026", [
         "Novo item \"Controle de Obrigações\" no menu lateral do Hub, logo abaixo de \"Aplicativos\": "
         "um clique abre o app no Dashboard.",

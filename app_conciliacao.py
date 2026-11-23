@@ -2900,12 +2900,8 @@ def _sidebar_hub(papel_usuario: str) -> None:
             _ir_home("todos")
         if _nav("Aplicativos", "aplicativos", ":material/apps:", ativo=tela in _TELAS_APPS and tela != "obrigacoes"):
             _ir_home("todos")
-        # atalho direto para o Controle de Obrigações (abre no Dashboard, a 1ª aba)
-        if "obrigacoes" in _apps_permitidos_efetivos(st.session_state.get("escritorio_id"),
-                                                     st.session_state.get("usuario_logado")):
-            if _nav("Controle de Obrigações", "obrigacoes", ":material/fact_check:", ativo=tela == "obrigacoes"):
-                st.session_state["tela"] = "obrigacoes"
-                st.rerun()
+        if tela == "obrigacoes":  # com o app aberto, as telas dele entram aqui no menu
+            tela_obrigacoes.menu_lateral(papel_usuario in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO))
         if _nav("Meus Favoritos", "favoritos", ":material/star:", ativo=tela == "home" and filtro == "favoritos"):
             _ir_home("favoritos")
 
@@ -3938,6 +3934,12 @@ if "tela" not in st.session_state:
     st.session_state["tela"] = _tela_url if _tela_url in _TELAS_URL else "home"
 if st.session_state["tela"] in _TELAS_URL and st.query_params.get("tela") != st.session_state["tela"]:
     st.query_params["tela"] = st.session_state["tela"]
+
+# Controle de Obrigações sempre abre no Dashboard quando se entra nele vindo
+# de outra tela (lá dentro, a tela escolhida no menu lateral é mantida)
+if st.session_state.get("tela") == "obrigacoes" and st.session_state.get("_tela_anterior") != "obrigacoes":
+    st.session_state["ob_secao"] = "Dashboard"
+st.session_state["_tela_anterior"] = st.session_state.get("tela")
 
 _estilo_home()
 _sidebar_hub(st.session_state.get("papel_usuario"))
