@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 import admissoes
 import admissoes_canais
 import auth
+import obrigacoes
 from rpa import core as rpa_core
 
 app = FastAPI(title="Hub RedeG7 - API attended", docs_url=None, redoc_url=None)
@@ -63,7 +64,9 @@ def _startup() -> None:
     rpa_core.garantir_schema()
     admissoes.garantir_schema()
     admissoes_canais.garantir_schema()
+    obrigacoes.garantir_schema()
     _iniciar_sinc_canais()
+    _iniciar_sinc_obrigacoes()
 
 
 # Admissões: o Acessórias não avisa quando chega solicitação (sem webhook),
@@ -84,6 +87,26 @@ def _laco_sinc_canais() -> None:
 def _iniciar_sinc_canais() -> None:
     if _SINC_INTERVALO_S > 0:
         threading.Thread(target=_laco_sinc_canais, name="admissoes-sinc", daemon=True).start()
+
+
+# Controle de Obrigações: sincroniza com o Acessórias os escritórios com a
+# integração ativa (incremental; completa quando a última boa tem mais de 1
+# dia). OBRIGACOES_SINC_INTERVALO_S=0 desliga (os testes desligam).
+_OBR_INTERVALO_S = int(os.environ.get("OBRIGACOES_SINC_INTERVALO_S", "3600") or 0)
+
+
+def _laco_sinc_obrigacoes() -> None:
+    while True:
+        time.sleep(_OBR_INTERVALO_S)
+        try:
+            obrigacoes.sincronizar_todos()
+        except Exception as e:  # noqa: BLE001 - o laço nunca pode morrer
+            print(f"[obrigacoes] sincronização falhou: {type(e).__name__}", flush=True)
+
+
+def _iniciar_sinc_obrigacoes() -> None:
+    if _OBR_INTERVALO_S > 0:
+        threading.Thread(target=_laco_sinc_obrigacoes, name="obrigacoes-sinc", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ sys.path.insert(0, str(RAIZ / "attended_worker"))
 _URL = os.environ.get("TEST_DATABASE_URL", "")
 # sem a sincronização periódica dos canais durante os testes da API
 os.environ["ADMISSOES_SINC_INTERVALO_S"] = "0"
+os.environ["OBRIGACOES_SINC_INTERVALO_S"] = "0"
 if not os.environ.get("RPA_ENC_KEY"):
     from cryptography.fernet import Fernet
     os.environ["RPA_ENC_KEY"] = Fernet.generate_key().decode()

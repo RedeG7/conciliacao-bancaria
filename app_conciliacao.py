@@ -36,6 +36,8 @@ import admissoes_canais
 import calculadora_rtc
 import calculadora_rtc_sn
 import gerador_danfse
+import obrigacoes
+import tela_obrigacoes
 import json
 import auth
 import clientes
@@ -102,6 +104,7 @@ def _garantir_schema_extra() -> bool:
     rpa_core.garantir_schema()
     admissoes.garantir_schema()
     admissoes_canais.garantir_schema()
+    obrigacoes.garantir_schema()
     return True
 
 
@@ -2573,6 +2576,14 @@ _APPS_HOME = [
         "grupo": "rpa_fiscal",
     },
     {
+        "id": "obrigacoes",
+        "icone": "📊",
+        "titulo": "Controle de Obrigações",
+        "descricao": "Obrigações concluídas, pendentes, em atraso e enviadas ao cliente, por colaborador e empresa — integrado ao Acessórias.",
+        "departamento": "Gestão",
+        "tela": "obrigacoes",
+    },
+    {
         "id": "marketing",
         "icone": "📣",
         "titulo": "Marketing & Comercial",
@@ -2714,6 +2725,7 @@ _DEPARTAMENTOS = {
     # "chip": rotulo curto no card (o nome inteiro vai no filtro de departamentos)
     "Marketing & Comercial": {"icone": "📣", "cor": "#ec4899", "chip": "Comercial"},
     "RDO": {"icone": "🏗️", "cor": "#f59e0b"},
+    "Gestão": {"icone": "📊", "cor": "#14b8a6"},
 }
 _FILTRO_TODOS_DEPTOS = "Todos os departamentos"
 
@@ -2859,7 +2871,7 @@ def _iniciais(nome: str) -> str:
     return (partes[0][0] + partes[-1][0]).upper()
 
 
-_TELAS_APPS = {"conciliacao", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "historico",
+_TELAS_APPS = {"conciliacao", "obrigacoes", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "historico",
                "gerenciar_clientes"}
 
 
@@ -3913,7 +3925,7 @@ if st.session_state.get("mostrar_trocar_senha"):
 
 # tela atual também na URL (?tela=...): F5 ou uma sessão nova do Streamlit
 # (reconexão, Hub reiniciado no deploy) voltava sempre pra tela inicial
-_TELAS_URL = {"home", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
+_TELAS_URL = {"home", "obrigacoes", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
               "gerenciar_escritorios", "gerenciar_usuarios", "logs_acesso"}
 if "tela" not in st.session_state:
     _tela_url = st.query_params.get("tela", "home")
@@ -4011,6 +4023,16 @@ if st.session_state.get("tela") == "gerador_danfse":
         st.session_state["tela"] = "home"
         st.rerun()
     _tela_gerador_danfse()
+    st.stop()
+
+if st.session_state.get("tela") == "obrigacoes":
+    if "obrigacoes" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    tela_obrigacoes.render(_cabecalho_app, st.session_state.get("papel_usuario") in (
+        auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO))
     st.stop()
 
 if st.session_state.get("tela") == "rpa_folha":
