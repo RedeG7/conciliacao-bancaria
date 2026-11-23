@@ -104,6 +104,23 @@ def test_normalizar_sem_config_tem_chave_estavel_e_prazo_pelo_atraso():
     assert a["prazo"] == date(2026, 11, 20) and a["resp_prazo"] is None
 
 
+def test_nome_com_html_vira_so_texto():
+    ecac = "<a href='https://cav.receita.fazenda.gov.br/autenticacao/login'> ECAC</a>"
+    assert ob.sem_html(ecac) == "ECAC"
+    assert ob.sem_html("Folha &amp; Pró-labore") == "Folha & Pró-labore"
+    assert ob.sem_html("DAS Simples Nacional") == "DAS Simples Nacional"
+    ent = _ent(Nome=ecac)
+    assert ob.normalizar_entrega(EMPRESA, ent)["nome"] == "ECAC"
+    # sem o ID da entrega, a chave continua a mesma de antes (não duplica o que já foi gravado)
+    ent.pop("Config")
+    antes = "h:" + __import__("hashlib").sha1("|".join(
+        [ob._texto(EMPRESA.get("ID")), ob.so_digitos(EMPRESA.get("Identificador")), ecac, ob._texto(ent.get("EntCompetencia")),
+         str(ent.get("EntDtPrazo") or "")]).encode("utf-8")).hexdigest()
+    assert ob.normalizar_entrega(EMPRESA, ent)["chave"] == antes
+    # linha antiga no banco, ainda com HTML: sai limpa na leitura
+    assert ob.enriquecer({"nome": ecac, "prazo": None, "dt_entrega": None}, date(2026, 11, 23))["nome"] == "ECAC"
+
+
 def _linhas():
     def l(prazo, entrega=None, status="Pendente", resp="Ana Paula", feito_por=None, depto="Fiscal", lida=""):
         e = {"prazo": prazo, "dt_entrega": entrega, "status_origem": status, "resp_prazo": resp,

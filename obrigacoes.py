@@ -37,9 +37,11 @@ normalizar_entrega - a tela não muda.
 from __future__ import annotations
 
 import hashlib
+import html
 import io
 import json
 import logging
+import re
 import threading
 import time
 import unicodedata
@@ -59,8 +61,12 @@ log = logging.getLogger(__name__)
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.7"
+VERSAO = "1.8"
 NOVIDADES = [
+    ("1.8", "23/11/2026", [
+        "Nomes de obrigações, empresas e departamentos cadastrados com código HTML no Acessórias (ex.: um "
+        "link para o e-CAC) aparecem só com o texto, como \"ECAC\" — na lista, nos relatórios e no Excel/PDF.",
+    ]),
     ("1.7", "23/11/2026", [
         "Sincronização automática com o Acessórias a cada 5 minutos (antes era de hora em hora).",
     ]),
@@ -234,6 +240,16 @@ def _texto(valor) -> str:
     return " ".join(str(valor if valor is not None else "").split())
 
 
+_TAG_HTML = re.compile(r"<[^>]*>")
+
+
+def sem_html(valor) -> str:
+    """Texto para exibir: tira tags HTML que vêm cadastradas no Acessórias
+    (ex.: nome "<a href='...ecac...'> ECAC</a>" vira "ECAC") e converte
+    entidades (&amp; -> &)."""
+    return _texto(html.unescape(_TAG_HTML.sub(" ", _texto(valor))))
+
+
 def somar_meses(d: date, meses: int) -> date:
     mes = d.month - 1 + meses
     ano = d.year + mes // 12
@@ -327,12 +343,12 @@ def normalizar_entrega(empresa: dict, ent: dict) -> dict:
     for c in ent.get("Comentarios") or []:
         if not isinstance(c, dict):
             continue
-        texto = _texto(c.get("Texto"))
+        texto = _texto(c.get("Texto"))  # original: base do hash (não muda o que já foi gravado)
         quando = ler_data_hora(c.get("Data"))
         autor = _texto(c.get("Nome"))
         comentarios.append({
-            "data": quando, "autor": autor, "email": _texto(c.get("Email")) or None, "texto": texto,
-            "tipo": classificar_comentario(texto),
+            "data": quando, "autor": autor, "email": _texto(c.get("Email")) or None, "texto": sem_html(texto),
+            "tipo": classificar_comentario(sem_html(texto)),
             "hash": hashlib.sha1(f"{c.get('Data')}|{autor}|{texto}".encode("utf-8")).hexdigest(),
         })
     multa = _texto(ent.get("EntMulta")).upper()
@@ -341,12 +357,12 @@ def normalizar_entrega(empresa: dict, ent: dict) -> dict:
         "ent_id": ent_id or None,
         "empresa_id_externo": emp_id or None,
         "cnpj": so_digitos(empresa.get("Identificador")) or None,
-        "empresa_nome": _texto(empresa.get("Razao") or empresa.get("Fantasia")) or None,
-        "nome": nome or "(sem nome)",
+        "empresa_nome": sem_html(empresa.get("Razao") or empresa.get("Fantasia")) or None,
+        "nome": sem_html(nome) or "(sem nome)",
         "tipo": _texto(cfg.get("Tipo")).upper()[:1] or None,
         "obrigacao_id_externo": _texto(cfg.get("ID")) or None,
         "departamento_id": _texto(cfg.get("DptoID")) or None,
-        "departamento_nome": _texto(cfg.get("DptoNome")) or None,
+        "departamento_nome": sem_html(cfg.get("DptoNome")) or None,
         "competencia": competencia or None,
         "prazo": prazo,
         "dt_atraso": dt_atraso,
@@ -379,7 +395,10 @@ def enriquecer(linha: dict, hoje: date, eventos: Optional[list] = None) -> dict:
         dias = (linha["dt_entrega"] - prazo).days
     else:
         dias = 0
-    return {**linha, "situacao": sit, "envio": env, "envio_data": ev.get("data") if ev else None,
+    # linhas gravadas antes da 1.8 podem ter HTML no nome: limpa também na leitura
+    limpos = {k: sem_html(linha[k]) or linha[k] for k in ("nome", "empresa_nome", "departamento_nome")
+              if isinstance(linha.get(k), str) and "<" in linha[k]}
+    return {**linha, **limpos, "situacao": sit, "envio": env, "envio_data": ev.get("data") if ev else None,
             "envio_por": ev.get("autor") if ev else None, "dias_atraso": dias,
             "responsavel": linha.get("resp_prazo") or linha.get("resp_entrega")}
 
