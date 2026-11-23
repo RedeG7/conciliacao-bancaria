@@ -25,7 +25,8 @@ def _estilo() -> None:
     .ob-kpi {background:#111a2c; border:1px solid rgba(255,255,255,.07); border-radius:14px; padding:14px 16px;}
     .ob-kpi .l {color:#94a3b8; font-size:.82rem;} .ob-kpi .v {font-size:1.9rem; font-weight:800; line-height:1.15;}
     .ob-kpi .s {color:#94a3b8; font-size:.75rem;}
-    .ob-card {background:#111a2c; border:1px solid rgba(255,255,255,.07); border-radius:14px; padding:16px; height:100%;}
+    .ob-card {background:#111a2c; border:1px solid rgba(255,255,255,.07); border-radius:14px; padding:16px;
+              height:340px; overflow-y:auto; box-sizing:border-box;}
     .ob-card h4 {margin:0 0 10px; font-size:1rem;}
     .ob-bar {margin:7px 0;} .ob-bar .t {display:flex; justify-content:space-between; font-size:.85rem;}
     .ob-bar .tr {background:rgba(255,255,255,.07); border-radius:6px; height:9px; overflow:hidden; display:flex;}
@@ -222,7 +223,7 @@ def _barras(itens: list[tuple[str, int, int, int]], vazio: str) -> str:
 def _aba_dashboard(linhas: list[dict]) -> None:
     ind = ob.indicadores(linhas)
     _kpis(ind)
-    c1, c2 = st.columns([1, 1.2])
+    c1, c2 = st.columns(2)
     with c1:
         st.markdown(f'<div class="ob-card"><h4>Situação das obrigações</h4>{_rosca(ind)}</div>',
                     unsafe_allow_html=True)

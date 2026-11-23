@@ -59,8 +59,11 @@ log = logging.getLogger(__name__)
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.0"
+VERSAO = "1.1"
 NOVIDADES = [
+    ("1.1", "23/11/2026", [
+        "Dashboard: os quatro painéis de gráficos agora têm o mesmo tamanho (largura e altura).",
+    ]),
     ("1.0", "23/11/2026", [
         "Novo app: Controle de Obrigações, integrado ao Acessórias.",
         "Dashboard com total, concluídas, pendentes, em atraso, taxa de cumprimento no prazo e "
