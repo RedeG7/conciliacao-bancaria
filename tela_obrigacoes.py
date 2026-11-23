@@ -105,22 +105,15 @@ def render(cabecalho: Callable, pode_configurar: bool) -> None:
     if rodando:
         _progresso_sinc(esc)
 
-    secoes = [s for s in _SECOES if pode_configurar or s[0] != "Integração"]
-    secao = st.session_state.get("ob_secao", "Dashboard")
-    if secao not in [s[0] for s in secoes]:
-        secao = "Dashboard"
-    if not cfg["ultima_sinc_ok"] and not rodando and secao != "Integração":
+    nomes = ["Dashboard", "Obrigações", "Empresas", "Colaboradores", "Envios", "Alertas", "Relatórios"]
+    if pode_configurar:
+        nomes.append("Integração")
+    if not cfg["ultima_sinc_ok"] and not rodando:
         if pode_configurar:
-            st.info("Ainda não há dados. Configure o token do Acessórias em **Integração** (menu lateral) e rode "
-                    "a primeira carga.")
+            st.info("Ainda não há dados. Configure o token do Acessórias na aba **Integração** e rode a "
+                    "primeira carga.")
         else:
             st.info("Ainda não há dados: o administrador do escritório precisa ligar a integração com o Acessórias.")
-
-    if secao == "Integração":
-        _menu_lateral(secoes, secao, None)
-        st.markdown("### Integração")
-        _aba_integracao(esc, usuario, cfg)
-        return
 
     ini, fim, rotulo = _periodo(hoje)
     linhas_todas = _carregar(esc, ini, fim, _versao_dados())
@@ -148,47 +141,24 @@ def render(cabecalho: Callable, pode_configurar: bool) -> None:
     st.markdown(f'<div class="ob-muted">Visão geral • {html.escape(rotulo)} · {_num(len(linhas))} registro(s) · '
                 f'última sincronização: {ob.data_br(ult) if ult else "nunca"}</div>', unsafe_allow_html=True)
 
-    _menu_lateral(secoes, secao, sum(1 for l in linhas if l["situacao"] == ob.ATRASADA))
-    st.markdown(f"### {secao}")
-    if secao == "Dashboard":
+    abas = dict(zip(nomes, st.tabs(nomes)))
+    with abas["Dashboard"]:
         _aba_dashboard(linhas)
-    elif secao == "Obrigações":
+    with abas["Obrigações"]:
         _aba_lista(esc, linhas)
-    elif secao == "Empresas":
+    with abas["Empresas"]:
         _aba_empresas(esc, linhas)
-    elif secao == "Colaboradores":
+    with abas["Colaboradores"]:
         _aba_colaboradores(linhas)
-    elif secao == "Envios":
+    with abas["Envios"]:
         _aba_envios(linhas)
-    elif secao == "Alertas":
+    with abas["Alertas"]:
         _aba_alertas(linhas, hoje, ult)
-    elif secao == "Relatórios":
+    with abas["Relatórios"]:
         _aba_relatorios(linhas, filtros_txt)
-
-
-# seções do módulo no menu lateral (abaixo do menu do Hub): (nome, ícone)
-_SECOES = [
-    ("Dashboard", ":material/dashboard:"),
-    ("Obrigações", ":material/checklist:"),
-    ("Empresas", ":material/apartment:"),
-    ("Colaboradores", ":material/groups:"),
-    ("Envios", ":material/send:"),
-    ("Alertas", ":material/notifications:"),
-    ("Relatórios", ":material/description:"),
-    ("Integração", ":material/sync_alt:"),
-]
-
-
-def _menu_lateral(secoes: list, atual: str, atrasadas) -> None:
-    with st.sidebar:
-        st.markdown('<div class="hh-sep"></div><div class="hh-sec">Controle de Obrigações</div>',
-                    unsafe_allow_html=True)
-        for nome, icone in secoes:
-            rotulo = f"{nome} ({_num(atrasadas)} em atraso)" if nome == "Alertas" and atrasadas else nome
-            if st.button(rotulo, key=f"ob_nav_{nome}", icon=icone, use_container_width=True,
-                         type="primary" if nome == atual else "secondary"):
-                st.session_state["ob_secao"] = nome
-                st.rerun()
+    if pode_configurar:
+        with abas["Integração"]:
+            _aba_integracao(esc, usuario, cfg)
 
 
 # ---------------------------------------------------------------- dashboard

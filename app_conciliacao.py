@@ -2898,8 +2898,14 @@ def _sidebar_hub(papel_usuario: str) -> None:
             st.session_state.pop("home_busca", None)
             st.session_state.pop("home_depto", None)
             _ir_home("todos")
-        if _nav("Aplicativos", "aplicativos", ":material/apps:", ativo=tela in _TELAS_APPS):
+        if _nav("Aplicativos", "aplicativos", ":material/apps:", ativo=tela in _TELAS_APPS and tela != "obrigacoes"):
             _ir_home("todos")
+        # atalho direto para o Controle de Obrigações (abre no Dashboard, a 1ª aba)
+        if "obrigacoes" in _apps_permitidos_efetivos(st.session_state.get("escritorio_id"),
+                                                     st.session_state.get("usuario_logado")):
+            if _nav("Controle de Obrigações", "obrigacoes", ":material/fact_check:", ativo=tela == "obrigacoes"):
+                st.session_state["tela"] = "obrigacoes"
+                st.rerun()
         if _nav("Meus Favoritos", "favoritos", ":material/star:", ativo=tela == "home" and filtro == "favoritos"):
             _ir_home("favoritos")
 
