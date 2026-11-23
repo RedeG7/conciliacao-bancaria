@@ -147,6 +147,9 @@ def test_alertas_e_filtros():
     assert len(ob.filtrar(linhas, departamento="Pessoal")) == 1
     assert len(ob.filtrar(linhas, situacoes=[ob.ATRASADA])) == 1
     assert len(ob.filtrar(linhas, colaborador="Carlos Silva")) == 1
+    # cartão "Sem confirmação de envio": concluídas cujo envio não foi registrado
+    sem_envio = ob.filtrar(linhas, situacoes=list(ob.CONCLUIDAS), envios=[ob.ENVIO_AGUARDANDO])
+    assert len(sem_envio) == ob.indicadores(linhas)["aguardando_envio"]
 
 
 def test_modo_automatico():

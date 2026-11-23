@@ -59,8 +59,14 @@ log = logging.getLogger(__name__)
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.5"
+VERSAO = "1.6"
 NOVIDADES = [
+    ("1.6", "23/11/2026", [
+        "Os cartões do Dashboard são clicáveis: abrem a lista de Obrigações já filtrada (concluídas, "
+        "pendentes, em atraso, concluídas no prazo ou sem confirmação de envio). Os filtros ficam visíveis no "
+        "topo e podem ser limpos.",
+        "Novo filtro \"Envio ao cliente\".",
+    ]),
     ("1.5", "23/11/2026", [
         "Super administrador escolhe o escritório no topo da tela e vê o dashboard, as listas, os relatórios "
         "e a integração daquele escritório. Os demais usuários continuam vendo só o próprio.",
@@ -488,7 +494,7 @@ def alertas(linhas: list[dict], hoje: date, dias: int = 5, ultima_sinc_ok: Optio
 
 
 def filtrar(linhas: list[dict], departamento=None, empresa=None, colaborador=None, situacoes=None,
-            tipo=None, busca: str = "") -> list[dict]:
+            tipo=None, busca: str = "", envios=None) -> list[dict]:
     termo = _sem_acento(busca).strip()
     saida = []
     for l in linhas:
@@ -501,6 +507,8 @@ def filtrar(linhas: list[dict], departamento=None, empresa=None, colaborador=Non
         if situacoes and l["situacao"] not in situacoes:
             continue
         if tipo and l.get("tipo") != tipo:
+            continue
+        if envios and l.get("envio") not in envios:
             continue
         if termo and termo not in _sem_acento(f"{l.get('empresa_nome')} {l.get('nome')} {l.get('cnpj')} "
                                               f"{l.get('resp_prazo')} {l.get('resp_entrega')}"):

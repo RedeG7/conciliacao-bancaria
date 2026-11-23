@@ -26,6 +26,15 @@ def _estilo() -> None:
     .ob-kpi {background:#111a2c; border:1px solid rgba(255,255,255,.07); border-radius:14px; padding:14px 16px;}
     .ob-kpi .l {color:#94a3b8; font-size:.82rem;} .ob-kpi .v {font-size:1.9rem; font-weight:800; line-height:1.15;}
     .ob-kpi .s {color:#94a3b8; font-size:.75rem;}
+    /* cartão clicável: um botão invisível cobre o cartão inteiro e abre a lista filtrada */
+    [class*="st-key-ob_kpi_"] {position:relative; gap:0;}
+    [class*="st-key-ob_kpi_"] .ob-kpi {min-height:118px; box-sizing:border-box; transition:border-color .15s, transform .15s;}
+    [class*="st-key-ob_kpi_"] .ob-kpi .ir {color:#64748b; font-size:.72rem; margin-top:6px;}
+    [class*="st-key-ob_kpi_"]:hover .ob-kpi {border-color:rgba(34,224,138,.55); transform:translateY(-2px);}
+    [class*="st-key-ob_kpi_"]:hover .ob-kpi .ir {color:#22e08a;}
+    [class*="st-key-ob_kpi_"] .stElementContainer:has(.stButton) {position:absolute; inset:0; z-index:2; margin:0;}
+    [class*="st-key-ob_kpi_"] .stButton, [class*="st-key-ob_kpi_"] .stButton button {width:100%; height:100%;
+        opacity:0; cursor:pointer;}
     .ob-card {background:#111a2c; border:1px solid rgba(255,255,255,.07); border-radius:14px; padding:16px;
               height:340px; overflow-y:auto; box-sizing:border-box;}
     .ob-card h4 {margin:0 0 10px; font-size:1rem;}
@@ -146,7 +155,7 @@ def render(cabecalho: Callable, pode_configurar: bool, eh_global: bool = False) 
     empresas = sorted({(l.get("cnpj") or l.get("empresa_id_externo") or "", l.get("empresa_nome") or "")
                        for l in linhas_todas if l.get("cnpj") or l.get("empresa_id_externo")}, key=lambda e: e[1])
     pessoas = sorted({p for l in linhas_todas for p in (l.get("resp_prazo"), l.get("resp_entrega")) if p})
-    f1, f2, f3, f4, f5 = st.columns([1.1, 1.6, 1.3, 1.6, 1])
+    f1, f2, f3, f4, f5, f6 = st.columns([1.1, 1.6, 1.3, 1.6, 1, 1.2])
     depto = f1.selectbox("Departamento", ["Todos"] + deptos, key="ob_f_depto")
     empresa = f2.selectbox("Empresa", [""] + [e[0] for e in empresas], key="ob_f_empresa",
                            format_func=lambda c: "Todas" if not c else
@@ -156,11 +165,15 @@ def render(cabecalho: Callable, pode_configurar: bool, eh_global: bool = False) 
                           placeholder="Todas")
     tipo = f5.selectbox("Tipo", ["", "O", "T"], format_func=lambda t: {"": "Todos", "O": "Obrigações",
                                                                          "T": "Tarefas"}[t], key="ob_f_tipo")
+    envio = f6.selectbox("Envio ao cliente", [""] + list(ob.ENVIOS), key="ob_f_envio",
+                         format_func=lambda e: ob.ENVIOS.get(e, "Todos"))
     linhas = ob.filtrar(linhas_todas, departamento=None if depto == "Todos" else depto, empresa=empresa or None,
-                        colaborador=None if pessoa == "Todos" else pessoa, situacoes=sits or None, tipo=tipo or None)
+                        colaborador=None if pessoa == "Todos" else pessoa, situacoes=sits or None, tipo=tipo or None,
+                        envios=[envio] if envio else None)
     filtros_txt = " · ".join(x for x in [rotulo, depto if depto != "Todos" else "",
                                          pessoa if pessoa != "Todos" else "",
-                                         ", ".join(ob.SITUACOES[s] for s in sits)] if x)
+                                         ", ".join(ob.SITUACOES[s] for s in sits),
+                                         ob.ENVIOS.get(envio, "")] if x)
     ult = cfg.get("ultima_sinc_ok")
     st.markdown(f'<div class="ob-muted">Visão geral • {html.escape(rotulo)} · {_num(len(linhas))} registro(s) · '
                 f'última sincronização: {ob.data_br(ult) if ult else "nunca"}</div>', unsafe_allow_html=True)
@@ -195,6 +208,14 @@ _SECOES = [
 ]
 
 
+def _ir_secao(nome: str) -> None:
+    st.session_state["ob_secao"] = nome
+    if nome == "Dashboard" and st.session_state.pop("ob_filtro_cartao", False):
+        # volta ao dashboard completo: tira o filtro que o clique no cartão aplicou
+        st.session_state["ob_f_sit"] = []
+        st.session_state["ob_f_envio"] = ""
+
+
 def menu_lateral(pode_configurar: bool) -> None:
     """Telas do módulo no menu lateral do Hub, logo abaixo de "Aplicativos"
     (chamado por _sidebar_hub, já dentro do `with st.sidebar`, só quando o
@@ -205,28 +226,45 @@ def menu_lateral(pode_configurar: bool) -> None:
     for i, (nome, icone) in enumerate(_SECOES):
         if nome == "Integração" and not pode_configurar:
             continue
-        if st.button(nome, key=f"nav_ob_{i}", icon=icone, use_container_width=True,
-                     type="primary" if nome == atual else "secondary"):
-            st.session_state["ob_secao"] = nome
-            st.rerun()
+        st.button(nome, key=f"nav_ob_{i}", icon=icone, use_container_width=True,
+                  type="primary" if nome == atual else "secondary", on_click=_ir_secao, args=(nome,))
     st.markdown('<div class="hh-sep"></div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------- dashboard
 
+def _abrir_lista(situacoes: list[str], envio: str = "") -> None:
+    """Clique num cartão do dashboard: vai para Obrigações com o filtro do
+    cartão aplicado nos filtros do topo (visíveis e removíveis)."""
+    st.session_state["ob_f_sit"] = list(situacoes)
+    st.session_state["ob_f_envio"] = envio
+    st.session_state["ob_busca"] = ""
+    st.session_state["ob_secao"] = "Obrigações"
+    st.session_state["ob_filtro_cartao"] = True
+
+
 def _kpis(ind: dict) -> None:
-    def k(rot, v, sub="", cor="#e6edf6"):
-        return (f'<div class="ob-kpi"><div class="l">{rot}</div><div class="v" style="color:{cor}">{v}</div>'
-                f'<div class="s">{sub}</div></div>')
-    st.markdown('<div class="ob-kpis">'
-                + k("Total de obrigações", _num(ind["total"]), "sem as dispensadas")
-                + k("Concluídas", _num(ind["concluidas"]), _pct(ind["pct_concluidas"]), "#22e08a")
-                + k("Pendentes", _num(ind["pendentes"]), _pct(ind["pct_pendentes"]), "#f59e0b")
-                + k("Em atraso", _num(ind["atrasadas"]), _pct(ind["pct_atrasadas"]), "#ef4444")
-                + k("Cumprimento no prazo", _pct(ind["cumprimento"]),
-                    f"{_num(ind['concluidas_prazo'])} no prazo · {_num(ind['concluidas_atraso'])} com atraso")
-                + k("Sem confirmação de envio", _num(ind["aguardando_envio"]), "concluídas", "#60a5fa")
-                + '</div>', unsafe_allow_html=True)
+    sem_dispensa = [s for s in ob.SITUACOES if s != ob.DISPENSADA]
+    cartoes = [
+        ("Total de obrigações", _num(ind["total"]), "sem as dispensadas", "#e6edf6", sem_dispensa, ""),
+        ("Concluídas", _num(ind["concluidas"]), _pct(ind["pct_concluidas"]), "#22e08a", list(ob.CONCLUIDAS), ""),
+        ("Pendentes", _num(ind["pendentes"]), _pct(ind["pct_pendentes"]), "#f59e0b", [ob.PENDENTE], ""),
+        ("Em atraso", _num(ind["atrasadas"]), _pct(ind["pct_atrasadas"]), "#ef4444", [ob.ATRASADA], ""),
+        ("Cumprimento no prazo", _pct(ind["cumprimento"]),
+         f"{_num(ind['concluidas_prazo'])} no prazo · {_num(ind['concluidas_atraso'])} com atraso", "#e6edf6",
+         [ob.CONCLUIDA_PRAZO], ""),
+        ("Sem confirmação de envio", _num(ind["aguardando_envio"]), "concluídas", "#60a5fa",
+         list(ob.CONCLUIDAS), ob.ENVIO_AGUARDANDO),
+    ]
+    for inicio in (0, 3):  # duas linhas de três cartões
+        for col, i in zip(st.columns(3), range(inicio, inicio + 3)):
+            rot, v, sub, cor, sits, envio = cartoes[i]
+            with col, st.container(key=f"ob_kpi_{i}"):
+                st.markdown(f'<div class="ob-kpi"><div class="l">{rot}</div><div class="v" style="color:{cor}">{v}'
+                            f'</div><div class="s">{sub}</div><div class="ir">Ver lista ›</div></div>',
+                            unsafe_allow_html=True)
+                st.button(f"Ver lista: {rot}", key=f"ob_kpi_btn_{i}", on_click=_abrir_lista, args=(sits, envio))
+    st.write("")
 
 
 def _rosca(ind: dict) -> str:
