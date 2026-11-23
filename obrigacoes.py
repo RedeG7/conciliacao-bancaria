@@ -59,8 +59,13 @@ log = logging.getLogger(__name__)
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.1"
+VERSAO = "1.2"
 NOVIDADES = [
+    ("1.2", "23/11/2026", [
+        "Menu lateral do módulo: Dashboard, Obrigações, Empresas, Colaboradores, Envios, Alertas, Relatórios e "
+        "Integração ficam na barra lateral, abaixo do menu do Hub (antes eram abas no topo).",
+        "O item Alertas mostra quantas obrigações estão em atraso.",
+    ]),
     ("1.1", "23/11/2026", [
         "Dashboard: os quatro painéis de gráficos agora têm o mesmo tamanho (largura e altura).",
     ]),
