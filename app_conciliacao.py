@@ -4040,7 +4040,8 @@ if st.session_state.get("tela") == "obrigacoes":
         st.session_state["tela"] = "home"
         st.rerun()
     tela_obrigacoes.render(_cabecalho_app, st.session_state.get("papel_usuario") in (
-        auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO))
+        auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO),
+        eh_global=st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL)
     st.stop()
 
 if st.session_state.get("tela") == "rpa_folha":

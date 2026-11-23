@@ -1,6 +1,6 @@
 """Tela do Controle de Obrigações (Streamlit). Os dados e as regras ficam em
 obrigacoes.py; aqui só filtros, abas, gráficos e botões. Chamada por
-app_conciliacao.py: render(cabecalho_app, pode_configurar)."""
+app_conciliacao.py: render(cabecalho_app, pode_configurar, eh_global)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Callable
 
 import streamlit as st
 
+import auth
 import obrigacoes as ob
 
 _MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro",
@@ -89,17 +90,34 @@ def _recarregar() -> None:
     st.session_state["ob_versao_dados"] = _versao_dados() + 1
 
 
-def render(cabecalho: Callable, pode_configurar: bool) -> None:
+def _escolher_escritorio(eh_global: bool) -> str:
+    """Escritório cujos dados a tela mostra. Usuário comum e admin: sempre o
+    próprio. Super admin (administra o Hub inteiro): escolhe qualquer um."""
+    proprio = st.session_state.get("escritorio_id")
+    if not eh_global:
+        return proprio
+    escritorios = auth.carregar_escritorios()
+    ids = list(escritorios)
+    if not ids:
+        return proprio
+    if st.session_state.get("ob_escritorio") not in ids:
+        st.session_state["ob_escritorio"] = proprio if proprio in ids else ids[0]
+    return st.selectbox("Escritório", ids, key="ob_escritorio",
+                        format_func=lambda e: escritorios.get(e, {}).get("nome") or e,
+                        help="Só o super administrador escolhe o escritório; os demais veem só o próprio.")
+
+
+def render(cabecalho: Callable, pode_configurar: bool, eh_global: bool = False) -> None:
     _estilo()
-    esc = st.session_state.get("escritorio_id")
     usuario = st.session_state.get("usuario_logado") or ""
     hoje = datetime.now(ob.FUSO).date()
-    cfg = ob.obter_config(esc)
     cabecalho("📊", "Controle de Obrigações",
               "Obrigações concluídas, pendentes, em atraso e enviadas ao cliente, por colaborador — fonte: Acessórias.")
     with st.expander(f"Versão {ob.VERSAO} — novidades"):
         for versao_, data_, itens in ob.NOVIDADES:
             st.markdown(f"**{versao_}** ({data_})" + "\n" + "\n".join(f"- {i}" for i in itens))
+    esc = _escolher_escritorio(eh_global)
+    cfg = ob.obter_config(esc)
 
     rodando = ob.sinc_em_andamento(esc)
     if rodando:
@@ -161,7 +179,7 @@ def render(cabecalho: Callable, pode_configurar: bool) -> None:
     elif secao == "Alertas":
         _aba_alertas(linhas, hoje, ult)
     elif secao == "Relatórios":
-        _aba_relatorios(linhas, filtros_txt)
+        _aba_relatorios(esc, linhas, filtros_txt)
 
 
 # seções do módulo no menu lateral (abaixo do menu do Hub): (nome, ícone)
@@ -454,18 +472,21 @@ def _aba_alertas(linhas: list[dict], hoje: date, ult) -> None:
                                             "Responsável (prazo)"], 380)
 
 
-def _aba_relatorios(linhas: list[dict], filtros_txt: str) -> None:
+def _aba_relatorios(esc: str, linhas: list[dict], filtros_txt: str) -> None:
     st.caption(f"Os relatórios saem com os filtros escolhidos acima ({filtros_txt}).")
     nome_base = f"obrigacoes_{datetime.now(ob.FUSO).strftime('%Y%m%d_%H%M')}"
     c1, c2 = st.columns(2)
     c1.download_button("Baixar Excel", ob.gerar_excel(linhas, "Controle de Obrigações", filtros_txt),
                        file_name=f"{nome_base}.xlsx", icon=":material/table_view:", use_container_width=True,
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="ob_xlsx")
+    # o PDF gerado vale só para o escritório e os filtros com que foi gerado
+    chave = (esc, filtros_txt, len(linhas))
     if c2.button("Gerar PDF", icon=":material/picture_as_pdf:", use_container_width=True, key="ob_pdf_gerar"):
-        st.session_state["ob_pdf"] = ob.gerar_pdf(linhas, "Controle de Obrigações",
-                                                  st.session_state.get("escritorio_nome") or "", filtros_txt)
-    if st.session_state.get("ob_pdf"):
-        c2.download_button("Baixar PDF", st.session_state["ob_pdf"], file_name=f"{nome_base}.pdf",
+        nome_esc = auth.carregar_escritorios().get(esc, {}).get("nome") or st.session_state.get("escritorio_nome") or ""
+        st.session_state["ob_pdf"] = (chave, ob.gerar_pdf(linhas, "Controle de Obrigações", nome_esc, filtros_txt))
+    pdf = st.session_state.get("ob_pdf")
+    if pdf and pdf[0] == chave:
+        c2.download_button("Baixar PDF", pdf[1], file_name=f"{nome_base}.pdf",
                            mime="application/pdf", type="primary", use_container_width=True, key="ob_pdf_baixar")
 
 

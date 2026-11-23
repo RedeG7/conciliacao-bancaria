@@ -59,8 +59,12 @@ log = logging.getLogger(__name__)
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.4"
+VERSAO = "1.5"
 NOVIDADES = [
+    ("1.5", "23/11/2026", [
+        "Super administrador escolhe o escritório no topo da tela e vê o dashboard, as listas, os relatórios "
+        "e a integração daquele escritório. Os demais usuários continuam vendo só o próprio.",
+    ]),
     ("1.4", "23/11/2026", [
         "Sai o item do menu do Hub: o app abre pelo card em Aplicativos.",
         "Com o app aberto, as telas dele (Dashboard, Obrigações, Empresas, Colaboradores, Envios, Alertas, "
