@@ -550,7 +550,7 @@ def _aba_integracao(esc: str, usuario: str, cfg: dict) -> None:
         st.caption("✔ Usando o token do Acessórias já salvo na integração das Admissões. Salve um aqui se "
                    "quiser um usuário só para esta integração.")
     with st.form("ob_form_cfg"):
-        ativo = st.toggle("Integração ativa (sincroniza sozinha de hora em hora)", value=bool(cfg["ativo"]))
+        ativo = st.toggle("Integração ativa (sincroniza sozinha a cada 5 minutos)", value=bool(cfg["ativo"]))
         tok = st.text_input("API Token", type="password", placeholder="deixe em branco para manter o salvo",
                             help="No Acessórias: engrenagem (canto superior direito) › API Token.")
         c1, c2 = st.columns(2)

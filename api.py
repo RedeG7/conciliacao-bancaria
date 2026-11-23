@@ -92,7 +92,7 @@ def _iniciar_sinc_canais() -> None:
 # Controle de Obrigações: sincroniza com o Acessórias os escritórios com a
 # integração ativa (incremental; completa quando a última boa tem mais de 1
 # dia). OBRIGACOES_SINC_INTERVALO_S=0 desliga (os testes desligam).
-_OBR_INTERVALO_S = int(os.environ.get("OBRIGACOES_SINC_INTERVALO_S", "3600") or 0)
+_OBR_INTERVALO_S = int(os.environ.get("OBRIGACOES_SINC_INTERVALO_S", "300") or 0)
 
 
 def _laco_sinc_obrigacoes() -> None:

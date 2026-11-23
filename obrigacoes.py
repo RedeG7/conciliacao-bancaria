@@ -59,8 +59,11 @@ log = logging.getLogger(__name__)
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.6"
+VERSAO = "1.7"
 NOVIDADES = [
+    ("1.7", "23/11/2026", [
+        "Sincronização automática com o Acessórias a cada 5 minutos (antes era de hora em hora).",
+    ]),
     ("1.6", "23/11/2026", [
         "Os cartões do Dashboard são clicáveis: abrem a lista de Obrigações já filtrada (concluídas, "
         "pendentes, em atraso, concluídas no prazo ou sem confirmação de envio). Os filtros ficam visíveis no "
