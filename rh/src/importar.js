@@ -221,4 +221,71 @@ function importarNoveBox(texto, c) {
   return res;
 }
 
-module.exports = { parseCsv, importar, modelo, ehAvaliacaoSolides, importarAvaliacoes, ehNoveBoxSolides, importarNoveBox };
+
+// ---------------------------------------------------------------- PDI da Sólides
+// Uma linha por meta, repetindo os dados do PDI. Vira um PDI por pessoa e título,
+// com as metas (sem repetidas) em "Ações combinadas" e o progresso pela parte das
+// metas concluídas. Reimportar atualiza o mesmo PDI (mesma pessoa e título).
+const ehPdiSolides = texto => {
+  const cab = parseCsv(String(texto).split(/\r?\n/, 1)[0])[0] || [];
+  return ['Colaborador', 'Título do PDI', 'Meta'].every(n => coluna(cab, n) >= 0);
+};
+const STATUS_PDI = { 'em andamento': 'Aberto', aberto: 'Aberto', 'nao iniciado': 'Aberto', 'em revisao': 'Em revisão', concluido: 'Finalizado', finalizado: 'Finalizado', sucesso: 'Finalizado' };
+const META_FEITA = ['sucesso', 'concluido', 'concluida', 'finalizado', 'finalizada', 'atingida'];
+const dataBr = iso => (iso ? iso.split('-').reverse().join('/') : '');
+
+function importarPdi(texto, c, usuario) {
+  const [cab, ...linhas] = parseCsv(texto);
+  const ix = n => coluna(cab, n);
+  const get = (l, n) => (ix(n) >= 0 ? String(l[ix(n)] ?? '').trim() : '');
+  const res = { criados: 0, atualizados: 0, ignoradas: [], erros: [], destino: 'pdi' };
+  const conhecidas = ['Colaborador', 'Título do PDI', 'Superior Direto', 'Cargo', 'Departamento', 'Data Criação do PDI', 'Data Início do PDI', 'Data Entrega do PDI', 'Status do PDI', 'Meta', 'Status da Meta', 'Entrega da Meta', 'Competência Vinculada a Meta', 'Treinamento Vinculado'].map(norm);
+  res.ignoradas = cab.filter(h => !conhecidas.includes(norm(h)));
+  const grupos = new Map();
+  for (const l of linhas) {
+    const nome = get(l, 'Colaborador'), titulo = get(l, 'Título do PDI');
+    if (!nome) continue;
+    const k = `${norm(nome)}|${norm(titulo)}`;
+    grupos.set(k, [...(grupos.get(k) || []), l]);
+  }
+  if (!grupos.size) { res.erros.push('Nenhuma linha com colaborador no arquivo.'); return res; }
+  const colabs = R.listar(c.office, 'colaborador');
+  const achar = nome => colabs.filter(p => norm(p.nome) === norm(nome));
+  for (const ls of grupos.values()) {
+    const l0 = ls[0], nome = get(l0, 'Colaborador');
+    const achados = achar(nome);
+    if (achados.length !== 1) { res.erros.push(`${nome}: ${achados.length ? 'há mais de um cadastro' : 'não está em Colaboradores'}.`); continue; }
+    // metas sem repetição; se a mesma meta aparece concluída em alguma linha, conta como concluída
+    const metas = new Map();
+    for (const l of ls) {
+      const meta = get(l, 'Meta');
+      if (!meta) continue;
+      const k = norm(meta), antes = metas.get(k);
+      const m = { meta, status: get(l, 'Status da Meta'), entrega: dataIso(get(l, 'Entrega da Meta')) || null, competencia: get(l, 'Competência Vinculada a Meta'), treinamento: get(l, 'Treinamento Vinculado') };
+      if (!antes) metas.set(k, m);
+      else if (!META_FEITA.includes(norm(antes.status)) && META_FEITA.includes(norm(m.status))) metas.set(k, { ...antes, status: m.status });
+    }
+    const lista = [...metas.values()];
+    const feitas = lista.filter(m => META_FEITA.includes(norm(m.status))).length;
+    const titulo = get(l0, 'Título do PDI') || `PDI - ${nome}`;
+    const inicio = dataIso(get(l0, 'Data Início do PDI')) || dataIso(get(l0, 'Data Criação do PDI'));
+    const entrega = dataIso(get(l0, 'Data Entrega do PDI')) || lista.map(m => m.entrega).filter(Boolean).sort().pop();
+    if (!inicio || !entrega) { res.erros.push(`${nome}: sem data de início ou de entrega do PDI.`); continue; }
+    const supNome = get(l0, 'Superior Direto'), sup = supNome ? achar(supNome) : [];
+    if (supNome && sup.length !== 1) res.erros.push(`${nome}: PDI importado, mas o superior "${supNome}" ${sup.length ? 'tem mais de um cadastro' : 'não está em Colaboradores'} e ficou em branco.`);
+    const statusArq = get(l0, 'Status do PDI');
+    const acoes = lista.map(m => `• ${m.meta}${m.status ? ` (${m.status})` : ''}${m.entrega ? `, entrega ${dataBr(m.entrega)}` : ''}${m.competencia ? `. Competência: ${m.competencia}` : ''}${m.treinamento ? `. Treinamento: ${m.treinamento}` : ''}`).join('\n');
+    const atual = R.listar(c.office, 'pdi').find(p => p.colaborador_id === achados[0].id && norm(p.titulo) === norm(titulo));
+    const dados = {
+      ...(atual ? R.soDados(atual) : {}), colaborador_id: achados[0].id, titulo: titulo.slice(0, 300), superior_id: sup.length === 1 ? sup[0].id : atual?.superior_id ?? null,
+      inicio, entrega, progresso: lista.length ? Math.round((feitas / lista.length) * 100) : 0,
+      status: STATUS_PDI[norm(statusArq)] || (lista.length && feitas === lista.length ? 'Finalizado' : 'Aberto'), acoes: acoes.slice(0, 5000) || null, metas: lista,
+    };
+    R.tx(() => {
+      if (atual) { R.atualizar(c.office, 'pdi', atual.id, dados); res.atualizados++; } else { R.criar(c.office, 'pdi', dados, usuario); res.criados++; }
+    });
+  }
+  return res;
+}
+
+module.exports = { parseCsv, importar, modelo, ehAvaliacaoSolides, importarAvaliacoes, ehNoveBoxSolides, importarNoveBox, ehPdiSolides, importarPdi };

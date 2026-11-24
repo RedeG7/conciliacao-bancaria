@@ -312,6 +312,8 @@ function carregarImportavel(req) {
 app.get('/cad/:slug/importar', exige('edita'), h((req, res) => {
   const k = carregarImportavel(req), aviso = ['ciclo', 'avaliacao'].includes(k.kind)
     ? 'Aceita o arquivo de resultados de avaliação da Sólides: cria o ciclo do ano e uma avaliação por pessoa, com a média e as notas por competência.'
+    : k.kind === 'pdi'
+    ? 'Aceita o arquivo de PDIs da Sólides (uma linha por meta): cria um PDI por pessoa, com as metas sem repetição e o progresso pelas metas concluídas. Reimportar atualiza o mesmo PDI.'
     : k.kind === 'colaborador'
     ? 'CPF já cadastrado atualiza só as colunas da planilha. Departamento, cargo, filial e unidade novos são criados pelo nome.'
     : 'Aceita o arquivo de Exportar CSV. Registro já existente é atualizado, e linha repetida não duplica; os demais viram cadastro novo. Pessoas e outros cadastros citados precisam já existir, pelo nome; departamento, cargo, filial, unidade e grupo de competências são criados.';
@@ -328,7 +330,8 @@ app.post('/cad/:slug/importar', exige('edita'), h((req, res) => {
   const k = carregarImportavel(req);
   const csvTexto = String(um(req.body.csv) || '');
   const daAvaliacao = ['ciclo', 'avaliacao'].includes(k.kind);
-  const r = daAvaliacao && imp.ehNoveBoxSolides(csvTexto) ? imp.importarNoveBox(csvTexto, req.c)
+  const r = k.kind === 'pdi' && imp.ehPdiSolides(csvTexto) ? imp.importarPdi(csvTexto, req.c, req.user.name)
+    : daAvaliacao && imp.ehNoveBoxSolides(csvTexto) ? imp.importarNoveBox(csvTexto, req.c)
     : daAvaliacao && imp.ehAvaliacaoSolides(csvTexto) ? imp.importarAvaliacoes(csvTexto, req.c, req.user.name)
       : imp.importar(csvTexto, req.c, req.user.name, k);
   auditar(req, 'Importou', k.kind, null, `${r.criados} novos, ${r.atualizados} atualizados, ${r.erros.length} erros`);
