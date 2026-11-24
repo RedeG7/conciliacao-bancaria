@@ -1458,9 +1458,16 @@ def _reparar_linhas_balancete_sobrepostas(page, linhas_texto: List[str]) -> List
                 # confianca (o nome, esse sim, fica ilegivel e marcado como
                 # tal - nunca inventado). Sem isso a conta simplesmente
                 # sumiria da lista pra vincular, sem nenhum aviso.
+                # so a faixa do codigo/classificacao (x < 100, a mesma do
+                # `prefixo` acima): sem esse limite, em balancetes SEM coluna
+                # de classificacao (ex.: 'Codigo Descricao da conta Saldo
+                # Anterior...'), os digitos das colunas de VALORES viravam a
+                # "classificacao" (ex.: '151 3.098.407' tirado de
+                # '3.098.407,52D') e uma linha perfeitamente legivel virava
+                # conta de nome nao identificado.
                 digitos = [
                     c for c in chars_ordenados
-                    if c["text"] != " " and (c["text"].isdigit() or c["text"] == ".")
+                    if c["x0"] < 100 and c["text"] != " " and (c["text"].isdigit() or c["text"] == ".")
                 ]
                 tokens = _juntar_com_espacos(digitos).split()
                 if (
