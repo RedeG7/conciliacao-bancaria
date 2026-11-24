@@ -97,6 +97,10 @@ class ContaBalancete:
     codigo: str
     classificacao: str
     nome: str
+    # balancetes SEM coluna de classificacao: grupo (sintetica) e conta pai
+    # inferidos do proprio PDF (ver _inferir_grupos_sem_classificacao)
+    sintetica: bool = False
+    pai: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -1495,6 +1499,96 @@ def _reparar_linhas_balancete_sobrepostas(page, linhas_texto: List[str]) -> List
     return resultado
 
 
+def _fonte_do_codigo_por_linha(page) -> Dict[str, str]:
+    """Fonte (fontname) dos digitos do codigo de cada linha de conta da
+    pagina: linha que comeca com digitos (codigo) seguidos de letra/'(' (nome).
+    Balancetes sem classificacao (ex.: Dominio 'Codigo / Descricao da conta')
+    desenham as contas de GRUPO numa fonte negrito diferente da das contas de
+    lancamento - e o unico jeito de separar uma da outra nesse layout."""
+    por_linha: Dict[int, list] = {}
+    for c in page.chars:
+        por_linha.setdefault(round(c["top"]), []).append(c)
+    fontes: Dict[str, str] = {}
+    for chars in por_linha.values():
+        chars = sorted((c for c in chars if c["text"].strip()), key=lambda c: c["x0"])
+        digitos = []
+        for c in chars:
+            if c["text"].isdigit():
+                digitos.append(c)
+                continue
+            if digitos and (c["text"].isalpha() or c["text"] == "("):
+                fontes.setdefault("".join(d["text"] for d in digitos), digitos[0].get("fontname", ""))
+            break
+    return fontes
+
+
+def _valor_br(token: str) -> float:
+    neg = token.startswith("(") or token.startswith("-") or token.upper().endswith("C")
+    num = float(re.sub(r"[^\d,]", "", token).replace(",", "."))
+    return -num if neg else num
+
+
+def _valores_da_linha(linha: str) -> Optional[Tuple[float, float, float]]:
+    """(saldo anterior com sinal, debito, credito) das 4 colunas de valores no
+    fim da linha ('... 28.684,49D 38.114.096,61 38.142.781,15 0,05C');
+    None se a linha nao tiver as 4 (ex.: nome sobreposto aos valores)."""
+    toks = linha.split()
+    fim = []
+    while toks and _TOKEN_MONETARIO_RE.match(toks[-1]) and len(fim) < 4:
+        fim.insert(0, toks.pop())
+    if len(fim) != 4:
+        return None
+    return (_valor_br(fim[0]), abs(_valor_br(fim[1])), abs(_valor_br(fim[2])))
+
+
+def _inferir_grupos_sem_classificacao(contas: List[ContaBalancete], fontes: Dict[str, str],
+                                      valores: Dict[int, Optional[Tuple[float, float, float]]]) -> None:
+    """Sem classificacao, o balancete nao diz quem e grupo nem quem e pai de
+    quem - e sem isso todo grupo (CLIENTES, FORNECEDORES, CAIXA...) concorre
+    como contrapartida com as contas de lancamento, gerando empate e muito
+    lancamento 'a confirmar'. Aqui:
+    - GRUPO = conta com o codigo na fonte negrito (a fonte de uma fonte com
+      'bold' no nome, ou a da 1a conta do balancete - sempre um grupo de
+      topo, ex. '1 ATIVO'), so se o PDF usar mais de uma fonte nos codigos;
+    - PAI = o grupo aberto mais recente que ainda 'comporta' a conta: cada
+      grupo soma os debitos/creditos/saldo anterior dos filhos, entao o grupo
+      fecha quando os filhos consomem os valores dele (ou quando a proxima
+      conta nao cabe mais nele). Sem valores legiveis, a conta so herda o pai.
+    Nao altera nada se o PDF nao tiver a distincao de fonte."""
+    fontes_contas = [fontes.get(c.codigo, "") for c in contas]
+    distintas = {f for f in fontes_contas if f}
+    if len(distintas) < 2:
+        return
+    bold = next((f for f in distintas if "bold" in f.lower()), None) or fontes_contas[0]
+    if not bold:
+        return
+    tol = 0.01
+    pilha: List[list] = []  # [conta, saldo_anterior, debito, credito] ainda nao consumidos
+    for i, conta in enumerate(contas):
+        conta.sintetica = fontes_contas[i] == bold
+        v = valores.get(i)
+        while pilha:
+            topo = pilha[-1]
+            restante_zero = all(abs(x) <= tol for x in topo[1:])
+            if v is None:
+                break
+            filho_zerado = all(abs(x) <= tol for x in v)
+            cabe = v[1] <= topo[2] + tol and v[2] <= topo[3] + tol
+            if (restante_zero and not filho_zerado) or not cabe:
+                pilha.pop()
+                continue
+            break
+        if pilha:
+            topo = pilha[-1]
+            conta.pai = topo[0].codigo
+            if v is not None:
+                topo[1] -= v[0]
+                topo[2] -= v[1]
+                topo[3] -= v[2]
+        if conta.sintetica:
+            pilha.append([conta, *(v if v is not None else (0.0, 0.0, 0.0))])
+
+
 def parse_balancete(path: str) -> List[ContaBalancete]:
     """Aceita CSV com colunas (codigo, classificacao, conta) ou texto/PDF
     com linhas no padrao '<codigo> <classificacao> <nome da conta>'."""
@@ -1535,14 +1629,19 @@ def parse_balancete(path: str) -> List[ContaBalancete]:
             import pdfplumber  # type: ignore
         except ImportError as exc:
             raise ImportError("Leitura de balancete PDF requer pdfplumber.") from exc
+        fontes: Dict[str, str] = {}
+        valores: Dict[int, Optional[Tuple[float, float, float]]] = {}
         with pdfplumber.open(path) as pdf:
             for page in pdf.pages:
                 page = _filtrar_glifos_negrito_duplicado(page)
+                for cod, fonte in _fonte_do_codigo_por_linha(page).items():
+                    fontes.setdefault(cod, fonte)
                 text = page.extract_text() or ""
                 linhas = _reparar_linhas_balancete_sobrepostas(page, text.splitlines())
                 for line in linhas:
                     m = _BAL_LINE_RE.match(line) or _BAL_LINE_SEM_CLASSIF_RE.match(line)
                     if m:
+                        valores[len(contas)] = _valores_da_linha(line)
                         contas.append(ContaBalancete(
                             codigo=m.group("codigo"),
                             classificacao=m.groupdict().get("classif") or "",
@@ -1550,6 +1649,16 @@ def parse_balancete(path: str) -> List[ContaBalancete]:
                         ))
         if not contas:
             raise ValueError(f"Nenhuma linha de balancete reconhecida em {path}.")
+        if sum(1 for c in contas if c.classificacao) < len(contas) / 2:
+            # balancete SEM coluna de classificacao: o que pareceu
+            # classificacao numa ou outra linha e parte do NOME (ex.: MEI
+            # '1173 50.361.846 JOSE PEREIRA NETO' - o CNPJ base, que ainda
+            # ajuda a casar o lancamento pelo documento)
+            for c in contas:
+                if c.classificacao:
+                    c.nome = f"{c.classificacao} {c.nome}"
+                    c.classificacao = ""
+            _inferir_grupos_sem_classificacao(contas, fontes, valores)
         return contas
 
     raise ValueError(f"Extensao de balancete nao suportada: {ext}")
@@ -1935,10 +2044,11 @@ def montar_indice_balancete(contas: List[ContaBalancete], conta_banco: Optional[
         for i in range(1, len(partes)):
             prefixos.add(".".join(partes[:i]))
 
+    por_codigo = {c.codigo: c for c in contas}
     analiticas: List[_ContaIndexada] = []
     sinteticas = 0
     for c in contas:
-        if c.classificacao and c.classificacao in prefixos:
+        if (c.classificacao and c.classificacao in prefixos) or (not c.classificacao and c.sintetica):
             sinteticas += 1
             continue
         if conta_banco and c.codigo == conta_banco.codigo:
@@ -1953,15 +2063,29 @@ def montar_indice_balancete(contas: List[ContaBalancete], conta_banco: Optional[
                 _sem_acento(por_classif[".".join(partes[:i])].nome).upper()
                 for i in range(1, len(partes)) if ".".join(partes[:i]) in por_classif
             )
+        elif c.pai:
+            # balancete sem classificacao: grupos inferidos do PDF
+            # (_inferir_grupos_sem_classificacao)
+            caminho, atual, vistos = [], por_codigo.get(c.pai), set()
+            while atual is not None and atual.codigo not in vistos:
+                vistos.add(atual.codigo)
+                caminho.insert(0, _sem_acento(atual.nome).upper())
+                atual = por_codigo.get(atual.pai) if atual.pai else None
+            contexto = " > ".join(caminho)
         if _DISPONIVEL_RE.search(contexto) or _DISPONIVEL_RE.search(nome_norm):
             continue
         natureza = ""
         if "(-)" not in c.nome:
-            tudo = f"{contexto} > {nome_norm}"
-            if re.search(r"RECEITA|VENDAS|FATURAMENTO", tudo):
-                natureza = "receita"
-            elif re.search(r"DESPESA|CUSTO", tudo):
-                natureza = "despesa"
+            # o grupo MAIS PROXIMO que diz receita/despesa decide (ex.:
+            # 'DESPESAS OPERACIONAIS > OUTRAS RECEITAS OPERACIONAIS > X' e
+            # receita; 'RESULTADO > RECEITA BRUTA > ... > DESPESAS X' e despesa)
+            for nivel in reversed([p for p in contexto.split(" > ") if p] + [nome_norm]):
+                if re.search(r"RECEITA|VENDAS|FATURAMENTO", nivel):
+                    natureza = "receita"
+                    break
+                if re.search(r"DESPESA|CUSTO", nivel):
+                    natureza = "despesa"
+                    break
         analiticas.append(_ContaIndexada(
             conta=c, tokens=_tokens_nome(c.nome), contexto=contexto, natureza=natureza,
             digitos=re.sub(r"\D", "", c.nome),
@@ -1976,6 +2100,21 @@ def _documentos_no_texto(texto: str) -> set:
         if len(d) in (11, 14):
             achados.add(d)
     return achados
+
+
+def _tokens_ordenados(texto: str) -> List[str]:
+    """As palavras de _tokens_nome, na ordem em que aparecem - mas mantendo
+    siglas de 2 letras ('TH DISTRIBUIDORA...'): para casar o INICIO do nome
+    elas distinguem a conta ('TH DISTRIBUIDORA' nao e 'DISTRIBUIDORA ...')."""
+    vistos, out = set(), []
+    for w in re.sub(r"[^A-Z0-9 ]", " ", _sem_acento(texto).upper()).split():
+        if len(w) < 2 or w.isdigit() or w in _STOP_TOKENS:
+            continue
+        w = w[:-1] if len(w) > 4 and w.endswith("S") else w
+        if w not in vistos:
+            vistos.add(w)
+            out.append(w)
+    return out
 
 
 def sugerir_contrapartidas(mov: Movimento, indice: IndiceBalancete, maximo: int = 3) -> List[Sugestao]:
@@ -2002,15 +2141,47 @@ def sugerir_contrapartidas(mov: Movimento, indice: IndiceBalancete, maximo: int 
                 registrar(ic, 1.0, "CPF/CNPJ do histórico consta no nome da conta")
 
     tokens_desc = _tokens_nome(desc)
+    seq_desc = _tokens_ordenados(desc)
+
+    def _inicio_do_nome(seq_conta: List[str]) -> int:
+        """Quantas palavras do INICIO do nome da conta aparecem seguidas, na
+        mesma ordem, no historico - o banco corta o FIM do nome ('TUDACO
+        SERVICO DE ESTRUTU'), entao a ultima palavra do historico pode ser
+        so o comeco da palavra da conta (4+ letras)."""
+        melhor = 0
+        for ini in range(len(seq_desc)):
+            k = 0
+            while ini + k < len(seq_desc) and k < len(seq_conta):
+                d, c = seq_desc[ini + k], seq_conta[k]
+                if d == c or (ini + k == len(seq_desc) - 1 and len(d) >= 4 and c.startswith(d)):
+                    k += 1
+                else:
+                    break
+            melhor = max(melhor, k)
+        return melhor
+
+    inicios = {}
+    for ic in compativeis:
+        seq = _tokens_ordenados(ic.conta.nome)
+        if len(seq) >= 2:
+            k = _inicio_do_nome(seq)
+            if k >= 2:
+                inicios[ic.conta.codigo] = (ic, k, len(seq))
     for ic in compativeis:
         comuns = ic.tokens & tokens_desc
-        if len(ic.tokens) >= 2 and len(comuns) >= 2:
-            cobertura = len(comuns) / len(ic.tokens)
-            if cobertura >= 0.99:
-                registrar(ic, 0.9, f"nome da conta bate com o histórico ({', '.join(sorted(comuns))})")
-            elif cobertura >= 0.6:
-                registrar(ic, 0.7, f"nome da conta parecido com o histórico ({', '.join(sorted(comuns))})")
-        elif len(ic.tokens) == 1 and comuns and len(next(iter(ic.tokens))) >= 6:
+        palavras = ", ".join(sorted(comuns))
+        inicio = inicios.get(ic.conta.codigo)
+        if len(ic.tokens) >= 2 and len(comuns) >= 2 and len(comuns) / len(ic.tokens) >= 0.99:
+            registrar(ic, 0.9, f"nome da conta bate com o histórico ({palavras})")
+        elif inicio and len(inicios) == 1:
+            # nome cortado pelo banco, mas o historico traz o INICIO do nome
+            # (2+ palavras na ordem) e nenhuma outra conta comeca assim: aplica
+            registrar(ic, 0.85, f"histórico traz o início do nome da conta ({inicio[1]} de {inicio[2]} palavras)")
+        elif inicio or (len(ic.tokens) >= 2 and len(comuns) >= 2 and len(comuns) / len(ic.tokens) >= 0.6):
+            registrar(ic, 0.7, f"nome da conta parecido com o histórico ({palavras})")
+    for ic in compativeis:
+        comuns = ic.tokens & tokens_desc
+        if len(ic.tokens) == 1 and comuns and len(next(iter(ic.tokens))) >= 6:
             registrar(ic, 0.6, f"palavra do histórico ({next(iter(comuns))}) é o nome da conta")
 
     for regex, rotulo, padroes, sentido in _REGRAS_SUGESTAO:
@@ -2029,8 +2200,12 @@ def sugerir_contrapartidas(mov: Movimento, indice: IndiceBalancete, maximo: int 
 
     ordenadas = sorted(achados.values(), key=lambda s: -s.confianca)
     if len(ordenadas) > 1 and ordenadas[0].confianca == ordenadas[1].confianca >= LIMIAR_SUGESTAO_AUTOMATICA:
+        # guarda a nota do empate ANTES de rebaixar: comparando com
+        # ordenadas[0].confianca dentro do laco, so a 1a conta era rebaixada
+        # e a 2a (empatada) continuava acima do limiar e era aplicada sozinha
+        empate = ordenadas[0].confianca
         for s in ordenadas:
-            if s.confianca == ordenadas[0].confianca:
+            if s.confianca == empate:
                 s.confianca = 0.7
                 s.motivo += " — mais de uma conta serve, confirme"
         ordenadas.sort(key=lambda s: -s.confianca)
