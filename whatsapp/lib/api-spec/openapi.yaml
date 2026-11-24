@@ -1,0 +1,517 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: API specification for WhatsApp Disparos
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: campaigns
+    description: Campaign operations
+  - name: contacts
+    description: Contact operations
+  - name: templates
+    description: Message template operations
+  - name: whatsapp
+    description: WhatsApp connection operations
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /campaigns:
+    get:
+      operationId: listCampaigns
+      tags: [campaigns]
+      summary: List all campaigns
+      responses:
+        "200":
+          description: List of campaigns
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Campaign"
+    post:
+      operationId: createCampaign
+      tags: [campaigns]
+      summary: Create a new campaign
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewCampaign"
+      responses:
+        "201":
+          description: Campaign created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Campaign"
+
+  /campaigns/{id}:
+    get:
+      operationId: getCampaign
+      tags: [campaigns]
+      summary: Get a campaign by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Campaign details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Campaign"
+    delete:
+      operationId: deleteCampaign
+      tags: [campaigns]
+      summary: Delete a campaign
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Campaign deleted
+
+  /campaigns/{id}/contacts:
+    get:
+      operationId: getCampaignContacts
+      tags: [campaigns]
+      summary: Get contacts for a campaign
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of contacts with their send status
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Contact"
+
+  /campaigns/{id}/contacts/{contactId}/sent:
+    patch:
+      operationId: markContactSent
+      tags: [campaigns]
+      summary: Mark a contact as sent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: contactId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Contact marked as sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+
+  /campaigns/stats/summary:
+    get:
+      operationId: getCampaignsSummary
+      tags: [campaigns]
+      summary: Get summary stats across all campaigns
+      responses:
+        "200":
+          description: Campaign stats summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignsSummary"
+
+  /whatsapp/status:
+    get:
+      operationId: getWhatsappStatus
+      tags: [whatsapp]
+      summary: Get WhatsApp connection status
+      responses:
+        "200":
+          description: WhatsApp connection status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WhatsappStatus"
+
+  /whatsapp/connect:
+    post:
+      operationId: connectWhatsapp
+      tags: [whatsapp]
+      summary: Initiate WhatsApp connection
+      responses:
+        "200":
+          description: Connection initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WhatsappStatus"
+
+  /whatsapp/disconnect:
+    post:
+      operationId: disconnectWhatsapp
+      tags: [whatsapp]
+      summary: Disconnect WhatsApp
+      responses:
+        "200":
+          description: Disconnected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WhatsappStatus"
+
+  /whatsapp/send:
+    post:
+      operationId: sendWhatsappMessage
+      tags: [whatsapp]
+      summary: Send WhatsApp message directly
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageBody"
+      responses:
+        "200":
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendMessageResult"
+
+  /templates:
+    get:
+      operationId: listTemplates
+      tags: [templates]
+      summary: List all message templates
+      responses:
+        "200":
+          description: List of templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Template"
+    post:
+      operationId: createTemplate
+      tags: [templates]
+      summary: Create a new message template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewTemplate"
+      responses:
+        "201":
+          description: Template created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+
+  /templates/{id}:
+    put:
+      operationId: updateTemplate
+      tags: [templates]
+      summary: Update a message template
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewTemplate"
+      responses:
+        "200":
+          description: Template updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+    delete:
+      operationId: deleteTemplate
+      tags: [templates]
+      summary: Delete a template
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Template deleted
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    Campaign:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        templateId:
+          type: integer
+        templateName:
+          type: string
+        templateBody:
+          type: string
+        templateImageUrl:
+          type: string
+          nullable: true
+        status:
+          type: string
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        totalContacts:
+          type: integer
+        sentCount:
+          type: integer
+        pendingCount:
+          type: integer
+        repliesCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - templateId
+        - templateName
+        - templateBody
+        - status
+        - totalContacts
+        - sentCount
+        - pendingCount
+        - repliesCount
+        - createdAt
+
+    NewCampaign:
+      type: object
+      properties:
+        name:
+          type: string
+        templateId:
+          type: integer
+        contacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContactInput"
+      required:
+        - name
+        - templateId
+        - contacts
+
+    Contact:
+      type: object
+      properties:
+        id:
+          type: integer
+        campaignId:
+          type: integer
+        name:
+          type: string
+        phone:
+          type: string
+        extraFields:
+          type: object
+          additionalProperties:
+            type: string
+        status:
+          type: string
+          enum: [pending, sent, failed]
+        sentAt:
+          type: string
+          format: date-time
+          nullable: true
+        message:
+          type: string
+      required:
+        - id
+        - campaignId
+        - name
+        - phone
+        - extraFields
+        - status
+        - sentAt
+        - message
+
+    ContactInput:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+        extraFields:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+        - name
+        - phone
+        - extraFields
+
+    Template:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        body:
+          type: string
+        imageUrl:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - body
+        - createdAt
+
+    NewTemplate:
+      type: object
+      properties:
+        name:
+          type: string
+        body:
+          type: string
+        imageUrl:
+          type: string
+          nullable: true
+      required:
+        - name
+        - body
+
+    WhatsappStatus:
+      type: object
+      properties:
+        connected:
+          type: boolean
+        phone:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        qrCode:
+          type: string
+          nullable: true
+        state:
+          type: string
+          enum: [idle, connecting, qr_ready, connected, disconnected]
+      required:
+        - connected
+        - phone
+        - name
+        - qrCode
+        - state
+
+    SendMessageBody:
+      type: object
+      properties:
+        phone:
+          type: string
+        message:
+          type: string
+        imageUrl:
+          type: string
+          nullable: true
+        campaignId:
+          type: integer
+        contactId:
+          type: integer
+      required:
+        - phone
+        - message
+        - campaignId
+        - contactId
+
+    SendMessageResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        messageId:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+      required:
+        - success
+        - messageId
+        - error
+
+    CampaignsSummary:
+      type: object
+      properties:
+        totalCampaigns:
+          type: integer
+        totalContacts:
+          type: integer
+        totalSent:
+          type: integer
+        totalPending:
+          type: integer
+      required:
+        - totalCampaigns
+        - totalContacts
+        - totalSent
+        - totalPending

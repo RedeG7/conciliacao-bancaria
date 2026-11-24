@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 import admissoes
 import admissoes_canais
 import auth
+import obrigacoes
 from rpa import core as rpa_core
 
 app = FastAPI(title="Hub RedeG7 - API attended", docs_url=None, redoc_url=None)
@@ -63,7 +64,9 @@ def _startup() -> None:
     rpa_core.garantir_schema()
     admissoes.garantir_schema()
     admissoes_canais.garantir_schema()
+    obrigacoes.garantir_schema()
     _iniciar_sinc_canais()
+    _iniciar_sinc_obrigacoes()
 
 
 # Admissões: o Acessórias não avisa quando chega solicitação (sem webhook),
@@ -84,6 +87,26 @@ def _laco_sinc_canais() -> None:
 def _iniciar_sinc_canais() -> None:
     if _SINC_INTERVALO_S > 0:
         threading.Thread(target=_laco_sinc_canais, name="admissoes-sinc", daemon=True).start()
+
+
+# Controle de Obrigações: sincroniza com o Acessórias os escritórios com a
+# integração ativa (incremental; completa quando a última boa tem mais de 1
+# dia). OBRIGACOES_SINC_INTERVALO_S=0 desliga (os testes desligam).
+_OBR_INTERVALO_S = int(os.environ.get("OBRIGACOES_SINC_INTERVALO_S", "300") or 0)
+
+
+def _laco_sinc_obrigacoes() -> None:
+    while True:
+        time.sleep(_OBR_INTERVALO_S)
+        try:
+            obrigacoes.sincronizar_todos()
+        except Exception as e:  # noqa: BLE001 - o laço nunca pode morrer
+            print(f"[obrigacoes] sincronização falhou: {type(e).__name__}", flush=True)
+
+
+def _iniciar_sinc_obrigacoes() -> None:
+    if _OBR_INTERVALO_S > 0:
+        threading.Thread(target=_laco_sinc_obrigacoes, name="obrigacoes-sinc", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -392,9 +415,54 @@ def attended_nfgo_download_zip():
         destino = str(Path(tempfile.gettempdir()) / f"nfgo_attended_{chave}.zip")
         with zipfile.ZipFile(destino, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(_EXE_NFGO_PATH, arcname="nfgo_attended.exe")
+            leia = _RAIZ / "attended_worker" / "LEIA-ME_NFGO.txt"
+            if leia.exists():
+                zf.write(leia, arcname="LEIA-ME.txt")
         _ZIP_NFGO_CACHE.clear()
         _ZIP_NFGO_CACHE[chave] = destino
-    return FileResponse(destino, media_type="application/zip", filename="nfgo_attended.zip")
+    return FileResponse(destino, media_type="application/zip", filename="rpa_nf_go.zip")
+
+
+@app.get("/api/modelo-planilha/{modulo}")
+def modelo_planilha(modulo: str):
+    """Planilha modelo do módulo, por endereço fixo (sem login: só cabeçalho
+    e uma linha de exemplo). O Hub usa um link pra cá em vez do botão de
+    download do Streamlit, cujo arquivo temporário podia expirar ("O arquivo
+    não estava disponível no site")."""
+    from fastapi.responses import Response
+    from rpa import registry as rpa_registry
+    if modulo not in rpa_registry.MODULOS:
+        raise HTTPException(status_code=404, detail="Módulo não encontrado")
+    return Response(
+        rpa_registry.planilha_modelo(modulo),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="modelo_empresas_{modulo}.xlsx"'},
+    )
+
+
+_ZIP_ISSNET_CACHE: dict = {}
+
+
+@app.get("/api/attended/download-zip")
+def attended_download_zip():
+    """Programa "Prefeituras DMS_REST" (ISS Net) + LEIA-ME num .zip, por
+    endereço fixo - usado pelo botão da tela do Hub."""
+    if not _EXE_PATH.exists():
+        raise HTTPException(status_code=404, detail="Executável não encontrado")
+    import tempfile
+    import zipfile
+    chave = _EXE_PATH.stat().st_mtime_ns
+    destino = _ZIP_ISSNET_CACHE.get(chave)
+    if destino is None or not Path(destino).exists():
+        destino = str(Path(tempfile.gettempdir()) / f"issnet_attended_{chave}.zip")
+        with zipfile.ZipFile(destino, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(_EXE_PATH, arcname="issnet_attended.exe")
+            leia = _RAIZ / "attended_worker" / "LEIA-ME.txt"
+            if leia.exists():
+                zf.write(leia, arcname="LEIA-ME.txt")
+        _ZIP_ISSNET_CACHE.clear()
+        _ZIP_ISSNET_CACHE[chave] = destino
+    return FileResponse(destino, media_type="application/zip", filename="issnet_attended.zip")
 
 
 @app.get("/api/attended/download")
@@ -703,4 +771,26 @@ def sso_rh(sessao_token: Optional[str] = Cookie(None)):
     if not _app_permitido(dados, "rh"):
         return HTMLResponse("Seu usuário não tem acesso ao RH.", status_code=403)
     auth.registrar_acesso(dados["usuario"], dados.get("escritorio_id"), "RH")
+    return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Login unico no WhatsApp Disparos (autoenviopro.com.br, pasta whatsapp/)
+# ---------------------------------------------------------------------------
+# Mesmo bilhete do Marketing, com segredo proprio (WHATSAPP_SSO_SECRET),
+# conferido em whatsapp/artifacts/api-server/src/routes/sso.ts. Super
+# administrador do Hub entra como super_admin; os demais como usuario comum.
+
+@app.get("/api/sso/whatsapp")
+def sso_whatsapp(sessao_token: Optional[str] = Cookie(None)):
+    dominio = os.environ.get("DOMINIO_WHATSAPP", "")
+    segredo = os.environ.get("WHATSAPP_SSO_SECRET", "")
+    if not dominio or not segredo:
+        return HTMLResponse("Acesso ao WhatsApp Disparos ainda não configurado no servidor.", status_code=503)
+    dados = auth.validar_sessao(sessao_token or "")
+    if not dados:
+        return RedirectResponse("/", status_code=302)
+    if not _app_permitido(dados, "whatsapp"):
+        return HTMLResponse("Seu usuário não tem acesso ao WhatsApp Disparos.", status_code=403)
+    auth.registrar_acesso(dados["usuario"], dados.get("escritorio_id"), "WhatsApp Disparos")
     return RedirectResponse(f"https://{dominio}/sso?t={_bilhete_sso(dados, segredo)}", status_code=302)

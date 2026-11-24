@@ -752,6 +752,16 @@ def _autenticar(win, log) -> None:
 _ULTIMO_VOLTAR = {"quando": 0.0}
 
 
+def _sem_permissao(textos: str) -> bool:
+    t = (textos or "").lower()
+    return "não tem permissão" in t or "nao tem permissao" in t
+
+
+class ErroSemPermissao(ErroAttended):
+    """O portal respondeu "Você não tem permissão para acessar esta página"
+    (às vezes junto com "Sem Resultados!") - NÃO é consulta sem movimento."""
+
+
 def _voltar_se_sem_permissao(win, textos: str, log, qualquer_mensagem: bool = False) -> bool:
     """Mensagem de Atenção / "Você não tem permissão para acessar esta
     página" com opção Voltar: clica em Voltar (volta pra tela anterior).
@@ -761,8 +771,11 @@ def _voltar_se_sem_permissao(win, textos: str, log, qualquer_mensagem: bool = Fa
     if not qualquer_mensagem and not ("não tem permissão" in t or "nao tem permissao" in t
                                       or "atenção" in t or "atencao" in t):
         return False
-    if arquivos.sem_resultado(textos) or "consulta de notas" in t or "histórico de downloads" in t:
-        return False  # "Sem Resultados!" também vem com Atenção - é resultado, não erro
+    if not _sem_permissao(textos) and (
+            arquivos.sem_resultado(textos) or "consulta de notas" in t or "histórico de downloads" in t):
+        # "Sem Resultados!" sozinho também vem com Atenção - é resultado, não
+        # erro. Com "não tem permissão" junto (print do escritório), volta.
+        return False
     if time.time() - _ULTIMO_VOLTAR["quando"] < 20:  # nunca fica indo e voltando
         return False
     voltar = _achar(win, ["Voltar"], tipos=("Button", "Hyperlink", "Text"), exato=True)
@@ -933,6 +946,8 @@ def pesquisar(win, data_inicial: str, data_final: str, ie: str, tipo: str, log):
     def resultado():
         w = conectar_janela()
         textos = _todos_os_textos(w)
+        if _sem_permissao(textos):
+            return "sem_permissao"
         if _achar(w, ["Baixar todos"]) is not None or arquivos.sem_resultado(textos):
             return w
         return None
@@ -940,6 +955,13 @@ def pesquisar(win, data_inicial: str, data_final: str, ie: str, tipo: str, log):
     win = _esperar(resultado, TIMEOUT_PESQUISA_S, 1.5)
     if win is None:
         raise ErroAttended("[consulta] o resultado da pesquisa não apareceu a tempo")
+    if win == "sem_permissao":
+        # "Sem Resultados!" + "Você não tem permissão..." não é sem movimento:
+        # Voltar e a consulta é refeita (ver processar_consulta)
+        w = conectar_janela()
+        _ULTIMO_VOLTAR["quando"] = 0.0
+        _voltar_se_sem_permissao(w, _todos_os_textos(w), log)
+        raise ErroSemPermissao("[consulta] o portal respondeu 'Você não tem permissão para acessar esta página'")
     return win
 
 
@@ -1080,22 +1102,44 @@ def _novo_arquivo_downloads(pastas, referencia: float, nome_esperado: str = ""):
     return candidato if t1 > 0 and t1 == t2 else None
 
 
-def _achar_rapido(janela, nome: str, tipo: str = "Button"):
-    """Elemento por NOME + tipo com a busca nativa do Windows (UIA
-    FindFirst) - não monta a página inteira elemento por elemento (era o
-    que deixava lento procurar o "Salvar" na janela do Edge)."""
+_DIAG_DOWNLOAD = {"erro": "", "desde": 0.0, "avisou": False}
+
+
+def _achar_rapido(janela, nome: str, tipo: "str | None" = "Button"):
+    """Elemento por NOME (+ tipo, se dado) com a busca nativa do Windows
+    (UIA FindFirst) - não monta a página inteira elemento por elemento (era
+    o que deixava lento procurar o "Salvar" na janela do Edge)."""
     try:
         from pywinauto.controls.uiawrapper import UIAWrapper
         from pywinauto.uia_defines import IUIA
         from pywinauto.uia_element_info import UIAElementInfo
         uia = IUIA()
-        cond = uia.iuia.CreateAndCondition(
-            uia.iuia.CreatePropertyCondition(uia.UIA_dll.UIA_NamePropertyId, nome),
-            uia.iuia.CreatePropertyCondition(uia.UIA_dll.UIA_ControlTypePropertyId, uia.known_control_types[tipo]),
-        )
-        el = janela.element_info.element.FindFirst(uia.tree_scope["descendants"], cond)
+        cond = uia.iuia.CreatePropertyCondition(uia.UIA_dll.UIA_NamePropertyId, nome)
+        if tipo:
+            cond = uia.iuia.CreateAndCondition(
+                cond, uia.iuia.CreatePropertyCondition(uia.UIA_dll.UIA_ControlTypePropertyId,
+                                                       uia.known_control_types[tipo]))
+        raiz = janela.element_info.element if hasattr(janela, "element_info") else janela
+        el = raiz.FindFirst(uia.tree_scope["descendants"], cond)
         return UIAWrapper(UIAElementInfo(el)) if el else None
-    except Exception:
+    except Exception as exc:
+        _DIAG_DOWNLOAD["erro"] = f"{type(exc).__name__}: {exc}"
+        return None
+
+
+def _botao_do_balao(janela, nome: str):
+    """Botão do balão de download: busca nativa direto; senão acha o painel
+    "Downloads" (pelo nome) e procura o botão só dentro dele (pequeno)."""
+    botao = _achar_rapido(janela, nome)
+    if botao is not None:
+        return botao
+    painel = _achar_rapido(janela, "Downloads", tipo=None)
+    if painel is None:
+        return None
+    try:
+        return next((b for b in painel.descendants(control_type="Button") if _texto(b) == nome), None)
+    except Exception as exc:
+        _DIAG_DOWNLOAD["erro"] = f"{type(exc).__name__}: {exc}"
         return None
 
 
@@ -1151,17 +1195,39 @@ def _aceitar_prompt_download(pasta_destino: Path, log) -> None:
     "O que você quer fazer com ...zip? Abrir / Salvar como / Salvar", preso
     à janela do Edge): "Salvar como" e grava DIRETO na pasta da empresa;
     se a janela de salvar não abrir, "Salvar" (vai pra Downloads)."""
-    for janela in _janelas_do_edge():
-        salvar_como = _achar_rapido(janela, "Salvar como")
+    if not _DIAG_DOWNLOAD["desde"]:
+        _DIAG_DOWNLOAD.update(desde=time.time(), avisou=False, erro="")
+    janelas = _janelas_do_edge()
+    for janela in janelas:
+        salvar_como = _botao_do_balao(janela, "Salvar como")
         if salvar_como is not None:
+            log(f"  Edge perguntou onde salvar — Salvar como → {pasta_destino}")
             _acionar(salvar_como)
             if _salvar_como_em(pasta_destino, log):
+                _DIAG_DOWNLOAD["desde"] = 0.0
                 return
-        salvar = _achar_rapido(janela, "Salvar")
+        salvar = _botao_do_balao(janela, "Salvar")
         if salvar is not None:
             _acionar(salvar)
-            log("  (Edge perguntou o que fazer — cliquei em Salvar)")
+            log("  (Edge perguntou o que fazer — cliquei em Salvar; o arquivo vai pra Downloads)")
+            _DIAG_DOWNLOAD["desde"] = 0.0
             return
+    # balão não encontrado: depois de 20 s avisa uma vez e guarda o que o
+    # Windows mostra das janelas do Edge, pra ajustar
+    if not _DIAG_DOWNLOAD["avisou"] and time.time() - _DIAG_DOWNLOAD["desde"] > 20:
+        _DIAG_DOWNLOAD["avisou"] = True
+        destino = Path.home() / "Documents" / "RPA NF GO - downloads.txt"
+        try:
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            destino.write_text(
+                f"erro da busca: {_DIAG_DOWNLOAD['erro'] or '-'}\n\n"
+                + "\n\n".join(arvore_da_janela(j, limite=1500) for j in janelas[:3]),
+                encoding="utf-8")
+        except Exception:
+            pass
+        log("  ⚠️  Ainda não achei os botões do balão de download do Edge "
+            f"({_DIAG_DOWNLOAD['erro'] or 'sem erro'}) — se ele estiver aberto, clique em Salvar como. "
+            f"Diagnóstico salvo em {destino}")
 
 
 _RX_ARQUIVO_HISTORICO = re.compile(r"(\d+)_(\d{8})_(\d{8})_(\d+)\.zip", re.I)
@@ -1382,6 +1448,7 @@ def _aguardar_e_baixar(prefixo: str, referencia: float, antes: set, log, timeout
                                    f"histórico em {int(timeout // 60)} min — tento baixar de novo no fim da empresa")
 
     referencia_arquivo = time.time() - 5
+    _DIAG_DOWNLOAD.update(desde=0.0, avisou=False, erro="")
     prazo = time.time() + 5 * 60
     while time.time() < prazo:
         _checar_parada()
@@ -1417,8 +1484,16 @@ def processar_consulta(empresa: dict, competencia: dict, pasta_raiz: Path, log) 
     ).split("/"))
     pasta.mkdir(parents=True, exist_ok=True)
 
-    win = garantir_formulario(conectar_janela(), log=log)
-    win = pesquisar(win, competencia["data_inicial"], competencia["data_final"], ie, tipo, log)
+    for tentativa in (1, 2):
+        win = garantir_formulario(conectar_janela(), log=log)
+        try:
+            win = pesquisar(win, competencia["data_inicial"], competencia["data_final"], ie, tipo, log)
+            break
+        except ErroSemPermissao:
+            if tentativa == 2:
+                raise
+            log("  ⚠️  O portal disse 'sem permissão' — cliquei em Voltar e vou refazer a consulta...")
+            time.sleep(2)
 
     textos = _todos_os_textos(win)
     print_png = print_da_janela(win)

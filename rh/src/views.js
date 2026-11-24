@@ -25,7 +25,7 @@ const aba = (nome, itens, icone) => ({ nome, itens, icone });
 const MENU = [
   { ...aba('Home', [], '🏠'), href: '/dash' },
   aba('Perfil Comportamental', [
-    tela('/comportamental/metricas', 'Métricas do Perfil', 'perfil'), tela('/comportamental/perfis', 'Perfis', 'perfil'),
+    tela('/comportamental/metricas', 'Métricas do Perfil', 'perfil'), tela('/comportamental/perfis', 'Profiler', 'perfil'),
     tela('/comportamental/cargos', 'Engenharia de Cargo', 'perfil'), tela('/comportamental/responder', 'Responder Perfil', 'perfil', 'edita'),
     tela('/comportamental/busca', 'Busca de Perfil', 'perfil'), tela('/comportamental/comparar', 'Comparar Perfis', 'perfil'),
     tela('/comportamental/grupos', 'Análise de Grupo', 'perfil'), tela('/comportamental/extrato', 'Extrato de Envios', 'perfil'),

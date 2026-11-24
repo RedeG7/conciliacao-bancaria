@@ -110,4 +110,40 @@ function mediaPontos(lista) {
   return Object.fromEntries(CHAVES.map(e => [e, lista.length ? Math.round(lista.reduce((s, p) => s + p.pontos[e], 0) / lista.length) : 0]));
 }
 
-module.exports = { ESTILOS, CHAVES, QUESTOES, ESCALA, ORDEM_FAIXAS, faixa, pontuar, nomePerfil, alvo, aderencia, mediaPontos, histograma, mesesEntre, perfilGeral };
+
+// Habilidades do relatório: cada uma é uma média ponderada dos pontos dos
+// estilos (pesos somam 1), então sai das próprias respostas da pessoa, de 0 a 100.
+const HABILIDADES = [
+  ['Liderança', { realizador: 0.6, conector: 0.4 }],
+  ['Tomada de decisão', { realizador: 0.7, criterioso: 0.3 }],
+  ['Foco em resultado', { realizador: 0.8, constante: 0.2 }],
+  ['Comunicação', { conector: 0.8, realizador: 0.2 }],
+  ['Persuasão e influência', { conector: 0.7, realizador: 0.3 }],
+  ['Adaptação a mudanças', { conector: 0.6, realizador: 0.4 }],
+  ['Trabalho em equipe', { constante: 0.5, conector: 0.5 }],
+  ['Cooperação e paciência', { constante: 0.8, conector: 0.2 }],
+  ['Constância na rotina', { constante: 0.6, criterioso: 0.4 }],
+  ['Organização e planejamento', { criterioso: 0.6, constante: 0.4 }],
+  ['Análise e precisão', { criterioso: 0.9, realizador: 0.1 }],
+].map(([nome, pesos]) => ({ nome, pesos }));
+function habilidades(pontos) {
+  return HABILIDADES.map(h => {
+    const valor = Math.round(Object.entries(h.pesos).reduce((s, [e, w]) => s + (pontos[e] || 0) * w, 0));
+    // estilo de maior peso, para a cor da barra
+    const estilo = Object.entries(h.pesos).sort((a, b) => b[1] - a[1])[0][0];
+    return { nome: h.nome, valor, faixa: faixa(valor), estilo };
+  });
+}
+// Indicadores do perfil: Intensidade = quanto o estilo principal se destaca da
+// média dos outros três; Equilíbrio = quão próximos estão os quatro estilos.
+function indicadores(pontos) {
+  const v = CHAVES.map(e => pontos[e]), maior = Math.max(...v), menor = Math.min(...v);
+  const outros = (v.reduce((s, n) => s + n, 0) - maior) / 3;
+  return {
+    intensidade: Math.max(0, Math.min(100, Math.round(maior - outros))),
+    equilibrio: Math.max(0, 100 - (maior - menor)),
+    media: Math.round(v.reduce((s, n) => s + n, 0) / v.length),
+  };
+}
+
+module.exports = { HABILIDADES, habilidades, indicadores, ESTILOS, CHAVES, QUESTOES, ESCALA, ORDEM_FAIXAS, faixa, pontuar, nomePerfil, alvo, aderencia, mediaPontos, histograma, mesesEntre, perfilGeral };

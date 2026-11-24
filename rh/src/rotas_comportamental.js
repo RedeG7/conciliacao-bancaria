@@ -9,6 +9,7 @@ const { um, csv } = require('./crud');
 const M = require('./metricas');
 const P = require('./comportamental');
 const G = require('./graficos');
+const PF = require('./profiler');
 const { hoje } = require('./datas');
 const { html, raw, dataBr, layout, page, tabela, select, campo, cartao, barras } = require('./views');
 
@@ -211,57 +212,130 @@ function internas(app, { h, exige, auditar, flash, falha, baseUrl }) {
     res.send(layout(req, 'Métricas do Perfil', html`${abasDe(ABAS_METRICAS, aba)}${corpo}`, { migalha: MIGALHA, descricao: 'Participação e distribuição dos perfis da empresa.' }));
   }));
 
-  // -------------------------------------------------------------- perfis
+  // -------------------------------------------------------------- perfis (Profiler)
+  // cargo e departamento do colaborador vinculado, para o cabeçalho e o relatório
+  const infoColab = (req, p) => {
+    const c = colabDe(req, p);
+    return c ? { cargo: req.c.nome('cargo', c.cargo_id), departamento: req.c.nome('departamento', c.departamento_id), cargoReg: req.c.registro('cargo', c.cargo_id) } : null;
+  };
+  // menu de 3 pontos de cada perfil
+  const menuPerfil = (req, p, { classe = '' } = {}) => {
+    const feito = p.status === 'Respondido';
+    return html`<details class="kebab ${classe}"><summary aria-label="Ações de ${p.nome}" title="Ações">⋮</summary><div class="kebab-menu" role="menu">
+      ${feito ? html`<a role="menuitem" href="/comportamental/perfis/${p.id}"><span aria-hidden="true">👁</span>Visualizar Profiler</a>` : html`<a role="menuitem" href="/comportamental/perfis/${p.id}"><span aria-hidden="true">🔗</span>Ver link de resposta</a>`}
+      ${pode(req.papel, 'edita') ? html`<a role="menuitem" href="/comportamental/perfis/${p.id}/editar"><span aria-hidden="true">✏️</span>Editar dados Profiler</a>` : ''}
+      ${feito ? html`<a role="menuitem" href="/comportamental/perfis/${p.id}/relatorio.pdf"><span aria-hidden="true">⬇</span>Baixar relatório Profiler</a>` : html`<span class="kebab-off" title="Disponível depois da resposta"><span aria-hidden="true">⬇</span>Baixar relatório Profiler</span>`}
+      ${pode(req.papel, 'apaga') ? html`<form method="post" action="/comportamental/perfis/${p.id}/apagar" data-confirmar="Apagar este perfil?"><button class="kebab-perigo"><span aria-hidden="true">🗑</span>Apagar</button></form>` : ''}
+    </div></details>`;
+  };
+
   app.get('/comportamental/perfis', h((req, res) => {
     const todos = lista(req), estilo = P.ESTILOS[req.query.estilo] ? req.query.estilo : '', vinculo = texto(req.query.vinculo);
     const base = todos.filter(p => (!estilo || p.principal === estilo) && (!vinculo || p.vinculo === vinculo));
     const dessa = a => base.filter(p => a === 'Todos' || (a === 'Respondidos' ? p.status === 'Respondido' : p.status === 'Aguardando'));
     const ativa = ABAS_PERFIS.includes(req.query.aba) ? req.query.aba : 'Todos';
-    const apagar = pode(req.papel, 'apaga');
-    const linhas = dessa(ativa).map(p => [html`<a href="/comportamental/perfis/${p.id}">${p.nome}</a>`, p.email || '', p.vinculo, P.nomePerfil(p) || 'Não respondido', dataBr(p.data_envio), dataBr(p.data_resposta),
-      html`<span class="acoes-linha"><a href="/comportamental/perfis/${p.id}">Ver</a>${apagar ? html`<form method="post" action="/comportamental/perfis/${p.id}/apagar" data-confirmar="Apagar este perfil?"><button class="link">Apagar</button></form>` : ''}</span>`]);
-    res.send(layout(req, 'Perfis', html`<div class="abas">${ABAS_PERFIS.map(a => html`<a href="?aba=${a}&estilo=${estilo}&vinculo=${vinculo}" class="${a === ativa ? 'ativo' : ''}">${a}<span>${dessa(a).length}</span></a>`)}</div>
-      <form method="get" class="card"><input type="hidden" name="aba" value="${ativa}"><div class="grade">
-        ${campo('Estilo principal', select('estilo', [['', 'Todos'], ...P.CHAVES.map(e => [e, nomeEstilo(e)])], estilo))}
-        ${campo('Vínculo', select('vinculo', [['', 'Todos'], 'Colaborador', 'Candidato'], vinculo))}</div>
-        <div class="acoes"><button class="botao">Filtrar</button>${pode(req.papel, 'edita') ? html`<a class="botao" href="/comportamental/enviar">Enviar questionário</a>` : ''}${pode(req.papel, 'edita') ? html`<a class="botao sec" href="/comportamental/enviar">Importar CSV</a>` : ''}<a class="botao sec" href="/comportamental/perfis/exportar">Exportar CSV</a></div></form>
-      ${tabela(['Nome', 'E-mail', 'Vínculo', 'Perfil', 'Envio', 'Resposta', 'Ações'], linhas, 'Nenhum perfil aqui.')}`, { migalha: MIGALHA, descricao: AVISO }));
+    const feitos = respondidos(todos);
+    const ordenados = dessa(ativa).sort((a, b) => (b.data_resposta || b.data_envio || '').localeCompare(a.data_resposta || a.data_envio || '') || a.nome.localeCompare(b.nome, 'pt-BR'));
+    const linhas = ordenados.map(p => {
+      const info = infoColab(req, p);
+      return [html`<div class="pf-pessoa">${PF.avatar(p)}<div><a href="/comportamental/perfis/${p.id}">${p.nome}</a><small>${p.email || ''}</small></div></div>`,
+        PF.selos(p), p.vinculo, info?.cargo || '', dataBr(p.data_resposta) || html`<span class="desc">Enviado em ${dataBr(p.data_envio)}</span>`, menuPerfil(req, p)];
+    });
+    const qs = (o = {}) => new URLSearchParams({ aba: ativa, estilo, vinculo, ...o }).toString();
+    res.send(layout(req, 'Profiler', html`
+      <div class="pf-kpis">
+        <div class="card"><small>Perfis</small><b>${todos.length}</b></div>
+        <div class="card"><small>Respondidos</small><b>${feitos.length}</b></div>
+        <div class="card"><small>Aguardando</small><b>${todos.length - feitos.length}</b></div>
+        ${P.CHAVES.map(e => html`<a class="card pf-kpi-estilo ${estilo === e ? 'ativo' : ''}" href="?${qs({ estilo: estilo === e ? '' : e })}"><small><i class="vg-${'s' + (P.CHAVES.indexOf(e) + 1)}"></i>${nomeEstilo(e)}</small><b>${feitos.filter(p => p.principal === e).length}</b></a>`)}
+      </div>
+      <div class="card pf-lista-card">
+        <div class="pf-barra">
+          <nav class="pf-abas-lista">${ABAS_PERFIS.map(a => html`<a href="?${qs({ aba: a })}" class="${a === ativa ? 'ativo' : ''}">${a}<span>${dessa(a).length}</span></a>`)}</nav>
+          <form method="get" class="pf-filtros"><input type="hidden" name="aba" value="${ativa}">
+            ${select('estilo', [['', 'Todos os estilos'], ...P.CHAVES.map(e => [e, nomeEstilo(e)])], estilo, 'aria-label="Estilo principal" onchange="this.form.submit()"')}
+            ${select('vinculo', [['', 'Todos os vínculos'], 'Colaborador', 'Candidato'], vinculo, 'aria-label="Vínculo" onchange="this.form.submit()"')}
+            <noscript><button class="botao sec pequeno">Filtrar</button></noscript></form>
+          <div class="pf-botoes">${pode(req.papel, 'edita') ? html`<a class="botao" href="/comportamental/enviar">+ Enviar questionário</a>` : ''}<a class="botao sec" href="/comportamental/perfis/exportar">Exportar CSV</a></div>
+        </div>
+        ${tabela(['Nome', 'Perfil', 'Vínculo', 'Cargo', 'Respondido em', ''], linhas, 'Nenhum perfil aqui.')}
+      </div>`, { migalha: MIGALHA, descricao: AVISO }));
   }));
   app.get('/comportamental/perfis/exportar', h((req, res) => {
     auditar(req, 'Exportou', 'perfil');
     res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="perfis-comportamentais.csv"' }).send(csv(
-      ['Nome', 'E-mail', 'Vínculo', 'Situação', 'Perfil', ...P.CHAVES.map(nomeEstilo), 'Envio', 'Resposta'],
-      lista(req).map(p => [p.nome, p.email, p.vinculo, p.status, P.nomePerfil(p), ...P.CHAVES.map(e => p.pontos?.[e] ?? ''), dataBr(p.data_envio), dataBr(p.data_resposta)])));
+      ['Nome', 'E-mail', 'Vínculo', 'Situação', 'Perfil', ...P.CHAVES.map(nomeEstilo), ...P.HABILIDADES.map(x => x.nome), 'Envio', 'Resposta'],
+      lista(req).map(p => [p.nome, p.email, p.vinculo, p.status, P.nomePerfil(p), ...P.CHAVES.map(e => p.pontos?.[e] ?? ''), ...(p.pontos ? P.habilidades(p.pontos).map(x => x.valor) : P.HABILIDADES.map(() => '')), dataBr(p.data_envio), dataBr(p.data_resposta)])));
   }));
+
+  // Visualizar Profiler
   app.get('/comportamental/perfis/:id(\\d+)', h((req, res) => {
-    const p = carregar(req), editar = pode(req.papel, 'edita');
+    const p = carregar(req);
     let corpo;
     if (p.status === 'Aguardando') {
       const link = `${baseUrl(req)}/perfil/${p.token}`;
       const carta = `Olá, ${p.nome}. Por favor, responda ao questionário de perfil comportamental neste link: ${link}`;
-      corpo = html`<div class="card"><small>Link individual, aguardando resposta</small>
+      corpo = html`<div class="pf-cabeca card">${PF.avatar(p)}<div class="pf-cabeca-txt"><h2>${p.nome}</h2><p>${p.vinculo}</p>${PF.selos(p)}</div>${menuPerfil(req, p)}</div>
+        <div class="card"><small>Link individual, aguardando resposta</small>
         <div class="copiar"><input id="linkPerfil" value="${link}" readonly aria-label="Link do questionário"><button type="button" class="botao sec" data-copiar="linkPerfil">Copiar</button></div>
         ${p.email ? html`<div class="acoes"><a class="botao sec" href="mailto:${p.email}?subject=${encodeURIComponent('Perfil comportamental')}&body=${encodeURIComponent(carta)}">Abrir no e-mail</a></div>` : ''}</div>`;
     } else {
-      const est = P.ESTILOS[p.principal], cargo = colabDe(req, p) && req.c.registro('cargo', colabDe(req, p).cargo_id);
-      corpo = html`<div class="cards4">${cartao('Perfil', P.nomePerfil(p), est.resumo)}${cartao('Respondido em', dataBr(p.data_resposta))}
-        ${cargo?.perfil_esperado ? cartao(`Aderência a ${cargo.nome}`, `${P.aderencia(p.pontos, P.alvo(cargo.perfil_esperado))}%`, `Esperado: ${nomeEstilo(cargo.perfil_esperado)}`) : ''}</div>
-        <div class="grade-2"><div class="card"><h3 class="primeiro">Pontuação (0 a 100)</h3>${barrasPontos(p.pontos)}</div>
-        <div class="card"><h3 class="primeiro">Pontos fortes</h3><ul>${est.fortes.map(t => html`<li>${t}</li>`)}</ul>
-          <h3>Pontos de atenção</h3><ul>${est.cuidados.map(t => html`<li>${t}</li>`)}</ul>
-          <h3>Como apoiar</h3><p>${est.gestao}</p></div></div>
-        <div class="acoes nao-imprime"><button type="button" class="botao sec" onclick="window.print()">Imprimir ou salvar PDF</button></div>`;
+      const info = infoColab(req, p);
+      corpo = html`${PF.visualizar(p, { cargo: info?.cargoReg, colab: info, menu: menuPerfil(req, p) })}
+        <div class="acoes"><a class="botao" href="/comportamental/perfis/${p.id}/relatorio.pdf">⬇ Baixar relatório Profiler</a><a class="botao sec" href="/comportamental/perfis">Voltar</a></div>`;
     }
-    res.send(layout(req, p.nome, html`${corpo}
-      <form method="post" action="/comportamental/perfis/${p.id}" class="card nao-imprime"><fieldset ${editar ? '' : raw('disabled')}><h3 class="primeiro">Dados da pessoa</h3>${camposPessoa(p.nome, p.email || '')}</fieldset>
-        <div class="acoes">${editar ? html`<button class="botao">Salvar</button>` : ''}<a class="botao sec" href="/comportamental/perfis">Voltar</a></div></form>`, { migalha: 'Perfis', descricao: AVISO }));
+    res.send(layout(req, 'Visualizar Profiler', corpo, { migalha: 'Profiler', descricao: AVISO }));
   }));
+
+  // Baixar relatório Profiler (PDF)
+  app.get('/comportamental/perfis/:id(\\d+)/relatorio.pdf', h((req, res) => {
+    const p = carregar(req);
+    if (p.status !== 'Respondido') throw falha(409, 'O relatório fica disponível depois que a pessoa responder.');
+    const info = infoColab(req, p);
+    const pdf = PF.relatorioPdf(p, { cargo: info?.cargoReg, colab: info, escritorio: req.officeRow?.name || '', aviso: AVISO });
+    auditar(req, 'Baixou relatório', 'perfil', p.id);
+    const arquivo = `profiler-${p.nome.normalize('NFD').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').toLowerCase() || p.id}.pdf`;
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${arquivo}"`, 'Cache-Control': 'no-store' }).send(pdf);
+  }));
+
+  // Editar dados Profiler
+  const telaEditar = (req, res, p, d = p, erro = '') => {
+    const colabs = colabsAtivos(req);
+    if (p.colaborador_id && !colabs.some(c => c.id === p.colaborador_id)) { const c = req.c.registro('colaborador', p.colaborador_id); if (c) colabs.push(c); }
+    res.status(erro ? 422 : 200).send(layout(req, 'Editar dados Profiler', html`${erro ? html`<div class="aviso erro">${erro}</div>` : ''}
+      <div class="pf-cabeca card">${PF.avatar(p)}<div class="pf-cabeca-txt"><h2>${p.nome}</h2><p>${p.vinculo}${p.data_resposta ? ` · respondido em ${dataBr(p.data_resposta)}` : ''}</p>${PF.selos(p)}</div></div>
+      <form method="post" action="/comportamental/perfis/${p.id}/editar" class="card"><h3 class="primeiro">Dados da pessoa</h3>
+        ${camposPessoa(d.nome, d.email || '')}
+        <div class="grade">${campo('Vínculo', select('vinculo', ['Colaborador', 'Candidato'], d.vinculo))}
+          ${campo('Colaborador vinculado', select('colaborador_id', [['', '- nenhum -'], ...colabs.map(c => [c.id, c.nome])], d.colaborador_id))}</div>
+        <p class="desc">Ao vincular um colaborador, o relatório passa a mostrar o cargo, o departamento e a aderência ao perfil esperado do cargo.</p>
+        ${p.status === 'Respondido' ? html`<h3>Resultado</h3><p class="desc">Os pontos vêm das respostas e não são editados à mão. Para refazer, aplique o questionário de novo em <a href="/comportamental/responder">Responder Perfil</a>.</p>
+          <div class="pf-mini">${P.CHAVES.map(e => html`<span><i class="vg-s${P.CHAVES.indexOf(e) + 1}"></i>${nomeEstilo(e)} <b>${p.pontos[e]}</b></span>`)}</div>` : ''}
+        <div class="acoes"><button class="botao">Salvar</button><a class="botao sec" href="/comportamental/perfis/${p.id}">Cancelar</a></div></form>`, { migalha: 'Profiler', descricao: AVISO }));
+  };
+  app.get('/comportamental/perfis/:id(\\d+)/editar', exige('edita'), h((req, res) => telaEditar(req, res, carregar(req))));
+  const salvarDados = (req, res, p, volta) => {
+    const nome = texto(req.body.nome).slice(0, 200), email = texto(req.body.email).slice(0, 200);
+    const vinculo = ['Colaborador', 'Candidato'].includes(texto(req.body.vinculo)) ? texto(req.body.vinculo) : p.vinculo;
+    const cid = 'colaborador_id' in req.body ? Number(texto(req.body.colaborador_id)) || null : p.colaborador_id ?? null;
+    const d = { ...p, nome, email, vinculo, colaborador_id: cid };
+    if (!nome || !emailOk(email)) return volta(d, 'Informe nome e e-mail válidos.');
+    if (cid && !req.c.registro('colaborador', cid)) return volta(d, 'Colaborador não encontrado.');
+    if (vinculo === 'Colaborador' && !cid && 'colaborador_id' in req.body) return volta(d, 'Para o vínculo Colaborador, escolha o colaborador.');
+    const novos = { ...R.soDados(p), nome, email, vinculo, colaborador_id: vinculo === 'Candidato' ? null : cid };
+    const mudou = [['nome', 'Nome'], ['email', 'E-mail'], ['vinculo', 'Vínculo'], ['colaborador_id', 'Colaborador']].filter(([k]) => (p[k] ?? null) !== (novos[k] ?? null)).map(x => x[1]).join(', ');
+    tx(() => { R.atualizar(req.office, 'perfil', p.id, novos); auditar(req, 'Editou', 'perfil', p.id, mudou); });
+    flash(res, 'Dados do Profiler salvos.');
+    res.redirect(`/comportamental/perfis/${p.id}`);
+  };
+  app.post('/comportamental/perfis/:id(\\d+)/editar', exige('edita'), h((req, res) => {
+    const p = carregar(req);
+    salvarDados(req, res, p, (d, erro) => telaEditar(req, res, p, d, erro));
+  }));
+  // formulário antigo (só nome e e-mail) continua aceito
   app.post('/comportamental/perfis/:id(\\d+)', exige('edita'), h((req, res) => {
-    const p = carregar(req), nome = texto(req.body.nome).slice(0, 200), email = texto(req.body.email).slice(0, 200);
-    if (!nome || !emailOk(email)) { flash(res, 'Informe nome e e-mail válidos.', 'erro'); return res.redirect(req.originalUrl); }
-    tx(() => { R.atualizar(req.office, 'perfil', p.id, { ...R.soDados(p), nome, email }); auditar(req, 'Editou', 'perfil', p.id, 'Nome, E-mail'); });
-    flash(res, 'Salvo.');
-    res.redirect(req.originalUrl);
+    const p = carregar(req);
+    salvarDados(req, res, p, (d, erro) => { flash(res, erro, 'erro'); res.redirect(`/comportamental/perfis/${p.id}/editar`); });
   }));
   app.post('/comportamental/perfis/:id(\\d+)/apagar', exige('apaga'), h((req, res) => {
     const p = carregar(req);

@@ -478,3 +478,141 @@ O token fica cifrado com a `RPA_ENC_KEY` (a mesma das credenciais do RPA).
   cadastrado, a solicitação entra como "Bloqueada" até o cadastro ser corrigido.
 - ONVIO e WhatsApp: os campos já ficam salvos, mas a integração ainda não consulta nada.
 
+## WhatsApp Disparos / AutoEnvioPro (autoenviopro.com.br)
+
+App trazido do Replit ("WhatsApp Planilha Envio"), pasta `whatsapp/` (monorepo
+pnpm: front React/Vite + API Express, ver `whatsapp/replit.md`): serviço
+`whatsapp` do `docker-compose.yml`, imagem `ghcr.io/redeg7/whatsapp-disparos:latest`
+(buildada pelo mesmo workflow). Usa um banco próprio (`whatsapp`) **dentro do
+mesmo Postgres do Hub**, criado sozinho pelo container na primeira subida
+(`whatsapp/lib/db/ensure-db.mjs` + `drizzle-kit push`). A sessão do WhatsApp
+conectado e as imagens dos modelos ficam no volume `whatsapp_data`. Na home do
+Hub aparece o card "💬 WhatsApp Disparos" (Marketing & Comercial), que entra
+**já logado** (`/api/sso/whatsapp` em `api.py`): o super administrador do Hub
+entra como super_admin, os demais como usuário comum.
+
+Ativar (uma vez só):
+
+1. No DNS do `autoenviopro.com.br` (mesmo provedor, servidorestavel.net),
+   registros **A** do domínio e do `www` apontando pro mesmo IP do Hub
+   (192.96.217.88 - já feito). O Caddy emite o HTTPS sozinho; o `www`
+   redireciona para o domínio sem www.
+2. Nada a fazer no `.env`: o deploy acrescenta `whatsapp` em
+   `COMPOSE_PROFILES` e gera `WHATSAPP_SSO_SECRET`, `WHATSAPP_SESSION_SECRET` e
+   `WHATSAPP_ADMIN_PASSWORD` (senha do usuário `admin`, criado só com o banco
+   vazio - veja com `grep WHATSAPP_ADMIN_PASSWORD /opt/conciliacao-bancaria/.env`).
+   (Outro endereço: `DOMINIO_WHATSAPP=...` no `.env`.)
+3. Depois do primeiro deploy, entre pelo card como super administrador, abra
+   **Configurações** e leia o QR Code com o celular do WhatsApp que vai
+   disparar. A conexão é **uma só para o app inteiro** e fica com o usuário
+   que leu o QR Code: para os demais usuários ela aparece como desconectada
+   (regra do próprio app, que veio assim do Replit).
+
+**Trazer os dados do Replit (opcional):** no Shell do Repl, gere o dump e
+baixe o arquivo; depois, na VPS, restaure **antes** do primeiro acesso (com o
+banco ainda vazio, para não misturar com o `admin` criado sozinho):
+
+```bash
+# no Shell do Replit
+pg_dump "$DATABASE_URL" --no-owner --no-acl --data-only > whatsapp-replit.sql
+
+# na VPS (depois que o container subiu e criou as tabelas)
+docker exec -i conciliacao-db psql -U conciliacao -d whatsapp \
+  -c "TRUNCATE users, templates, campaigns, contacts, global_contacts, conversations, messages RESTART IDENTITY CASCADE"
+docker exec -i conciliacao-db psql -U conciliacao -d whatsapp < whatsapp-replit.sql
+```
+
+A sessão do WhatsApp do Replit **não** é copiada (pasta `whatsapp-session`,
+credenciais da conta - nunca vai pro git): basta ler o QR Code de novo na VPS.
+Desconecte o app do Replit antes, para os dois não disputarem a mesma conta.
+
+Liberar/bloquear por escritório ou usuário: id `whatsapp` em Gerenciar
+Escritórios/Usuários do Hub (mesma regra dos outros apps).
+
+Backup:
+
+```bash
+docker exec conciliacao-db pg_dump -U conciliacao whatsapp > whatsapp-$(date +%Y%m%d).sql
+docker run --rm -v conciliacao-bancaria_whatsapp_data:/data -v $(pwd):/b alpine \
+  tar czf /b/whatsapp-data-$(date +%Y%m%d).tgz -C /data .
+```
+
+## Calculadora RTC — Regime Regular (card dentro do "🧾 RPA Fiscal")
+
+Cálculo da CBS, do IBS e do Imposto Seletivo (LC 214/2025) pela **calculadora
+oficial da Receita Federal**
+([ReceitaFederal/calculadora-rtc-regime-regular](https://github.com/ReceitaFederal/calculadora-rtc-regime-regular),
+licença MIT), sem alteração no código dela:
+
+- `calculadora-rtc/Dockerfile` baixa o código da Receita na versão fixada em
+  `RTC_REF`, gera o banco SQLite das tabelas oficiais (Flyway) e compila o
+  `.jar` (Java 25). O deploy publica a imagem `ghcr.io/redeg7/calculadora-rtc`
+  e liga sozinho o profile `calculadorartc` no `.env` do VPS.
+- O serviço `calculadora-rtc` fica **só na rede interna** do Docker (a API da
+  Receita não tem login): sem porta publicada e sem rota no Caddy. O Hub fala
+  com ela por `CALCULADORA_RTC_URL` (`http://calculadora-rtc:8080/api/calculadora`).
+  Usa até ~512 MB de heap Java (`mem_limit: 768m`).
+- A tela fica em `_tela_calculadora_rtc` (app_conciliacao.py); a montagem do
+  pedido e a leitura da resposta em `calculadora_rtc.py` (testes em
+  `tests/test_calculadora_rtc.py`, sem banco).
+- **Atualizar a calculadora** (versão nova da Receita, tabela cClassTrib nova):
+  troque `RTC_REF` no Dockerfile, suba `VERSAO`/`NOVIDADES` em
+  `calculadora_rtc.py` e faça o push na `main`.
+- Conferir no VPS: `docker compose ps calculadora-rtc` e
+  `docker compose exec app python -c "import calculadora_rtc as c; print(c.versao())"`.
+- Escritório/usuário com lista de apps restrita só vê o card depois de liberar
+  "Calculadora RTC — Regime Regular" em Gerenciar Escritórios/Usuários.
+
+## Calculadora RTC — Simples Nacional (card dentro do "🧾 RPA Fiscal")
+
+CBS e IBS do optante pelo Simples (LC 214/2025, NT 2026.005) pela calculadora
+oficial da Receita
+([ReceitaFederal/calculadora-rtc-simples-nacional](https://github.com/ReceitaFederal/calculadora-rtc-simples-nacional),
+licença MIT), sem alteração no código dela. Funciona como a do Regime Regular:
+
+- `calculadora-rtc-sn/Dockerfile` baixa o motor do Simples (`SN_REF`) e gera o
+  banco com o Flyway do repo do Regime Regular (`RTC_REF`, como manda o README
+  da Receita: o repo do Simples não traz o banco). Imagem
+  `ghcr.io/redeg7/calculadora-rtc-sn`, profile `calculadorartcsn` ligado
+  sozinho pelo deploy.
+- Serviço `calculadora-rtc-sn` só na rede interna, porta 8082; o Hub fala com
+  ele por `CALCULADORA_RTC_SN_URL` (`http://calculadora-rtc-sn:8082/api`).
+- Usa o cálculo **não assistido** (`/calculadora/observabilidade/simples-nacional/nao-assistido`):
+  o usuário informa as alíquotas efetivas de CBS/IBS de cada anexo (as do
+  PGDAS-D). O assistido (alíquotas do PGDAS pelo CNPJ) só existe na versão
+  online da Receita. O CBS/IBS do Simples começa em 2027: a tela não aceita
+  data anterior.
+- A lista de cClassTrib da tela vem da calculadora do Regime Regular (se ela
+  estiver fora, o cClassTrib é digitado).
+- Tela em `_tela_calculadora_rtc_sn` (app_conciliacao.py); pedido e resposta
+  em `calculadora_rtc_sn.py` (testes em `tests/test_calculadora_rtc_sn.py`).
+  Atualizar: troque `SN_REF`/`RTC_REF` no Dockerfile, suba `VERSAO`/`NOVIDADES`
+  em `calculadora_rtc_sn.py` e faça o push na `main`.
+- Conferir no VPS: `docker compose ps calculadora-rtc-sn` e
+  `docker compose exec app python -c "import calculadora_rtc_sn as c; print(c.versao())"`.
+
+## Gerador de DANFSe (card dentro do "🧾 RPA Fiscal")
+
+PDF do DANFSe (NT 008 SE/CGNFS-e) a partir do XML da NFS-e nacional, pelo
+gerador oficial da Receita
+([ReceitaFederal/calculadora-rtc-gerador-danfse](https://github.com/ReceitaFederal/calculadora-rtc-gerador-danfse),
+licença MIT), sem alteração no código dela:
+
+- `gerador-danfse/Dockerfile` baixa o repo na versão fixada (`DANFSE_REF`) e
+  compila o serviço Go como o Dockerfile da Receita. Imagem
+  `ghcr.io/redeg7/gerador-danfse`, profile `geradordanfse` ligado sozinho pelo
+  deploy.
+- Serviço `gerador-danfse` só na rede interna, porta 8083; o Hub fala com ele
+  por `GERADOR_DANFSE_URL` (`http://gerador-danfse:8083`): `POST /api/danfse`
+  com o XML (`stc` = 0 válida, 1 substituída, 2 cancelada; `canhoto`).
+- A tela aceita vários XMLs (soltos ou em .zip, até 500 notas, 5 MB por XML) e
+  devolve um PDF ou um .zip com todos. Nada fica gravado: os arquivos ficam só
+  na sessão do usuário.
+- Tela em `_tela_gerador_danfse` (app_conciliacao.py); leitura dos XMLs e .zip
+  em `gerador_danfse.py` (testes em `tests/test_gerador_danfse.py`). Atualizar:
+  troque `DANFSE_REF` no Dockerfile (e `MOTOR` em `gerador_danfse.py`), suba
+  `VERSAO`/`NOVIDADES` e faça o push na `main`.
+- Conferir no VPS: `docker compose ps gerador-danfse` e
+  `docker compose exec app python -c "import gerador_danfse as g; print(g.disponivel())"`.
+- Escritório/usuário com lista de apps restrita só vê o card depois de liberar
+  "Gerador de DANFSe" em Gerenciar Escritórios/Usuários.

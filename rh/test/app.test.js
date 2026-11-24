@@ -397,6 +397,21 @@ test('perfil comportamental: link individual, link geral, permissões e isolamen
   const detalhe = await texto(`/comportamental/perfis/${id}`, ck);
   assert.match(detalhe, /Realizador/);
   assert.match(detalhe, /Aderência a Analista/);
+  assert.match(detalhe, /Habilidades/);
+  assert.match(detalhe, /class="pf-radar"/);
+  const menu = await texto('/comportamental/perfis', ck);
+  assert.match(menu, /Visualizar Profiler[\s\S]*Editar dados Profiler[\s\S]*Baixar relatório Profiler/);
+  const pdf = await get(`/comportamental/perfis/${id}/relatorio.pdf`, ck);
+  assert.strictEqual(pdf.status, 200);
+  assert.strictEqual(pdf.headers.get('content-type'), 'application/pdf');
+  assert.match(pdf.headers.get('content-disposition'), /attachment; filename="profiler-pessoa-perfil\.pdf"/);
+  assert.strictEqual(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
+  assert.match(await texto(`/comportamental/perfis/${id}/editar`, ck), /Colaborador vinculado/);
+  assert.strictEqual((await post(`/comportamental/perfis/${id}/editar`, ck, { nome: '', email: 'x@exemplo.com', vinculo: 'Colaborador', colaborador_id: colab })).status, 422);
+  assert.strictEqual((await post(`/comportamental/perfis/${id}/editar`, ck, { nome: 'Pessoa Perfil', email: 'novo@exemplo.com', vinculo: 'Colaborador', colaborador_id: colab })).status, 302);
+  assert.match(await texto(`/comportamental/perfis/${id}`, ck), /Visualizar Profiler/);
+  const pendente = (await texto('/comportamental/perfis?aba=Aguardando', ck)).match(/\/comportamental\/perfis\/(\d+)">Cand Um/)[1];
+  assert.strictEqual((await get(`/comportamental/perfis/${pendente}/relatorio.pdf`, ck)).status, 409, 'sem resposta não tem relatório');
 
   const aberto = (await texto('/comportamental/enviar', ck)).match(/\/perfil-aberto\/([\w-]+)/)[1];
   assert.strictEqual((await post(`/perfil-aberto/${aberto}`, '', { ...respostas, aceite: '1', nome: 'Cand Aberto', email: 'aberto@exemplo.com' })).status, 200);
@@ -425,6 +440,8 @@ test('perfil comportamental: link individual, link geral, permissões e isolamen
   assert.doesNotMatch(await texto('/dash', leitor), /Perfil Comportamental/);
   const outro = await login('?office=pc2');
   assert.strictEqual((await get(`/comportamental/perfis/${id}`, outro)).status, 404, 'outro escritório não vê');
+  assert.strictEqual((await get(`/comportamental/perfis/${id}/relatorio.pdf`, outro)).status, 404, 'outro escritório não baixa');
+  assert.strictEqual((await get(`/comportamental/perfis/${id}/relatorio.pdf`, leitor)).status, 403);
 });
 
 test('visão geral reúne AVD, PDI e feedbacks', async () => {
@@ -450,4 +467,27 @@ test('visão geral reúne AVD, PDI e feedbacks', async () => {
   assert.ok(fb.includes('Positivo') && !fb.includes('Texto reservado'), 'a lista não mostra o texto do feedback');
   const outro = await login('?office=outro-vg');
   assert.ok(!(await texto('/desenvolvimento?aba=pdi', outro)).includes('Plano atrasado'), 'isolamento entre escritórios');
+});
+
+test('importa o arquivo de PDI da Sólides: um PDI por pessoa, metas sem repetição', async () => {
+  const ck = await login('?office=pdi');
+  await novoColab(ck, { nome: 'Pessoa Pdi Um' });
+  await novoColab(ck, { nome: 'Chefe Pdi' });
+  const cab = 'Colaborador,Título do PDI,Superior Direto,Cargo,Departamento,Data Criação do PDI,Data Início do PDI,Data Entrega do PDI,Status do PDI,Meta,Status da Meta,Entrega da Meta,Competência Vinculada a Meta,Treinamento Vinculado';
+  const linha = (meta, st) => `PESSOA PDI UM,Plano - Pessoa,Chefe Pdi,Analista,Geral,17/09/2026,24/09/2026,28/02/2027,Em andamento,${meta},${st},30/11/2026,Planejamento,`;
+  const csv = [cab, linha('Meta A', 'Em andamento'), linha('Meta A', 'Em andamento'), linha('Meta B', 'Sucesso'), 'Ninguem Cadastrado,PDI X,,,,17/09/2026,24/09/2026,28/02/2027,Em andamento,Meta Z,Em andamento,30/11/2026,,'].join('\n');
+  let t = await texto('/cad/pdi/importar', ck);
+  assert.match(t, /PDIs da Sólides/);
+  t = await (await post('/cad/pdi/importar', ck, { csv })).text();
+  assert.match(t, /Novos<\/small><b>1</);
+  assert.match(t, /Ninguem Cadastrado: não está em Colaboradores/);
+  const lista = await texto('/cad/pdi?aba=Aberto', ck);
+  assert.match(lista, /Plano - Pessoa/);
+  assert.match(lista, /Chefe Pdi/);
+  assert.match(lista, />50</, 'metade das metas concluída');
+  t = await (await post('/cad/pdi/importar', ck, { csv })).text();
+  assert.match(t, /Atualizados<\/small><b>1</, 'reimportar não duplica');
+  const id = lista.match(/\/cad\/pdi\/(\d+)/)[1];
+  const ficha = await texto(`/cad/pdi/${id}`, ck);
+  assert.strictEqual([...ficha.matchAll(/Meta A/g)].length, 1, 'meta repetida entra uma vez');
 });

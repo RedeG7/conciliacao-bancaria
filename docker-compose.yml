@@ -39,6 +39,16 @@ services:
       - DOMINIO_INSSOBRAS=${DOMINIO_INSSOBRAS:-inssobras.redeg7.com}
       # RH (pasta rh/) - o card dele na home passa por /api/sso/rh (api.py)
       - DOMINIO_RH=${DOMINIO_RH:-rh.redeg7.com}
+      # WhatsApp Disparos (pasta whatsapp/) - o card dele na home passa por
+      # /api/sso/whatsapp (api.py)
+      - DOMINIO_WHATSAPP=${DOMINIO_WHATSAPP:-autoenviopro.com.br}
+      # Calculadora RTC - Regime Regular (servico calculadora-rtc abaixo, so
+      # na rede interna) - usada pela tela do RPA Fiscal (calculadora_rtc.py)
+      - CALCULADORA_RTC_URL=http://calculadora-rtc:8080/api/calculadora
+      # Calculadora RTC - Simples Nacional (servico calculadora-rtc-sn abaixo)
+      - CALCULADORA_RTC_SN_URL=http://calculadora-rtc-sn:8082/api
+      # Gerador de DANFSe (servico gerador-danfse abaixo) - gerador_danfse.py
+      - GERADOR_DANFSE_URL=http://gerador-danfse:8083
     depends_on:
       db:
         condition: service_healthy
@@ -79,6 +89,10 @@ services:
       # pelo deploy (deploy.yml)
       - DOMINIO_RH=${DOMINIO_RH:-rh.redeg7.com}
       - RH_SSO_SECRET=${RH_SSO_SECRET:-}
+      # login unico no WhatsApp Disparos (/api/sso/whatsapp) - o segredo e
+      # gerado sozinho no .env pelo deploy (deploy.yml)
+      - DOMINIO_WHATSAPP=${DOMINIO_WHATSAPP:-autoenviopro.com.br}
+      - WHATSAPP_SSO_SECRET=${WHATSAPP_SSO_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -199,6 +213,84 @@ services:
     expose:
       - "3000"
 
+  # WhatsApp Disparos (pasta whatsapp/, monorepo Node vindo do Replit): banco
+  # proprio ("whatsapp") dentro do mesmo Postgres do Hub - criado sozinho pelo
+  # container na primeira subida. A sessao do WhatsApp conectado (Baileys) e
+  # as imagens dos modelos ficam no volume whatsapp_data: sem ele seria
+  # preciso ler o QR Code de novo a cada deploy. Login pelo card do Hub (SSO)
+  # ou usuario/senha proprios. Profile "whatsapp": o deploy liga sozinho
+  # quando a imagem ja pode ser baixada (mesma logica do Marketing).
+  whatsapp:
+    image: ghcr.io/redeg7/whatsapp-disparos:latest
+    profiles: ["whatsapp"]
+    container_name: whatsapp-disparos
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - DATABASE_URL=postgresql://conciliacao:${POSTGRES_PASSWORD}@db:5432/whatsapp
+      - SESSION_SECRET=${WHATSAPP_SESSION_SECRET:-}
+      - SSO_SECRET=${WHATSAPP_SSO_SECRET:-}
+      # senha do primeiro super_admin ("admin"), criado so com o banco vazio
+      - AUTH_PASSWORD=${WHATSAPP_ADMIN_PASSWORD:-}
+      - COOKIE_SECURE=1
+      - TRUST_PROXY=1
+    volumes:
+      - whatsapp_data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "3000"
+
+  # Calculadora RTC - Regime Regular: a calculadora OFICIAL da Receita Federal
+  # (API Java + banco SQLite das tabelas oficiais, montada por
+  # calculadora-rtc/Dockerfile). A API nao tem login, entao fica SO na rede
+  # interna: sem "ports" e sem rota no Caddy - so o Hub (app) fala com ela.
+  # Nome com hifen (nao "_"): o Tomcat da API recusa Host com sublinhado.
+  # Profile "calculadorartc": o deploy liga sozinho quando a imagem ja pode
+  # ser baixada (mesma logica do Marketing, ver deploy.yml).
+  calculadora-rtc:
+    image: ghcr.io/redeg7/calculadora-rtc:latest
+    profiles: ["calculadorartc"]
+    container_name: calculadora-rtc
+    restart: unless-stopped
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xms128m -Xmx512m
+    mem_limit: 768m
+    expose:
+      - "8080"
+
+  # Calculadora RTC - Simples Nacional: a calculadora OFICIAL da Receita para
+  # o Simples (calculadora-rtc-sn/Dockerfile), mesmas regras da de cima: sem
+  # login, so na rede interna. Profile "calculadorartcsn", ligado pelo deploy
+  # quando a imagem ja pode ser baixada.
+  calculadora-rtc-sn:
+    image: ghcr.io/redeg7/calculadora-rtc-sn:latest
+    profiles: ["calculadorartcsn"]
+    container_name: calculadora-rtc-sn
+    restart: unless-stopped
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xms128m -Xmx512m -XX:-UseBASE64Intrinsics
+    mem_limit: 768m
+    expose:
+      - "8082"
+
+  # Gerador de DANFSe: o gerador OFICIAL da Receita que monta o PDF da NFS-e
+  # nacional a partir do XML (gerador-danfse/Dockerfile, servico em Go). Sem
+  # login, so na rede interna. Profile "geradordanfse", ligado pelo deploy
+  # quando a imagem ja pode ser baixada.
+  gerador-danfse:
+    image: ghcr.io/redeg7/gerador-danfse:latest
+    profiles: ["geradordanfse"]
+    container_name: gerador-danfse
+    restart: unless-stopped
+    environment:
+      - SERVER_PORT=8083
+      - LOG_LEVEL=warn
+    mem_limit: 256m
+    expose:
+      - "8083"
+
   caddy:
     image: caddy:2-alpine
     container_name: conciliacao-caddy
@@ -217,6 +309,8 @@ services:
       - DOMINIO_RH=${DOMINIO_RH:-rh.redeg7.com}
       # atalho para a tela de Admissoes do Hub (registro DNS A apontando pro VPS)
       - DOMINIO_ADMISSAO=${DOMINIO_ADMISSAO:-admissao.redeg7.com}
+      # subdominio do WhatsApp Disparos (registro DNS A apontando pro VPS)
+      - DOMINIO_WHATSAPP=${DOMINIO_WHATSAPP:-autoenviopro.com.br}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -232,3 +326,4 @@ volumes:
   marketing_data:
   inssobras_data:
   rh_data:
+  whatsapp_data:

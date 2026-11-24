@@ -33,6 +33,13 @@ import streamlit as st
 
 import admissoes
 import admissoes_canais
+import calculadora_rtc
+import calculadora_rtc_sn
+import gerador_danfse
+import obrigacoes
+import tela_obrigacoes
+import societario
+import tela_societario
 import json
 import auth
 import clientes
@@ -58,7 +65,14 @@ st.markdown(
     # o aviso "Press Enter to submit form"/"Press Enter to apply" que o
     # Streamlit mostra ao digitar num campo tambem e texto fixo em ingles,
     # sem opcao de traducao - escondido pelo mesmo motivo.
-    "[data-testid='InputInstructions']{visibility:hidden; display:none;}</style>",
+    "[data-testid='InputInstructions']{visibility:hidden; display:none;}"
+    # a barra do topo do Streamlit e transparente mas fica por cima de tudo
+    # (z-index alto): em tela cheia de uma tabela, ela cobria o botao de
+    # sair da tela cheia. Cliques passam pela barra; os botoes dela (ex.:
+    # expandir a sidebar) continuam clicaveis.
+    "header[data-testid='stHeader'], header[data-testid='stHeader'] [data-testid='stToolbar']"
+    "{pointer-events:none;}"
+    "header[data-testid='stHeader'] button, header[data-testid='stHeader'] a{pointer-events:auto;}</style>",
     unsafe_allow_html=True,
 )
 
@@ -99,6 +113,8 @@ def _garantir_schema_extra() -> bool:
     rpa_core.garantir_schema()
     admissoes.garantir_schema()
     admissoes_canais.garantir_schema()
+    obrigacoes.garantir_schema()
+    societario.garantir_schema()
     return True
 
 
@@ -1555,28 +1571,6 @@ def _nome_pasta_empresa(empresa: dict) -> str:
     return nome.translate(_CARACTERES_INVALIDOS_PASTA)
 
 
-def _planilha_modelo(modulo_info: dict) -> bytes:
-    """Planilha em branco (só cabeçalho + 1 linha de exemplo) com as colunas
-    esperadas do módulo selecionado, pra baixar e preencher com os dados
-    reais — evita ter que descobrir o nome exato das colunas na mão."""
-    from openpyxl import Workbook
-
-    colunas = [c.replace(" (opcional)", "") for c in modulo_info["colunas_planilha"]]
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Empresas"
-    ws.append(colunas)
-    linha_exemplo = {
-        "Código da Empresa": "68", "CNPJ/CPF": "00.000.000/0001-00",
-        "Razão Social": "Empresa Exemplo LTDA", "Município": modulo_info["municipio_alvo"].split(" / ")[0],
-        "CNPJ": "00.000.000/0001-00", "Inscrição Estadual": "10.123.456-7",
-    }
-    ws.append([linha_exemplo.get(c, "") for c in colunas])
-    buffer = io.BytesIO()
-    wb.save(buffer)
-    return buffer.getvalue()
-
-
 def _gerar_relatorio_geral(execucao: dict, empresas_exec: list[dict]) -> bytes:
     """Relatorio_Geral_Processamento.xlsx: uma linha por empresa/obrigação
     processada na execução, com status, movimento, quantidade de notas
@@ -1681,19 +1675,9 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
             "Baixe, extraia e dê duplo clique no .exe: abre uma janela onde você escolhe o "
             "município, faz login no portal e informa a planilha/pasta — sem precisar de terminal."
         )
-        _pasta_attended = Path(__file__).parent / "attended_worker"
-        _zip_attended = io.BytesIO()
-        with zipfile.ZipFile(_zip_attended, "w", zipfile.ZIP_DEFLATED) as zf:
-            for _nome_arquivo in ["dist/issnet_attended.exe", "LEIA-ME.txt"]:
-                _caminho = _pasta_attended / _nome_arquivo
-                if _caminho.exists():
-                    zf.write(_caminho, arcname=Path(_nome_arquivo).name)
-        st.download_button(
-            "📥 Baixar script de automação (.zip)",
-            _zip_attended.getvalue(),
-            file_name="issnet_attended.zip",
-            type="primary",
-        )
+        # link pra API (endereço fixo) - o arquivo temporário do
+        # st.download_button podia expirar ("não estava disponível no site")
+        st.link_button("📥 Baixar script de automação (.zip)", "/api/attended/download-zip", type="primary")
         st.caption(
             "O .zip traz um .exe pronto — não precisa instalar Python. O Windows pode avisar "
             "'aplicativo desconhecido' (SmartScreen) por não ter certificado de editor; clique em "
@@ -1733,10 +1717,7 @@ def _tela_rpa_manual(modulo_id: str, modulo_info: dict, escritorio_id: str, usua
     competencia_escolhida = f"{_data_competencia.month:02d}/{_data_competencia.year}"
 
     st.caption("Colunas esperadas: " + " · ".join(modulo_info["colunas_planilha"]))
-    st.download_button(
-        "📥 Baixar planilha modelo (.xlsx)", _planilha_modelo(modulo_info),
-        file_name=f"modelo_empresas_{modulo_id}.xlsx", key=f"modelo_manual_{modulo_id}",
-    )
+    st.link_button("📥 Baixar planilha modelo (.xlsx)", f"/api/modelo-planilha/{modulo_id}")
     up_planilha = st.file_uploader(
         "Planilha de empresas (.xlsx)", type=["xlsx"], key=f"up_planilha_manual_{modulo_id}",
     )
@@ -2233,12 +2214,6 @@ def _bloco_programa_nfgo(escritorio_id: str) -> None:
     if not _exe.exists():
         st.warning("O programa ainda não está disponível para download nesta versão do Hub.")
         return
-    _zip = io.BytesIO()
-    with zipfile.ZipFile(_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(_exe, arcname="nfgo_attended.exe")
-        _leia = _pasta_attended / "LEIA-ME_NFGO.txt"
-        if _leia.exists():
-            zf.write(_leia, arcname="LEIA-ME.txt")
     _contato = rpa_core.ultimo_contato_pc(escritorio_id, "sefazgo_nfe")
     if _contato and _contato["segundos"] is not None and _contato["segundos"] <= 90:
         st.success(f"🟢 Programa aberto no PC e aguardando a fila (último contato há {_contato['segundos']} s).")
@@ -2246,9 +2221,11 @@ def _bloco_programa_nfgo(escritorio_id: str) -> None:
         st.caption(f"⚪ Programa do PC sem contato desde {_contato['visto_em']:%d/%m/%Y %H:%M} — abra o RPA NF GO no PC para processar a fila.")
     _versao_arq = _pasta_attended / "VERSION_NFGO"
     _versao = _versao_arq.read_text(encoding="utf-8").strip() if _versao_arq.exists() else ""
-    st.download_button(
+    # link pra API (endereço fixo, aceita retomar) - não monta 25 MB na
+    # memória a cada atualização da tela nem depende do arquivo temporário
+    st.link_button(
         f"📥 Baixar programa RPA NF GO{f' v{_versao}' if _versao else ''} (.zip)",
-        _zip.getvalue(), file_name="rpa_nf_go.zip", type="primary", key="download_programa_nfgo",
+        "/api/attended-nfgo/download-zip", type="primary",
     )
     st.caption(
         "Extraia e dê duplo clique no .exe (cria o atalho \"RPA NF GO\" na Área de Trabalho e se "
@@ -2382,10 +2359,9 @@ def _tela_rpa_hub(modulos: list | None = None, titulo: str = "Hub de RPAs", icon
     st.subheader("Nova execução")
     _eh_nfgo = modulo_id == "sefazgo_nfe"
     st.caption("Colunas esperadas: " + " · ".join(modulo_info["colunas_planilha"]))
-    st.download_button(
-        "📥 Baixar planilha modelo (.xlsx)", _planilha_modelo(modulo_info),
-        file_name=f"modelo_empresas_{modulo_id}.xlsx", key=f"modelo_{modulo_id}",
-    )
+    # link pra API (endereço fixo) - o arquivo temporário do st.download_button
+    # podia expirar entre atualizações da tela ("não estava disponível no site")
+    st.link_button("📥 Baixar planilha modelo (.xlsx)", f"/api/modelo-planilha/{modulo_id}")
     if not cred:
         st.info("Cadastre a credencial do procurador acima antes de enviar uma planilha.")
     else:
@@ -2583,6 +2559,49 @@ _APPS_HOME = [
         "grupo": "rpa_fiscal",
     },
     {
+        "id": "calculadora_rtc",
+        "icone": "🧮",
+        "titulo": "Calculadora RTC — Regime Regular",
+        "descricao": "CBS, IBS e Imposto Seletivo pela calculadora oficial da Receita Federal (LC 214/2025).",
+        "departamento": "Fiscal",
+        "tela": "calculadora_rtc",
+        "grupo": "rpa_fiscal",
+    },
+    {
+        "id": "calculadora_rtc_sn",
+        "icone": "🧮",
+        "titulo": "Calculadora RTC — Simples Nacional",
+        "descricao": "CBS e IBS do optante pelo Simples pela calculadora oficial da Receita Federal (LC 214/2025).",
+        "departamento": "Fiscal",
+        "tela": "calculadora_rtc_sn",
+        "grupo": "rpa_fiscal",
+    },
+    {
+        "id": "gerador_danfse",
+        "icone": "📄",
+        "titulo": "Gerador de DANFSe",
+        "descricao": "PDF do DANFSe a partir do XML da NFS-e nacional, pelo gerador oficial da Receita Federal.",
+        "departamento": "Fiscal",
+        "tela": "gerador_danfse",
+        "grupo": "rpa_fiscal",
+    },
+    {
+        "id": "obrigacoes",
+        "icone": "📊",
+        "titulo": "Controle de Obrigações",
+        "descricao": "Obrigações concluídas, pendentes, em atraso e enviadas ao cliente, por colaborador e empresa — integrado ao Acessórias.",
+        "departamento": "Gestão",
+        "tela": "obrigacoes",
+    },
+    {
+        "id": "societario",
+        "icone": "🏛️",
+        "titulo": "Hub Societário",
+        "descricao": "Processos societários, alvarás e licenças: Kanban, andamento, checklist, lembretes e revisão de minutas por IA.",
+        "departamento": "Societário",
+        "tela": "societario",
+    },
+    {
         "id": "marketing",
         "icone": "📣",
         "titulo": "Marketing & Comercial",
@@ -2630,6 +2649,18 @@ _APPS_HOME = [
         # app separado (pasta rh/, servico "rh" do docker-compose), no
         # subdominio DOMINIO_RH - entra ja logado via /api/sso/rh (api.py).
         "url": "/api/sso/rh" if os.environ.get("DOMINIO_RH") else None,
+    },
+    {
+        "id": "whatsapp",
+        "icone": "💬",
+        "titulo": "WhatsApp Disparos",
+        "descricao": "Campanhas de WhatsApp a partir de planilha, modelos de mensagem, contatos e conversas. Abre em outra aba, já logado.",
+        "departamento": "Marketing & Comercial",
+        "tela": None,
+        # app separado (pasta whatsapp/, servico "whatsapp" do
+        # docker-compose), no subdominio DOMINIO_WHATSAPP - entra ja logado
+        # via /api/sso/whatsapp (api.py).
+        "url": "/api/sso/whatsapp" if os.environ.get("DOMINIO_WHATSAPP") else None,
     },
 ]
 
@@ -2712,6 +2743,8 @@ _DEPARTAMENTOS = {
     # "chip": rotulo curto no card (o nome inteiro vai no filtro de departamentos)
     "Marketing & Comercial": {"icone": "📣", "cor": "#ec4899", "chip": "Comercial"},
     "RDO": {"icone": "🏗️", "cor": "#f59e0b"},
+    "Gestão": {"icone": "📊", "cor": "#14b8a6"},
+    "Societário": {"icone": "🏛️", "cor": "#eab308"},
 }
 _FILTRO_TODOS_DEPTOS = "Todos os departamentos"
 
@@ -2857,7 +2890,7 @@ def _iniciais(nome: str) -> str:
     return (partes[0][0] + partes[-1][0]).upper()
 
 
-_TELAS_APPS = {"conciliacao", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "rpa_folha", "admissoes", "historico",
+_TELAS_APPS = {"conciliacao", "obrigacoes", "societario", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "historico",
                "gerenciar_clientes"}
 
 
@@ -2884,8 +2917,12 @@ def _sidebar_hub(papel_usuario: str) -> None:
             st.session_state.pop("home_busca", None)
             st.session_state.pop("home_depto", None)
             _ir_home("todos")
-        if _nav("Aplicativos", "aplicativos", ":material/apps:", ativo=tela in _TELAS_APPS):
+        if _nav("Aplicativos", "aplicativos", ":material/apps:", ativo=tela in _TELAS_APPS and tela not in ("obrigacoes", "societario")):
             _ir_home("todos")
+        if tela == "obrigacoes":  # com o app aberto, as telas dele entram aqui no menu
+            tela_obrigacoes.menu_lateral(papel_usuario in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO))
+        if tela == "societario":
+            tela_societario.menu_lateral(papel_usuario in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO))
         if _nav("Meus Favoritos", "favoritos", ":material/star:", ativo=tela == "home" and filtro == "favoritos"):
             _ir_home("favoritos")
 
@@ -3107,6 +3144,727 @@ def _tela_grupo_apps(grupo_id: str) -> None:
             _card_app(coluna, app, st.session_state.get("usuario_logado"), set(), com_favorito=False)
 
 
+# ---------------------------------------------------------------- Calculadora RTC
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _rtc_ufs() -> list:
+    return calculadora_rtc.ufs()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _rtc_municipios(sigla_uf: str) -> list:
+    return calculadora_rtc.municipios(sigla_uf)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _rtc_classificacoes(data_iso: str) -> list:
+    return calculadora_rtc.lista_classificacoes(calculadora_rtc.situacoes_cbs_ibs(date.fromisoformat(data_iso)))
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _rtc_classificacoes_detalhe(data_iso: str) -> list:
+    return calculadora_rtc.classificacoes_cbs_ibs(date.fromisoformat(data_iso))
+
+
+def _rtc_moeda(v) -> str:
+    return "R$ " + f"{float(v or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _rtc_pct(v) -> str:
+    return "" if v is None else f"{v:.4f}".rstrip("0").rstrip(".").replace(".", ",") + "%"
+
+
+def _tela_calculadora_rtc() -> None:
+    """Calculadora RTC - Regime Regular: tela sobre a calculadora oficial da
+    Receita Federal (serviço calculadora-rtc do docker-compose). O cálculo é
+    todo da API da Receita; regras de montagem/leitura em calculadora_rtc.py."""
+    _cabecalho_app("🧮", "Calculadora RTC — Regime Regular",
+                   "CBS, IBS e Imposto Seletivo (LC 214/2025) pela calculadora oficial da Receita Federal.",
+                   pai=_PAI_RPA_FISCAL)
+    try:
+        v_rf = calculadora_rtc.versao()
+        st.session_state["rtc_versao_rf"] = v_rf
+    except calculadora_rtc.ErroCalculadora as e:
+        v_rf = None
+        erro_conexao = str(e)
+    rotulo_rf = (f" · calculadora da Receita {v_rf.get('versaoApp', '?')}, tabelas {v_rf.get('versaoDb', '?')} "
+                 f"de {v_rf.get('dataVersaoDb', '?')}") if v_rf else ""
+    with st.expander(f"Versão {calculadora_rtc.VERSAO}{rotulo_rf} — novidades"):
+        if v_rf and v_rf.get("descricaoVersaoDb"):
+            st.caption(f"Tabelas oficiais: {v_rf['descricaoVersaoDb']}")
+        for versao_, data_, itens in calculadora_rtc.NOVIDADES:
+            st.markdown(f"**{versao_}** ({data_})" + chr(10) + chr(10).join(f"- {i}" for i in itens))
+    if not v_rf:
+        st.error(f"A calculadora da Receita não respondeu: {erro_conexao} Tente de novo em alguns minutos; "
+                 "se continuar, avise o suporte (serviço calculadora-rtc na VPS).")
+        return
+
+    aba_calc, aba_base, aba_tab = st.tabs(["Cálculo da operação", "Base de cálculo (NF-e/NFC-e)", "Consultar tabelas"])
+    with aba_calc:
+        _rtc_aba_calculo()
+    with aba_base:
+        _rtc_aba_base()
+    with aba_tab:
+        _rtc_aba_tabelas()
+
+
+def _rtc_aba_calculo() -> None:
+    c_data, c_uf, c_mun = st.columns([1, 1, 2])
+    data_fato = c_data.date_input("Data do fato gerador", value=date.today(), min_value=date(2026, 1, 1),
+                                  max_value=date(2040, 12, 31), format="DD/MM/YYYY", key="rtc_data")
+    lista_ufs = _rtc_ufs()
+    siglas = [u["sigla"] for u in lista_ufs]
+    uf = c_uf.selectbox("UF", siglas, index=siglas.index("GO") if "GO" in siglas else 0, key="rtc_uf")
+    lista_mun = _rtc_municipios(uf)
+    cod_mun = [m["codigo"] for m in lista_mun]
+    nomes_mun = {m["codigo"]: m["nome"] for m in lista_mun}
+    padrao_mun = cod_mun.index(5208707) if 5208707 in cod_mun else 0  # Goiânia
+    municipio = c_mun.selectbox("Município", cod_mun, index=padrao_mun, key=f"rtc_mun_{uf}",
+                                format_func=lambda c: f"{nomes_mun.get(c, c)} ({c})")
+
+    aliquotas = None
+    if calculadora_rtc.aliquotas_obrigatorias(data_fato):
+        sug = calculadora_rtc.aliquotas_sugeridas(data_fato.year)
+        st.info(f"De 2027 em diante a Receita ainda não publicou as alíquotas de referência: informe as alíquotas "
+                f"(o resultado sai como **simulado**). Já vêm preenchidas a CBS de {_rtc_pct(sug[0])} (estimativa "
+                "usada pela Receita nos exemplos) e, em 2027/2028, o IBS de 0,05% + 0,05% previsto na lei.")
+        a1, a2, a3 = st.columns(3)
+        ano = data_fato.year
+        aliquotas = (
+            a1.number_input("CBS (%)", 0.0, 100.0, float(sug[0]), 0.1, format="%.4f", key=f"rtc_cbs_{ano}"),
+            a2.number_input("IBS estadual (%)", 0.0, 100.0, float(sug[1]), 0.05, format="%.4f", key=f"rtc_ibsuf_{ano}"),
+            a3.number_input("IBS municipal (%)", 0.0, 100.0, float(sug[2]), 0.05, format="%.4f", key=f"rtc_ibsmun_{ano}"),
+        )
+        if ano >= 2029 and not (aliquotas[1] or aliquotas[2]):
+            st.warning("Informe as alíquotas do IBS estadual e municipal do ano escolhido.")
+    else:
+        simular = st.toggle("Simular com outra alíquota (ex.: CBS ainda em votação)", key="rtc_simular_2026",
+                            help="Sem isto, vale o que a Receita já cadastrou para 2026: CBS 0,9% e IBS estadual 0,1%.")
+        if simular:
+            st.info("A calculadora da Receita só aceita alíquota informada a partir de 2027. Para simular, o Hub "
+                    "calcula no modo **simulado** da Receita (regras de 01/01/2027) com as alíquotas abaixo; o "
+                    "resultado e o PDF saem marcados como simulação. Imposto Seletivo não entra (começa em 2027).")
+            a1, a2, a3 = st.columns(3)
+            aliquotas = (
+                a1.number_input("CBS (%)", 0.0, 100.0, 0.9, 0.1, format="%.4f", key="rtc_cbs_sim2026"),
+                a2.number_input("IBS estadual (%)", 0.0, 100.0, 0.1, 0.05, format="%.4f", key="rtc_ibsuf_sim2026"),
+                a3.number_input("IBS municipal (%)", 0.0, 100.0, 0.0, 0.05, format="%.4f", key="rtc_ibsmun_sim2026"),
+            )
+        else:
+            st.caption("Em 2026 valem as alíquotas de teste já cadastradas pela Receita (CBS 0,9% e IBS estadual "
+                       "0,1%). O Imposto Seletivo só começa em 2027.")
+    data_calc = calculadora_rtc.data_para_calculo(data_fato, aliquotas is not None)
+    observacao = ""
+    if data_calc != data_fato:
+        observacao = (f"Simulação: fato gerador em {data_fato.strftime('%d/%m/%Y')}, calculado no modo simulado "
+                      f"da Receita (regras de {data_calc.strftime('%d/%m/%Y')}) com CBS {_rtc_pct(aliquotas[0])}, "
+                      f"IBS estadual {_rtc_pct(aliquotas[1])} e IBS municipal {_rtc_pct(aliquotas[2])}.")
+
+    classif = _rtc_classificacoes(data_calc.isoformat())
+    opcoes = [f"{c['cClassTrib']} — {c['descricao'][:110]}" for c in classif]
+    padrao = next((o for o in opcoes if o.startswith("000001")), opcoes[0] if opcoes else None)
+    if "rtc_itens" not in st.session_state:
+        st.session_state["rtc_itens"] = [{"codigo": "", "cClassTrib": padrao, "base": 1000.0,
+                                          "quantidade": None, "unidade": "UN", "is_aliquota": None}]
+    st.markdown("**Itens da operação**")
+    st.caption("O CST sai do cClassTrib (os 3 primeiros dígitos). NCM tem 8 dígitos e NBS, 9. A base é o valor "
+               "do item já sem ICMS, ISS, PIS e Cofins (use a aba Base de cálculo para chegar nela).")
+    itens = st.data_editor(
+        st.session_state["rtc_itens"], num_rows="dynamic", use_container_width=True, key="rtc_editor",
+        column_order=["codigo", "cClassTrib", "base", "quantidade", "unidade", "is_aliquota"],
+        column_config={
+            "codigo": st.column_config.TextColumn("NCM / NBS", help="NCM (8 dígitos) do produto ou NBS (9) do serviço"),
+            "cClassTrib": st.column_config.SelectboxColumn("cClassTrib", options=opcoes, required=True, width="large"),
+            "base": st.column_config.NumberColumn("Base (R$)", min_value=0.0, step=0.01, format="%.2f", required=True),
+            "quantidade": st.column_config.NumberColumn("Qtd.", min_value=0.0),
+            "unidade": st.column_config.TextColumn("Unid.", max_chars=6),
+            "is_aliquota": st.column_config.NumberColumn(
+                "IS ad valorem (%)", min_value=0.0, help="Só para itens com Imposto Seletivo (a partir de 2027)"),
+        },
+    )
+
+    b_calc, b_limpar, _ = st.columns([1, 1, 4])
+    b_limpar.button("Limpar", key="rtc_limpar", icon=":material/restart_alt:", use_container_width=True,
+                    on_click=_rtc_limpar, help="Apaga os itens e o resultado para começar um cálculo novo")
+    if b_calc.button("Calcular", type="primary", key="rtc_calcular", icon=":material/calculate:",
+                     use_container_width=True):
+        if observacao:  # simulação de 2026: sem Imposto Seletivo
+            itens = [{**i, "is_aliquota": None} for i in itens]
+        operacao = calculadora_rtc.montar_operacao(data_calc, uf, municipio, itens, aliquotas)
+        if not operacao["itens"]:
+            st.warning("Preencha ao menos um item com cClassTrib e base de cálculo.")
+        else:
+            try:
+                with st.spinner("Calculando na calculadora da Receita..."):
+                    resposta, aviso = calculadora_rtc.calcular(operacao)
+                st.session_state["rtc_resultado"] = (operacao, resposta, aviso,
+                                                     str(nomes_mun.get(municipio, "")), data_fato, observacao)
+                st.session_state.pop("rtc_xml_gerado", None)
+            except calculadora_rtc.ErroCalculadora as e:
+                st.session_state.pop("rtc_resultado", None)
+                st.error(f"A calculadora recusou a operação: {e}")
+
+    if "rtc_resultado" in st.session_state:
+        _rtc_resultado(*st.session_state["rtc_resultado"])
+
+
+def _rtc_limpar() -> None:
+    """Botão Limpar: volta a tela de cálculo ao início (itens e resultado)."""
+    for chave in ("rtc_resultado", "rtc_xml_gerado", "rtc_itens", "rtc_editor"):
+        st.session_state.pop(chave, None)
+
+
+def _rtc_resultado(operacao: dict, resposta: dict, aviso, local: str = "", data_fato=None,
+                   observacao: str = "") -> None:
+    linhas = calculadora_rtc.linhas_resultado(resposta)
+    tot = calculadora_rtc.totais(resposta)
+    st.markdown('<div class="hh-sep" style="margin:14px 0"></div>', unsafe_allow_html=True)
+    if observacao:
+        st.warning(observacao, icon=":material/science:")
+    if aviso or any(l["situacao"] == calculadora_rtc.ESTADOS["CALCULO_SIMULADO"] for l in linhas):
+        st.caption("Resultado simulado: calculado com as alíquotas informadas, ainda não publicadas oficialmente.")
+    m = st.columns(2)
+    m[0].metric("Base de cálculo", _rtc_moeda(tot["base"]))
+    m[1].metric("Total dos tributos", _rtc_moeda(tot["total"]))
+    m = st.columns(3)
+    m[0].metric("CBS", _rtc_moeda(tot["cbs"]))
+    m[1].metric("IBS", _rtc_moeda(tot["ibs"]),
+                help=f"Estadual {_rtc_moeda(tot['ibs_uf'])} · Municipal {_rtc_moeda(tot['ibs_mun'])}")
+    m[2].metric("Imposto Seletivo", _rtc_moeda(tot["is"]))
+
+    tabela = [{
+        "Item": l["item"], "Situação": l["situacao"], "CST": l["cst"], "cClassTrib": l["cClassTrib"],
+        "Base": _rtc_moeda(l["base"]),
+        "CBS %": _rtc_pct(l["aliq_cbs"]), "Redução %": _rtc_pct(l["red_cbs"]),
+        "CBS efetiva %": _rtc_pct(l["efet_cbs"] if l["efet_cbs"] is not None else l["aliq_cbs"]),
+        "CBS": _rtc_moeda(l["cbs"]),
+        "IBS UF %": _rtc_pct(l["efet_ibs_uf"] if l["efet_ibs_uf"] is not None else l["aliq_ibs_uf"]),
+        "IBS UF": _rtc_moeda(l["ibs_uf"]),
+        "IBS Mun %": _rtc_pct(l["efet_ibs_mun"] if l["efet_ibs_mun"] is not None else l["aliq_ibs_mun"]),
+        "IBS Mun": _rtc_moeda(l["ibs_mun"]),
+        "IS": _rtc_moeda(l["is"]), "Total": _rtc_moeda(l["total"]),
+    } for l in linhas]
+    st.dataframe(tabela, use_container_width=True, hide_index=True)
+    for l in linhas:
+        if l["erros"]:
+            st.warning(f"Item {l['item']}: {l['erros']}")
+    with st.expander("Memória de cálculo"):
+        com_memoria = [l for l in linhas if l["memoria"]]
+        if not com_memoria:
+            st.caption("A calculadora não devolveu memória de cálculo para estes itens.")
+        for l in com_memoria:
+            st.markdown(f"**Item {l['item']}** · cClassTrib {l['cClassTrib']}" + chr(10) + chr(10).join(
+                f"- **{rotulo}:** {texto}" for rotulo, texto in l["memoria"]))
+
+    c_pdf, c_xml = st.columns(2)
+    try:
+        pdf = calculadora_rtc.gerar_pdf(operacao, resposta, local, st.session_state.get("rtc_versao_rf"), aviso,
+                                        st.session_state.get("escritorio_nome") or "", data_fato, observacao)
+        c_pdf.download_button("Baixar relatório (PDF)", pdf, file_name="calculo_rtc.pdf", mime="application/pdf",
+                              use_container_width=True, icon=":material/picture_as_pdf:", key="rtc_pdf")
+    except Exception as e:  # noqa: BLE001 - o PDF não pode derrubar a tela do resultado
+        c_pdf.error(f"Não deu para gerar o PDF: {e}")
+    if any(l["erros"] for l in linhas):
+        c_xml.button("Gerar XML da NF-e", disabled=True, use_container_width=True, key="rtc_xml_off",
+                     help="Corrija os itens com erro para gerar o XML.")
+    elif c_xml.button("Gerar XML da NF-e (grupo de tributação)", use_container_width=True, key="rtc_xml"):
+        try:
+            st.session_state["rtc_xml_gerado"] = calculadora_rtc.gerar_xml_nfe(operacao)
+        except calculadora_rtc.ErroCalculadora as e:
+            st.error(f"Não deu para gerar o XML: {e}")
+    if st.session_state.get("rtc_xml_gerado"):
+        c_xml.download_button("Baixar XML", st.session_state["rtc_xml_gerado"], file_name="grupo_ibscbs_nfe.xml",
+                              mime="application/xml", use_container_width=True, key="rtc_xml_baixar")
+
+
+def _rtc_aba_base() -> None:
+    st.caption("Monta a base de cálculo unificada da NF-e/NFC-e: a calculadora aplica a vigência de cada valor ao "
+               "ano (ex.: PIS e Cofins só existem em 2026; ICMS sai da base até ser extinto) e avisa o que ignorou.")
+    c1, c2, c3 = st.columns(3)
+    ano = c1.number_input("Ano do fato gerador", 2026, 2040, date.today().year, key="rtc_b_ano")
+    tipo = c2.selectbox("Documento", [55, 65], format_func=lambda t: "NF-e (55)" if t == 55 else "NFC-e (65)",
+                        key="rtc_b_tipo")
+    natureza = c3.selectbox("Natureza", ["bem", "servico"], format_func=lambda n: "Bem" if n == "bem" else "Serviço",
+                            key="rtc_b_nat")
+    campos = [("vProd", "Valor dos produtos"), ("vFrete", "Frete"), ("vSeg", "Seguro"), ("vOutro", "Outras despesas"),
+              ("vDesc", "Desconto"), ("vIS", "Imposto Seletivo"), ("vICMS", "ICMS"), ("vFCP", "FCP"),
+              ("vPIS", "PIS"), ("vCOFINS", "Cofins")]
+    valores = {}
+    cols = st.columns(5)
+    for i, (campo, rotulo) in enumerate(campos):
+        valores[campo] = cols[i % 5].number_input(rotulo, 0.0, None, 0.0, 0.01, format="%.2f", key=f"rtc_b_{campo}")
+    if st.button("Calcular base", key="rtc_b_calc", icon=":material/calculate:"):
+        try:
+            r = calculadora_rtc.base_calculo_unificada(
+                {"anoFatoGerador": int(ano), "tipoDocumento": int(tipo), "natureza": natureza, **valores})
+        except calculadora_rtc.ErroCalculadora as e:
+            st.error(f"A calculadora recusou os valores: {e}")
+        else:
+            m = st.columns(3)
+            m[0].metric("Base CBS/IBS (regime regular)", _rtc_moeda(r.get("baseRG")))
+            m[1].metric("Base do Imposto Seletivo", _rtc_moeda(r.get("baseIS")))
+            m[2].metric("Base do Simples Nacional", _rtc_moeda(r.get("baseSN")))
+            for a in r.get("avisos") or []:
+                st.caption(f"⚠️ {a}")
+
+
+def _rtc_aba_tabelas() -> None:
+    data_ref = st.date_input("Data de referência", value=date.today(), min_value=date(2026, 1, 1),
+                             format="DD/MM/YYYY", key="rtc_t_data")
+    st.markdown("**Classificações tributárias (cClassTrib) de CBS/IBS**")
+    busca = st.text_input("Buscar por código ou descrição", key="rtc_t_busca", placeholder="ex.: 200028, educação, cesta")
+    termo = (busca or "").strip().lower()
+    linhas = [{
+        "cClassTrib": c.get("codigo"), "Descrição": c.get("descricao"),
+        "Tratamento": c.get("descricaoTratamentoTributario"), "Tipo de alíquota": c.get("tipoAliquota"),
+        "Redução CBS %": c.get("percentualReducaoCbs"), "Redução IBS UF %": c.get("percentualReducaoIbsUf"),
+        "Redução IBS Mun %": c.get("percentualReducaoIbsMun"), "Crédito na entrada": c.get("creditoOperacaoAntecedente"),
+        "Exige": c.get("nomenclatura"),
+    } for c in _rtc_classificacoes_detalhe(data_ref.isoformat())
+        if not termo or termo in f"{c.get('codigo', '')} {c.get('descricao', '')}".lower()]
+    st.dataframe(linhas, use_container_width=True, hide_index=True, height=360)
+    st.caption(f"{len(linhas)} classificação(ões).")
+
+    st.markdown("**NCM ou NBS**")
+    c_cod, c_btn = st.columns([3, 1], vertical_alignment="bottom")
+    codigo = c_cod.text_input("Código (NCM com 8 dígitos ou NBS com 9)", key="rtc_t_cod")
+    if c_btn.button("Consultar", key="rtc_t_consultar", use_container_width=True):
+        dig = calculadora_rtc.so_digitos(codigo)
+        try:
+            if len(dig) == 8:
+                _rtc_cartao_ncm_nbs("NCM", dig, calculadora_rtc.consultar_ncm(dig, data_ref), data_ref)
+            elif len(dig) == 9:
+                _rtc_cartao_ncm_nbs("NBS", dig, calculadora_rtc.consultar_nbs(dig, data_ref), data_ref)
+            else:
+                st.warning("Digite um NCM (8 dígitos) ou uma NBS (9 dígitos).")
+        except calculadora_rtc.ErroCalculadora as e:
+            st.warning(str(e))
+
+
+def _rtc_cartao_ncm_nbs(tipo: str, codigo: str, dados: dict, data_ref: date) -> None:
+    """Resultado da consulta de NCM/NBS em cartão: código formatado, a
+    hierarquia da classificação (capítulo › ... › subitem) e se o item é
+    tributado pelo Imposto Seletivo."""
+    rotulo = calculadora_rtc.formatar_codigo(tipo, codigo)
+    niveis = calculadora_rtc.niveis_classificacao(dados)
+    titulo = niveis[-1][1] if niveis else "Sem descrição"
+    passos = "".join(
+        f'<div style="display:flex;gap:12px;align-items:flex-start;padding:9px 0;'
+        f'{"" if i == 0 else "border-top:1px solid rgba(255,255,255,0.06);"}">'
+        f'<div style="flex:none;width:96px;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;'
+        f'color:#94a3b8;padding-top:2px">{html.escape(nome)}</div>'
+        f'<div style="flex:1;min-width:0;color:#e2e8f0;font-size:14px;line-height:1.45;'
+        f'padding-left:{min(i, 4) * 10}px">{"" if i == 0 else "› "}{html.escape(texto)}</div></div>'
+        for i, (nome, texto) in enumerate(niveis))
+
+    def selo(txt, ok):
+        cor, fundo = ("#fbbf24", "rgba(251,191,36,0.12)") if ok else ("#4ade80", "rgba(34,224,138,0.12)")
+        return (f'<span style="display:inline-block;font-size:12px;font-weight:600;padding:4px 10px;'
+                f'border-radius:20px;color:{cor};background:{fundo};border:1px solid {cor}55;'
+                f'margin:0 6px 6px 0">{html.escape(txt)}</span>')
+
+    tem_is = bool(dados.get("tributadoPeloImpostoSeletivo"))
+    selos = selo("Tributado pelo Imposto Seletivo" if tem_is else "Fora do Imposto Seletivo", tem_is)
+    if tem_is:
+        if dados.get("temAliquotaAdValorem"):
+            selos += selo("IS com alíquota ad valorem (%)", True)
+        if dados.get("temAliquotaAdRem"):
+            selos += selo("IS com alíquota ad rem (por unidade)", True)
+
+    st.markdown(
+        f'<div style="border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.03);'
+        f'border-radius:16px;padding:18px 20px;margin-top:8px">'
+        f'<div style="display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline;margin-bottom:6px">'
+        f'<span style="font-size:12px;font-weight:700;color:#38bdf8;background:rgba(56,189,248,0.12);'
+        f'border:1px solid rgba(56,189,248,0.35);padding:3px 9px;border-radius:8px">{tipo}</span>'
+        f'<span style="font-size:22px;font-weight:700;color:#f5f7fa;letter-spacing:.02em">{rotulo}</span>'
+        f'<span style="font-size:12.5px;color:#94a3b8">vigente em {data_ref.strftime("%d/%m/%Y")}</span></div>'
+        f'<div style="font-size:16px;font-weight:600;color:#f5f7fa;margin-bottom:12px">{html.escape(titulo)}</div>'
+        f'<div style="margin-bottom:12px">{selos}</div>'
+        f'<div style="font-size:12.5px;font-weight:600;color:#cbd5e1;margin-bottom:2px">Classificação</div>'
+        f'{passos}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------- Calculadora RTC - Simples Nacional
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _rtcsn_atividades(data_iso: str) -> list:
+    return calculadora_rtc_sn.atividades(date.fromisoformat(data_iso))
+
+
+def _rtcsn_opcoes(mapa: dict) -> list:
+    return [f"{k} — {v}" if k else v for k, v in mapa.items()]
+
+
+def _tela_calculadora_rtc_sn() -> None:
+    """Calculadora RTC - Simples Nacional: tela sobre a calculadora oficial
+    da Receita Federal para o Simples (serviço calculadora-rtc-sn do
+    docker-compose). O cálculo é todo da API da Receita; regras de
+    montagem/leitura em calculadora_rtc_sn.py."""
+    _cabecalho_app("🧮", "Calculadora RTC — Simples Nacional",
+                   "CBS e IBS do optante pelo Simples (LC 214/2025) pela calculadora oficial da Receita Federal.",
+                   pai=_PAI_RPA_FISCAL)
+    try:
+        v_rf = calculadora_rtc_sn.versao()
+        st.session_state["rtcsn_versao_rf"] = v_rf
+    except calculadora_rtc.ErroCalculadora as e:
+        v_rf = None
+        erro_conexao = str(e)
+    rotulo_rf = (f" · calculadora da Receita {v_rf.get('versaoApp', '?')}, tabelas {v_rf.get('versaoDb', '?')} "
+                 f"de {v_rf.get('dataVersaoDb', '?')}") if v_rf else ""
+    with st.expander(f"Versão {calculadora_rtc_sn.VERSAO}{rotulo_rf} — novidades"):
+        if v_rf and v_rf.get("descricaoVersaoDb"):
+            st.caption(f"Tabelas oficiais: {v_rf['descricaoVersaoDb']}")
+        for versao_, data_, itens in calculadora_rtc_sn.NOVIDADES:
+            st.markdown(f"**{versao_}** ({data_})" + chr(10) + chr(10).join(f"- {i}" for i in itens))
+    if not v_rf:
+        st.error(f"A calculadora da Receita não respondeu: {erro_conexao} Tente de novo em alguns minutos; "
+                 "se continuar, avise o suporte (serviço calculadora-rtc-sn na VPS).")
+        return
+
+    aba_calc, aba_ativ = st.tabs(["Cálculo da operação", "Atividades do Simples"])
+    with aba_calc:
+        _rtcsn_aba_calculo()
+    with aba_ativ:
+        _rtcsn_aba_atividades()
+
+
+def _rtcsn_aba_calculo() -> None:
+    sn = calculadora_rtc_sn
+    hoje = max(date.today(), sn.INICIO)
+    c_data, c_doc, c_gov = st.columns([1, 1, 1.4])
+    data_fato = c_data.date_input("Data do fato gerador", value=hoje, min_value=sn.INICIO,
+                                  max_value=date(2040, 12, 31), format="DD/MM/YYYY", key="rtcsn_data")
+    tp_doc = c_doc.selectbox("Documento", list(sn.DOCUMENTOS), format_func=sn.DOCUMENTOS.get, key="rtcsn_doc")
+    ente = c_gov.selectbox("Compra governamental", list(sn.ENTE_GOV), format_func=sn.ENTE_GOV.get,
+                           key="rtcsn_gov", help="Adquirente da administração pública (arts. 372 e 473 da LC 214/2025)")
+    nfse = tp_doc == sn.NFSE
+
+    if nfse:
+        r1, r2, r3 = st.columns(3)
+        regime = {
+            "opSimpNac": r1.selectbox("Situação no Simples (opSimpNac)", list(sn.OP_SIMP_NAC),
+                                      format_func=lambda k: f"{k} — {sn.OP_SIMP_NAC[k]}", key="rtcsn_opsn"),
+            "regApIBSCBSSN": r2.selectbox("IBS e CBS (regApIBSCBSSN)", list(sn.REG_AP_IBSCBS),
+                                          format_func=lambda k: f"{k} — {sn.REG_AP_IBSCBS[k]}", key="rtcsn_regib"),
+            "regApTribSN": r3.selectbox("Federais e ISS (regApTribSN)", list(sn.REG_AP_TRIB),
+                                        format_func=lambda k: f"{k} — {sn.REG_AP_TRIB[k]}", key="rtcsn_regtr"),
+        }
+    else:
+        rotulo = st.selectbox("Regime do emitente", list(sn.REGIMES_CRT), key="rtcsn_regime")
+        crt, tp_reg = sn.REGIMES_CRT[rotulo]
+        regime = {"CRT": crt, "tpRegimeIBSCBS": tp_reg}
+    calcula = sn.regime_calcula(regime)
+    sublimite = sn.regime_sublimite(regime)
+
+    catalogo = _rtcsn_atividades(data_fato.isoformat())
+    ativ_doc = sn.atividades_do_documento(catalogo, tp_doc)
+    op_ativ = [sn.rotulo_atividade(a) for a in ativ_doc]
+    try:
+        classif = _rtc_classificacoes(data_fato.isoformat())
+        op_class = [f"{c['cClassTrib']} — {c['descricao'][:110]}" for c in classif]
+    except calculadora_rtc.ErroCalculadora:
+        op_class = []  # calculadora do Regime Regular fora: cClassTrib digitado
+    padrao_class = next((o for o in op_class if o.startswith("000001")), "000001")
+
+    chave_itens = f"rtcsn_itens_{tp_doc}"
+    if chave_itens not in st.session_state:
+        linha = {"atividade": op_ativ[0] if op_ativ else "", "cClassTrib": padrao_class, "codigo": "",
+                 "base": 1000.0}
+        if nfse:
+            linha.update({"tribISSQN": "1 — " + sn.TRIB_ISSQN["1"], "tpRetISSQN": "1 — " + sn.TP_RET_ISSQN["1"],
+                          "tpBM": sn.TP_BM[""]})
+        else:
+            linha["vis"] = 0.0
+        st.session_state[chave_itens] = [linha]
+
+    st.markdown("**Itens da operação**" if not nfse else "**Serviço da NFS-e**")
+    st.caption("A atividade (cAtivSN) define o anexo; a lista mostra só as aceitas no documento escolhido. "
+               + ("A base é o valor do serviço menos os descontos incondicionados (vReceitaBrutaSN). A NFS-e tem "
+                  "um serviço só." if nfse else
+                  "A base é vProd + frete + seguro + outras − desconto, sem o Imposto Seletivo."))
+    colunas = {
+        "atividade": st.column_config.SelectboxColumn("Atividade (cAtivSN)", options=op_ativ, required=True,
+                                                      width="large"),
+        "cClassTrib": (st.column_config.SelectboxColumn("cClassTrib", options=op_class, required=True, width="large")
+                       if op_class else st.column_config.TextColumn("cClassTrib", required=True)),
+        "codigo": st.column_config.TextColumn("NCM / NBS", help="NCM (8 dígitos) do produto ou NBS (9) do serviço"),
+        "base": st.column_config.NumberColumn("Base (R$)", min_value=0.0, step=0.01, format="%.2f", required=True),
+    }
+    if nfse:
+        colunas.update({
+            "tribISSQN": st.column_config.SelectboxColumn("Tributação do ISS", options=_rtcsn_opcoes(sn.TRIB_ISSQN)),
+            "tpRetISSQN": st.column_config.SelectboxColumn("Retenção do ISS", options=_rtcsn_opcoes(sn.TP_RET_ISSQN)),
+            "tpBM": st.column_config.SelectboxColumn("Benefício municipal", options=_rtcsn_opcoes(sn.TP_BM)),
+        })
+    else:
+        colunas["vis"] = st.column_config.NumberColumn("IS já calculado (R$)", min_value=0.0, step=0.01,
+                                                       format="%.2f", help="Imposto Seletivo do item, se houver")
+    itens = st.data_editor(st.session_state[chave_itens], num_rows="fixed" if nfse else "dynamic",
+                           use_container_width=True, key=f"rtcsn_editor_{tp_doc}",
+                           column_order=list(colunas), column_config=colunas)
+    codigos = [sn.codigo_atividade(i.get("atividade")) for i in itens]
+
+    aliquotas, faltando = None, []
+    if not calcula:
+        st.info("Neste regime o optante apura o IBS e a CBS pelo regime regular: a calculadora devolve só a "
+                "receita bruta do Simples, sem tributos (use a Calculadora RTC — Regime Regular para o cálculo).")
+    else:
+        fator_r = None
+        if sn.ATIVIDADE_FATOR_R in codigos:
+            fator_r = st.radio("Fator \"r\" (folha ÷ receita dos últimos 12 meses)", [True, False], horizontal=True,
+                               format_func=lambda v: "28% ou mais — Anexo III" if v else "Menos de 28% — Anexo V",
+                               key="rtcsn_fator_r")
+        anexos = sn.anexos_usados(codigos, catalogo, fator_r)
+        st.markdown("**Alíquotas efetivas do período (PGDAS-D)**")
+        st.caption("Informe, em %, as alíquotas efetivas de CBS e IBS de cada anexo usado pelos itens, como no "
+                   "PGDAS-D do mês. Nos anexos III a V, o par \"sem redistribuição do ISS\" vale quando o ISS não "
+                   "entra no Simples (retido, isento, imune, fora do Simples); vazio, a calculadora usa o par normal."
+                   + (" Com sublimite excedido o IBS sai do Simples: só a CBS é pedida." if sublimite else ""))
+        valores = {}
+        for anexo in anexos:
+            com_iss = anexo in sn.ANEXOS_COM_ISS
+            cols = st.columns(4 if com_iss else 2)
+            v = {"cbs": cols[0].number_input(f"Anexo {anexo} — CBS (%)", 0.0, 100.0, None, 0.01, format="%.4f",
+                                             key=f"rtcsn_{anexo}_cbs")}
+            if not sublimite:
+                v["ibs"] = cols[1].number_input(f"Anexo {anexo} — IBS (%)", 0.0, 100.0, None, 0.01, format="%.4f",
+                                                key=f"rtcsn_{anexo}_ibs")
+            if com_iss:
+                v["cbs_sem"] = cols[2].number_input("CBS sem redistribuição (%)", 0.0, 100.0, None, 0.01,
+                                                    format="%.4f", key=f"rtcsn_{anexo}_cbs_sem")
+                if not sublimite:
+                    v["ibs_sem"] = cols[3].number_input("IBS sem redistribuição (%)", 0.0, 100.0, None, 0.01,
+                                                        format="%.4f", key=f"rtcsn_{anexo}_ibs_sem")
+            valores[anexo] = v
+            if v["cbs"] is None:
+                faltando.append(anexo)
+        aliquotas = sn.montar_aliquotas(valores, fator_r, sublimite)
+
+    chave_res = f"rtcsn_resultado_{tp_doc}"
+    b_calc, b_limpar, _ = st.columns([1, 1, 4])
+    b_limpar.button("Limpar", key="rtcsn_limpar", icon=":material/restart_alt:", use_container_width=True,
+                    on_click=_rtcsn_limpar, help="Apaga os itens, as alíquotas e o resultado para começar de novo")
+    if b_calc.button("Calcular", type="primary", key="rtcsn_calcular", icon=":material/calculate:",
+                     use_container_width=True):
+        operacao = sn.montar_operacao(data_fato, tp_doc, regime, itens, aliquotas, ente or None)
+        if not operacao["itens"]:
+            st.warning("Preencha ao menos um item com cClassTrib e base de cálculo.")
+        elif faltando:
+            st.warning("Informe a alíquota efetiva de CBS do(s) anexo(s) " + ", ".join(faltando) + ".")
+        else:
+            try:
+                with st.spinner("Calculando na calculadora da Receita..."):
+                    st.session_state[chave_res] = (operacao, sn.calcular(operacao))
+            except calculadora_rtc.ErroCalculadora as e:
+                st.session_state.pop(chave_res, None)
+                st.error(f"A calculadora recusou a operação: {e}")
+
+    if chave_res in st.session_state:
+        _rtcsn_resultado(*st.session_state[chave_res])
+
+
+def _rtcsn_limpar() -> None:
+    """Botão Limpar: volta a tela de cálculo ao início (itens, alíquotas e
+    resultado de todos os documentos)."""
+    for chave in [k for k in st.session_state if k.startswith(("rtcsn_itens_", "rtcsn_editor_", "rtcsn_resultado_"))]:
+        st.session_state.pop(chave, None)
+    for anexo in calculadora_rtc_sn.ANEXOS:  # campos de alíquota voltam a ficar vazios
+        for campo in ("cbs", "ibs", "cbs_sem", "ibs_sem"):
+            st.session_state[f"rtcsn_{anexo}_{campo}"] = None
+
+
+def _rtcsn_resultado(operacao: dict, resposta: dict) -> None:
+    sn = calculadora_rtc_sn
+    linhas = sn.linhas_resultado(resposta)
+    tot = sn.totais(resposta)
+    st.markdown('<div class="hh-sep" style="margin:14px 0"></div>', unsafe_allow_html=True)
+    m = st.columns(3)
+    m[0].metric("Receita bruta do Simples", _rtc_moeda(tot["receita"]))
+    m[1].metric("Base de cálculo", _rtc_moeda(tot["base"]))
+    m[2].metric("Total dos tributos", _rtc_moeda(tot["total"]))
+    m = st.columns(3)
+    m[0].metric("CBS", _rtc_moeda(tot["cbs"]))
+    m[1].metric("IBS", _rtc_moeda(tot["ibs"]))
+    nfse = operacao.get("tpDoc") == sn.NFSE
+    if nfse or tot["cbs_pend"] or tot["ibs_pend"]:
+        m[2].metric("Pendente/suspenso", _rtc_moeda(tot["cbs_pend"] + tot["ibs_pend"]),
+                    help=f"CBS {_rtc_moeda(tot['cbs_pend'])} · IBS {_rtc_moeda(tot['ibs_pend'])} "
+                         "(opção pelo Simples pendente ou exportação indireta)")
+    else:
+        m[2].metric("Imposto Seletivo", _rtc_moeda(tot["is"]))
+
+    tabela = [{
+        "Item": l["item"], "Situação": l["situacao"], "Atividade": l["atividade"], "Anexo": l["anexo"],
+        "Par de alíquotas": l["regra"], "Receita bruta": _rtc_moeda(l["receita"]), "Base": _rtc_moeda(l["base"]),
+        "CBS %": _rtc_pct(l["aliq_cbs"]), "CBS": _rtc_moeda(l["cbs"]),
+        "IBS %": _rtc_pct(l["aliq_ibs"]), "IBS": _rtc_moeda(l["ibs"]),
+        "Pendente/suspenso": _rtc_moeda(l["cbs_pend"] + l["ibs_pend"]),
+        "IS": _rtc_moeda(l["is"]), "Total": _rtc_moeda(l["total"]),
+    } for l in linhas]
+    if nfse:
+        for t in tabela:
+            t.pop("IS")
+    st.dataframe(tabela, use_container_width=True, hide_index=True)
+    for a in sn.avisos_gerais(resposta):
+        st.caption(f"⚠️ {a}")
+    for l in linhas:
+        if l["erros"]:
+            st.warning(f"Item {l['item']}: {l['erros']}")
+        if l["motivo"]:
+            st.info(f"Item {l['item']} não calculado: {l['motivo']}")
+        for a in l["avisos"]:
+            st.caption(f"⚠️ Item {l['item']}: {a}")
+    with st.expander("Memória de cálculo"):
+        for l in linhas:
+            if l["memoria"]:
+                st.markdown(f"**Item {l['item']}**" + chr(10) + chr(10).join(
+                    f"- **{rotulo}:** {texto}" for rotulo, texto in l["memoria"]))
+    c_pdf, _ = st.columns(2)
+    try:
+        pdf = sn.gerar_pdf(operacao, resposta, st.session_state.get("rtcsn_versao_rf"),
+                           st.session_state.get("escritorio_nome") or "")
+        c_pdf.download_button("Baixar relatório (PDF)", pdf, file_name="calculo_rtc_simples.pdf",
+                              mime="application/pdf", use_container_width=True, icon=":material/picture_as_pdf:",
+                              key="rtcsn_pdf")
+    except Exception as e:  # noqa: BLE001 - o PDF não pode derrubar a tela do resultado
+        c_pdf.error(f"Não deu para gerar o PDF: {e}")
+
+
+def _rtcsn_aba_atividades() -> None:
+    sn = calculadora_rtc_sn
+    data_ref = st.date_input("Data de referência", value=max(date.today(), sn.INICIO), min_value=sn.INICIO,
+                             format="DD/MM/YYYY", key="rtcsn_t_data")
+    busca = (st.text_input("Buscar por código ou descrição", key="rtcsn_t_busca",
+                           placeholder="ex.: 09, construção, transporte") or "").strip().lower()
+    linhas = [{
+        "Código": a.get("codigo"), "Atividade": a.get("descricao"), "Anexo": a.get("rotuloAnexo"),
+        "Fator \"r\"": "Sim (III ou V)" if a.get("sujeitaFatorR") else "",
+        "Documentos": ", ".join(sn.DOCUMENTOS.get(d, d) for d in a.get("tpDocsAdmissiveis") or []) or "Todos",
+    } for a in _rtcsn_atividades(data_ref.isoformat())
+        if not busca or busca in f"{a.get('codigo', '')} {a.get('descricao', '')}".lower()]
+    st.dataframe(linhas, use_container_width=True, hide_index=True, height=520)
+    st.caption(f"{len(linhas)} atividade(s). O código é o cAtivSN da NT 2026.005 (na DPS da NFS-e, cAtvSN).")
+
+
+# ---------------------------------------------------------------- Gerador de DANFSe
+
+def _tela_gerador_danfse() -> None:
+    """Gerador de DANFSe: PDF da NFS-e nacional pelo gerador oficial da
+    Receita (serviço gerador-danfse do docker-compose). O PDF é todo do
+    gerador; leitura dos XMLs e montagem do .zip em gerador_danfse.py."""
+    gd = gerador_danfse
+    _cabecalho_app("📄", "Gerador de DANFSe",
+                   "PDF da NFS-e nacional (NT 008 SE/CGNFS-e) pelo gerador oficial da Receita Federal.",
+                   pai=_PAI_RPA_FISCAL)
+    with st.expander(f"Versão {gd.VERSAO} · gerador da Receita {gd.MOTOR} — novidades"):
+        for versao_, data_, itens in gd.NOVIDADES:
+            st.markdown(f"**{versao_}** ({data_})" + chr(10) + chr(10).join(f"- {i}" for i in itens))
+    if not gd.disponivel():
+        st.error("O gerador de DANFSe da Receita não respondeu. Tente de novo em alguns minutos; "
+                 "se continuar, avise o suporte (serviço gerador-danfse na VPS).")
+        return
+
+    rodada = st.session_state.setdefault("gdanfse_rodada", 0)
+    enviados = st.file_uploader("XMLs das NFS-e (soltos ou em .zip)", type=["xml", "zip"],
+                                accept_multiple_files=True, key=f"gdanfse_up_{rodada}",
+                                help="XML da NFS-e nacional (raiz NFSe), como baixado do Emissor Nacional ou do "
+                                     f"Portal da NFS-e. Até {gd.MAX_ARQUIVOS} notas por vez.")
+    if not enviados:
+        st.caption("O DANFSe é a representação em PDF da NFS-e do padrão nacional. Ele não substitui a nota: "
+                   "vale o XML assinado.")
+        return
+
+    xmls, avisos = gd.ler_arquivos([(a.name, a.getvalue()) for a in enviados])
+    for a in avisos:
+        st.warning(a)
+    if not xmls:
+        return
+    resumos = [gd.resumo(x) for _, x in xmls]
+
+    c_sit, c_can, c_limpar = st.columns([1.3, 1, 1])
+    sit_padrao = c_sit.selectbox("Situação das notas", list(gd.SITUACOES), format_func=gd.SITUACOES.get,
+                                 key="gdanfse_sit", help="Substituída e Cancelada saem com a marca d'água no PDF. "
+                                                         "Dá para mudar nota a nota na tabela.")
+    canhoto = c_can.toggle("Imprimir o canhoto", value=True, key="gdanfse_canhoto")
+    c_limpar.button("Limpar", key="gdanfse_limpar", icon=":material/restart_alt:", use_container_width=True,
+                    on_click=_gdanfse_limpar, help="Tira os arquivos e o resultado para começar de novo")
+
+    linhas = [{
+        "Gerar": not r["erro"],
+        "Nota": r["numero"],
+        "Emissão": gd.data_br(r["emissao"]),
+        "Prestador": r["prestador"],
+        "Tomador": r["tomador"],
+        "Valor": gd.moeda(r["valor"]),
+        "Situação": gd.SITUACOES[sit_padrao],
+        "Arquivo": nome,
+        "Problema": r["erro"],
+    } for (nome, _), r in zip(xmls, resumos)]
+    editado = st.data_editor(
+        linhas, use_container_width=True, hide_index=True, num_rows="fixed",
+        key=f"gdanfse_tabela_{rodada}_{sit_padrao}",
+        disabled=["Nota", "Emissão", "Prestador", "Tomador", "Valor", "Arquivo", "Problema"],
+        column_config={
+            "Gerar": st.column_config.CheckboxColumn("Gerar", width="small"),
+            "Situação": st.column_config.SelectboxColumn("Situação", options=list(gd.SITUACOES.values()),
+                                                         required=True),
+            "Problema": st.column_config.TextColumn("Problema", width="medium"),
+        },
+    )
+    escolhidas = [i for i, l in enumerate(editado) if l["Gerar"]]
+    st.caption(f"{len(xmls)} XML(s) lido(s) · {len(escolhidas)} marcado(s) para gerar.")
+
+    if st.button("Gerar DANFSe", type="primary", key="gdanfse_gerar", icon=":material/picture_as_pdf:",
+                 disabled=not escolhidas):
+        por_rotulo = {v: k for k, v in gd.SITUACOES.items()}
+        pdfs, erros = [], []
+        barra = st.progress(0.0, text="Gerando no gerador da Receita...")
+        for n, i in enumerate(escolhidas, 1):
+            nome, xml = xmls[i]
+            try:
+                pdf = gd.gerar_pdf(xml, por_rotulo[editado[i]["Situação"]], canhoto)
+                pdfs.append((gd.nome_pdf(resumos[i], nome), pdf))
+            except gd.ErroDanfse as e:
+                erros.append((nome, str(e)))
+                if e.status is None:  # gerador caiu: não adianta tentar as outras
+                    break
+            barra.progress(n / len(escolhidas), text=f"Gerando no gerador da Receita... {n}/{len(escolhidas)}")
+        barra.empty()
+        nomes = gd.nomes_unicos([n for n, _ in pdfs])
+        st.session_state["gdanfse_resultado"] = ([(nm, p) for nm, (_, p) in zip(nomes, pdfs)], erros)
+
+    if "gdanfse_resultado" in st.session_state:
+        _gdanfse_resultado(*st.session_state["gdanfse_resultado"])
+
+
+def _gdanfse_limpar() -> None:
+    st.session_state["gdanfse_rodada"] = st.session_state.get("gdanfse_rodada", 0) + 1
+    st.session_state.pop("gdanfse_resultado", None)
+
+
+def _gdanfse_resultado(pdfs: list, erros: list) -> None:
+    st.markdown('<div class="hh-sep" style="margin:14px 0"></div>', unsafe_allow_html=True)
+    for nome, msg in erros:
+        st.error(f"{nome}: {msg}")
+    if not pdfs:
+        return
+    st.success(f"{len(pdfs)} DANFSe gerado(s).")
+    if len(pdfs) == 1:
+        nome, pdf = pdfs[0]
+        st.download_button(f"Baixar {nome}", pdf, file_name=nome, mime="application/pdf", type="primary",
+                           key="gdanfse_baixar_um", icon=":material/download:")
+        return
+    st.download_button(f"Baixar todos ({len(pdfs)} PDFs em .zip)", gerador_danfse.zip_pdfs(pdfs),
+                       file_name="DANFSe.zip", mime="application/zip", type="primary", key="gdanfse_baixar_zip",
+                       icon=":material/download:")
+    with st.expander("Baixar um por um"):
+        for n, (nome, pdf) in enumerate(pdfs):
+            st.download_button(nome, pdf, file_name=nome, mime="application/pdf", key=f"gdanfse_baixar_{n}")
+
+
 def _tela_logs_acesso() -> None:
     """Ultimos acessos (login no Hub e entrada no Marketing pelo card).
     super_admin_global ve todos os escritorios; admin de escritorio so o
@@ -3190,7 +3948,7 @@ if st.session_state.get("mostrar_trocar_senha"):
 
 # tela atual também na URL (?tela=...): F5 ou uma sessão nova do Streamlit
 # (reconexão, Hub reiniciado no deploy) voltava sempre pra tela inicial
-_TELAS_URL = {"home", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
+_TELAS_URL = {"home", "obrigacoes", "societario", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
               "gerenciar_escritorios", "gerenciar_usuarios", "logs_acesso"}
 if "tela" not in st.session_state:
     _tela_url = st.query_params.get("tela", "home")
@@ -3198,8 +3956,24 @@ if "tela" not in st.session_state:
 if st.session_state["tela"] in _TELAS_URL and st.query_params.get("tela") != st.session_state["tela"]:
     st.query_params["tela"] = st.session_state["tela"]
 
+# Controle de Obrigações sempre abre no Dashboard quando se entra nele vindo
+# de outra tela (lá dentro, a tela escolhida no menu lateral é mantida)
+if st.session_state.get("tela") == "obrigacoes" and st.session_state.get("_tela_anterior") != "obrigacoes":
+    st.session_state["ob_secao"] = "Dashboard"
+# Hub Societário: entrando vindo de outra tela, abre na Visão geral (a não ser
+# que o pop-up de lembrete tenha mandado abrir um processo)
+if st.session_state.get("tela") == "societario" and st.session_state.get("_tela_anterior") != "societario"         and not st.session_state.get("soc_proc"):
+    st.session_state["soc_secao"] = "Visão geral"
+st.session_state["_tela_anterior"] = st.session_state.get("tela")
+
 _estilo_home()
 _sidebar_hub(st.session_state.get("papel_usuario"))
+
+# lembretes do Hub Societário vencidos abrem em pop-up em qualquer tela do Hub
+# (a própria função limita a uma consulta por minuto)
+if "societario" in _apps_permitidos_efetivos(st.session_state.get("escritorio_id"),
+                                              st.session_state.get("usuario_logado")):
+    tela_societario.popup_lembretes(st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado"))
 
 if st.session_state.get("tela") == "home":
     _tela_home()
@@ -3261,6 +4035,55 @@ if st.session_state.get("tela") == "rpa_nfgo":
         subtitulo="Download mensal dos XMLs de NF-e (Entrada e Saída) na SEFAZ-GO.",
         pai=_PAI_RPA_FISCAL,
     )
+    st.stop()
+
+if st.session_state.get("tela") == "calculadora_rtc":
+    if "calculadora_rtc" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    _tela_calculadora_rtc()
+    st.stop()
+
+if st.session_state.get("tela") == "calculadora_rtc_sn":
+    if "calculadora_rtc_sn" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    _tela_calculadora_rtc_sn()
+    st.stop()
+
+if st.session_state.get("tela") == "gerador_danfse":
+    if "gerador_danfse" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    _tela_gerador_danfse()
+    st.stop()
+
+if st.session_state.get("tela") == "obrigacoes":
+    if "obrigacoes" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    tela_obrigacoes.render(_cabecalho_app, st.session_state.get("papel_usuario") in (
+        auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO),
+        eh_global=st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL)
+    st.stop()
+
+if st.session_state.get("tela") == "societario":
+    if "societario" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    tela_societario.render(_cabecalho_app, st.session_state.get("papel_usuario") in (
+        auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO),
+        eh_global=st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL)
     st.stop()
 
 if st.session_state.get("tela") == "rpa_folha":
