@@ -468,3 +468,26 @@ test('visão geral reúne AVD, PDI e feedbacks', async () => {
   const outro = await login('?office=outro-vg');
   assert.ok(!(await texto('/desenvolvimento?aba=pdi', outro)).includes('Plano atrasado'), 'isolamento entre escritórios');
 });
+
+test('importa o arquivo de PDI da Sólides: um PDI por pessoa, metas sem repetição', async () => {
+  const ck = await login('?office=pdi');
+  await novoColab(ck, { nome: 'Pessoa Pdi Um' });
+  await novoColab(ck, { nome: 'Chefe Pdi' });
+  const cab = 'Colaborador,Título do PDI,Superior Direto,Cargo,Departamento,Data Criação do PDI,Data Início do PDI,Data Entrega do PDI,Status do PDI,Meta,Status da Meta,Entrega da Meta,Competência Vinculada a Meta,Treinamento Vinculado';
+  const linha = (meta, st) => `PESSOA PDI UM,Plano - Pessoa,Chefe Pdi,Analista,Geral,17/09/2026,24/09/2026,28/02/2027,Em andamento,${meta},${st},30/11/2026,Planejamento,`;
+  const csv = [cab, linha('Meta A', 'Em andamento'), linha('Meta A', 'Em andamento'), linha('Meta B', 'Sucesso'), 'Ninguem Cadastrado,PDI X,,,,17/09/2026,24/09/2026,28/02/2027,Em andamento,Meta Z,Em andamento,30/11/2026,,'].join('\n');
+  let t = await texto('/cad/pdi/importar', ck);
+  assert.match(t, /PDIs da Sólides/);
+  t = await (await post('/cad/pdi/importar', ck, { csv })).text();
+  assert.match(t, /Novos<\/small><b>1</);
+  assert.match(t, /Ninguem Cadastrado: não está em Colaboradores/);
+  const lista = await texto('/cad/pdi?aba=Aberto', ck);
+  assert.match(lista, /Plano - Pessoa/);
+  assert.match(lista, /Chefe Pdi/);
+  assert.match(lista, />50</, 'metade das metas concluída');
+  t = await (await post('/cad/pdi/importar', ck, { csv })).text();
+  assert.match(t, /Atualizados<\/small><b>1</, 'reimportar não duplica');
+  const id = lista.match(/\/cad\/pdi\/(\d+)/)[1];
+  const ficha = await texto(`/cad/pdi/${id}`, ck);
+  assert.strictEqual([...ficha.matchAll(/Meta A/g)].length, 1, 'meta repetida entra uma vez');
+});
