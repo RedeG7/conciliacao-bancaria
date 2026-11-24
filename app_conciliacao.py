@@ -63,7 +63,14 @@ st.markdown(
     # o aviso "Press Enter to submit form"/"Press Enter to apply" que o
     # Streamlit mostra ao digitar num campo tambem e texto fixo em ingles,
     # sem opcao de traducao - escondido pelo mesmo motivo.
-    "[data-testid='InputInstructions']{visibility:hidden; display:none;}</style>",
+    "[data-testid='InputInstructions']{visibility:hidden; display:none;}"
+    # a barra do topo do Streamlit e transparente mas fica por cima de tudo
+    # (z-index alto): em tela cheia de uma tabela, ela cobria o botao de
+    # sair da tela cheia. Cliques passam pela barra; os botoes dela (ex.:
+    # expandir a sidebar) continuam clicaveis.
+    "header[data-testid='stHeader'], header[data-testid='stHeader'] [data-testid='stToolbar']"
+    "{pointer-events:none;}"
+    "header[data-testid='stHeader'] button, header[data-testid='stHeader'] a{pointer-events:auto;}</style>",
     unsafe_allow_html=True,
 )
 

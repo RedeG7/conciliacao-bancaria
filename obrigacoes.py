@@ -61,8 +61,12 @@ log = logging.getLogger(__name__)
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.10"
+VERSAO = "1.11"
 NOVIDADES = [
+    ("1.11", "24/11/2026", [
+        "Correção: em tela cheia, o botão de sair da tela cheia das tabelas não respondia (a barra invisível "
+        "do topo cobria o botão). Vale para todas as tabelas do Hub.",
+    ]),
     ("1.10", "24/11/2026", [
         "Competência no formato dia-mês-ano (01-08-2026) nas listas, no detalhe da obrigação, no Excel e no "
         "quadro \"Por competência\" do Dashboard (o Acessórias manda 2026-08-01).",
