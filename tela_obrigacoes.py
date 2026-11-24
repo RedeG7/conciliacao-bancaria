@@ -91,6 +91,11 @@ def _carregar(escritorio_id: str, ini: date, fim: date, versao: int) -> list[dic
     return ob.carregar(escritorio_id, ini, fim)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _inativos(escritorio_id: str, versao: int) -> set[str]:
+    return ob.colaboradores_inativos(escritorio_id)
+
+
 def _versao_dados() -> int:
     return st.session_state.get("ob_versao_dados", 0)
 
@@ -155,7 +160,18 @@ def render(cabecalho: Callable, pode_configurar: bool, eh_global: bool = False) 
     empresas = sorted({(l.get("cnpj") or l.get("empresa_id_externo") or "", l.get("empresa_nome") or "")
                        for l in linhas_todas if l.get("cnpj") or l.get("empresa_id_externo")}, key=lambda e: e[1])
     pessoas = sorted({p for l in linhas_todas for p in (l.get("resp_prazo"), l.get("resp_entrega")) if p})
-    f1, f2, f3, f4, f5, f6 = st.columns([1.1, 1.6, 1.3, 1.6, 1, 1.2])
+    # colaboradores marcados como "Inativo" no Acessórias saem das listas de pessoas (as obrigações deles
+    # continuam nos totais e na lista de Obrigações)
+    inativos = _inativos(esc, _versao_dados()) & set(pessoas)
+    mostrar_inativos = bool(inativos) and st.toggle(
+        f"Mostrar colaboradores inativos ({len(inativos)})", key="ob_mostrar_inativos",
+        help="Usuários marcados como Inativo no Acessórias. Desligado, eles não aparecem no filtro de "
+             "colaborador, no gráfico de produtividade, na tela Colaboradores e nos relatórios.")
+    ocultar = set() if mostrar_inativos else inativos
+    pessoas = [p for p in pessoas if p not in ocultar]
+    if st.session_state.get("ob_f_pessoa") in ocultar:
+        st.session_state["ob_f_pessoa"] = "Todos"
+    f1, f2, f3, f4, f5, f6 =st.columns([1.1, 1.6, 1.3, 1.6, 1, 1.2])
     depto = f1.selectbox("Departamento", ["Todos"] + deptos, key="ob_f_depto")
     empresa = f2.selectbox("Empresa", [""] + [e[0] for e in empresas], key="ob_f_empresa",
                            format_func=lambda c: "Todas" if not c else
@@ -180,19 +196,19 @@ def render(cabecalho: Callable, pode_configurar: bool, eh_global: bool = False) 
 
     st.markdown(f"### {secao}")
     if secao == "Dashboard":
-        _aba_dashboard(linhas)
+        _aba_dashboard(linhas, ocultar)
     elif secao == "Obrigações":
         _aba_lista(esc, linhas)
     elif secao == "Empresas":
         _aba_empresas(esc, linhas)
     elif secao == "Colaboradores":
-        _aba_colaboradores(linhas)
+        _aba_colaboradores(linhas, ocultar)
     elif secao == "Envios":
         _aba_envios(linhas)
     elif secao == "Alertas":
         _aba_alertas(linhas, hoje, ult)
     elif secao == "Relatórios":
-        _aba_relatorios(esc, linhas, filtros_txt)
+        _aba_relatorios(esc, linhas, filtros_txt, ocultar)
 
 
 # seções do módulo no menu lateral (abaixo do menu do Hub): (nome, ícone)
@@ -309,7 +325,7 @@ def _barras(itens: list[tuple[str, int, int, int]], vazio: str) -> str:
     return "".join(saida)
 
 
-def _aba_dashboard(linhas: list[dict]) -> None:
+def _aba_dashboard(linhas: list[dict], ocultar: set) -> None:
     ind = ob.indicadores(linhas)
     _kpis(ind)
     c1, c2 = st.columns(2)
@@ -318,7 +334,7 @@ def _aba_dashboard(linhas: list[dict]) -> None:
                     unsafe_allow_html=True)
     with c2:
         top = [(g["colaborador"], g["no_prazo"], g["com_atraso"], g["pendentes"] + g["atrasadas"])
-               for g in ob.por_colaborador(linhas)[:8]]
+               for g in ob.por_colaborador(linhas, ocultar)[:8]]
         st.markdown(f'<div class="ob-card"><h4>Produtividade por colaborador</h4>'
                     f'{_barras(top, "Sem responsáveis no período")}</div>', unsafe_allow_html=True)
     st.write("")
@@ -455,8 +471,8 @@ def _aba_empresas(esc: str, linhas: list[dict]) -> None:
             _detalhe(esc, s2["id"])
 
 
-def _aba_colaboradores(linhas: list[dict]) -> None:
-    grupos = ob.por_colaborador(linhas)
+def _aba_colaboradores(linhas: list[dict], ocultar: set) -> None:
+    grupos = ob.por_colaborador(linhas, ocultar)
     st.caption("Atribuídas = responsável pelo prazo no Acessórias. Entregas feitas = quem concluiu a entrega "
                "(pode ser outra pessoa). Tempo de execução: indisponível (a API não informa o início).")
     if not grupos:
@@ -510,18 +526,19 @@ def _aba_alertas(linhas: list[dict], hoje: date, ult) -> None:
                                             "Responsável (prazo)"], 380)
 
 
-def _aba_relatorios(esc: str, linhas: list[dict], filtros_txt: str) -> None:
+def _aba_relatorios(esc: str, linhas: list[dict], filtros_txt: str, ocultar: set) -> None:
     st.caption(f"Os relatórios saem com os filtros escolhidos acima ({filtros_txt}).")
     nome_base = f"obrigacoes_{datetime.now(ob.FUSO).strftime('%Y%m%d_%H%M')}"
     c1, c2 = st.columns(2)
-    c1.download_button("Baixar Excel", ob.gerar_excel(linhas, "Controle de Obrigações", filtros_txt),
+    c1.download_button("Baixar Excel", ob.gerar_excel(linhas, "Controle de Obrigações", filtros_txt, ocultar),
                        file_name=f"{nome_base}.xlsx", icon=":material/table_view:", use_container_width=True,
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="ob_xlsx")
     # o PDF gerado vale só para o escritório e os filtros com que foi gerado
-    chave = (esc, filtros_txt, len(linhas))
+    chave = (esc, filtros_txt, len(linhas), frozenset(ocultar))
     if c2.button("Gerar PDF", icon=":material/picture_as_pdf:", use_container_width=True, key="ob_pdf_gerar"):
         nome_esc = auth.carregar_escritorios().get(esc, {}).get("nome") or st.session_state.get("escritorio_nome") or ""
-        st.session_state["ob_pdf"] = (chave, ob.gerar_pdf(linhas, "Controle de Obrigações", nome_esc, filtros_txt))
+        st.session_state["ob_pdf"] = (chave, ob.gerar_pdf(linhas, "Controle de Obrigações", nome_esc, filtros_txt,
+                                                          ocultar))
     pdf = st.session_state.get("ob_pdf")
     if pdf and pdf[0] == chave:
         c2.download_button("Baixar PDF", pdf[1], file_name=f"{nome_base}.pdf",

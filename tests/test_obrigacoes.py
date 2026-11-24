@@ -150,6 +150,18 @@ def test_por_colaborador():
     assert g["Ana Paula"]["atrasadas"] == 1 and g["Ana Paula"]["taxa"] == 50.0
     assert g["Carlos Silva"]["com_atraso"] == 1 and g["Carlos Silva"]["entregas_feitas"] == 1
     assert g["Sem responsável"]["pendentes"] == 1
+    # inativo oculto: some da lista de pessoas, os números dos outros não mudam
+    sem_carlos = {x["colaborador"]: x for x in ob.por_colaborador(_linhas(), ocultar={"Carlos Silva"})}
+    assert "Carlos Silva" not in sem_carlos and sem_carlos["Ana Paula"] == g["Ana Paula"]
+
+
+def test_conector_usuarios_traz_ativos_e_inativos():
+    abrir, pedidos = _falso([[{"id": "17", "nome": "Ana Paula", "email": "a@x", "status": "Ativo"}], [],
+                             [{"id": "42", "nome": "Maria Santos", "email": None}], []])
+    c = ob.ConectorAcessorias("tok", abrir=abrir, dormir=lambda s: None)
+    us = {u["nome"]: u["ativo"] for u in c.usuarios()}
+    assert us == {"Ana Paula": True, "Maria Santos": False}  # sem "status", vale o filtro pedido (Status=1)
+    assert [parse_qs(urlparse(p.full_url).query)["Status"] for p in pedidos] == [["0"], ["0"], ["1"], ["1"]]
 
 
 def test_alertas_e_filtros():
@@ -332,6 +344,18 @@ def test_sincronizacao_com_erro_nao_mexe_nos_dados(banco):
     assert ob.listar_sincronizacoes(banco)[0]["status"] == ob.SINC_ERRO
 
 
+def test_colaboradores_inativos(banco):
+    with ob.auth.conectar() as conn:
+        ob._gravar_cadastros(conn, banco, [], [
+            {"id_externo": "1", "nome": "Ana Paula", "email": None, "ativo": True},
+            {"id_externo": "2", "nome": "Maria Santos", "email": None, "ativo": False},
+            {"id_externo": "3", "nome": "José", "email": None, "ativo": False},
+            {"id_externo": "4", "nome": "José", "email": None, "ativo": True},  # homônimo ativo: continua aparecendo
+        ], [])
+        conn.commit()
+    assert ob.colaboradores_inativos(banco) == {"Maria Santos"}
+
+
 def test_config_cifra_o_token(banco):
     ob.salvar_config(banco, "dp_admin", True, "segredo-123", 6, 1)
     cfg = ob.obter_config(banco)
@@ -346,7 +370,7 @@ def test_config_cifra_o_token(banco):
 
 def test_conector_respeita_intervalo_entre_chamadas():
     esperas, t = [], [0.0]
-    abrir, _ = _falso([[{"id": "1", "nome": "A", "email": "a@x", "status": "Ativo"}], []])
+    abrir, _ = _falso([[{"id": "1", "nome": "A", "email": "a@x", "status": "Ativo"}], [], []])
     c = ob.ConectorAcessorias("tok", abrir=abrir, dormir=esperas.append, relogio=lambda: t[0])
     usuarios = c.usuarios()
     assert usuarios[0]["ativo"] is True

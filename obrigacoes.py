@@ -61,8 +61,13 @@ log = logging.getLogger(__name__)
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.8"
+VERSAO = "1.9"
 NOVIDADES = [
+    ("1.9", "24/11/2026", [
+        "Colaboradores marcados como Inativo no Acessórias não aparecem mais no filtro de colaborador, no "
+        "gráfico de produtividade, na tela Colaboradores nem nos relatórios. As obrigações deles continuam "
+        "nos totais e na lista. A chave \"Mostrar colaboradores inativos\" traz eles de volta.",
+    ]),
     ("1.8", "23/11/2026", [
         "Nomes de obrigações, empresas e departamentos cadastrados com código HTML no Acessórias (ex.: um "
         "link para o e-CAC) aparecem só com o texto, como \"ECAC\" — na lista, nos relatórios e no Excel/PDF.",
@@ -438,10 +443,12 @@ def indicadores(linhas: list[dict]) -> dict:
     }
 
 
-def por_colaborador(linhas: list[dict]) -> list[dict]:
+def por_colaborador(linhas: list[dict], ocultar: Iterable[str] = ()) -> list[dict]:
     """Produtividade: atribuídas = responsável pelo prazo; entregas
     realizadas = quem fez a entrega no Acessórias (podem ser pessoas
-    diferentes). Taxa = concluídas no prazo / atribuídas com prazo."""
+    diferentes). Taxa = concluídas no prazo / atribuídas com prazo.
+    `ocultar` = nomes que não entram na lista (colaboradores inativos)."""
+    ocultar = set(ocultar)
     grupos: dict[str, dict] = {}
 
     def _g(nome: str) -> dict:
@@ -468,6 +475,8 @@ def por_colaborador(linhas: list[dict]) -> list[dict]:
             _g(l["envio_por"])["envios"] += 1
     saida = []
     for g in grupos.values():
+        if g["colaborador"] in ocultar:
+            continue
         g["taxa"] = _pct(g["no_prazo"], g.pop("_com_prazo"))
         saida.append(g)
     return sorted(saida, key=lambda g: (g["colaborador"] == "Sem responsável", -g["concluidas"], -g["atribuidas"],
@@ -626,10 +635,20 @@ class ConectorAcessorias:
                 for d in (dados if isinstance(dados, list) else [dados]) if isinstance(d, dict) and d.get("ID")]
 
     def usuarios(self) -> list[dict]:
-        return [{"id_externo": _texto(u.get("id")), "nome": _texto(u.get("nome")),
-                 "email": _texto(u.get("email")) or None,
-                 "ativo": _sem_acento(u.get("status")) != "inativo"}
-                for u in self._paginas("users/ListAll", {}) if u.get("id")]
+        """Ativos e inativos. A documentação não diz se a lista sem filtro traz
+        os inativos, então pede as duas (Status=0 ativos, Status=1 inativos).
+        O campo "status" do usuário ("Ativo"/"Inativo") manda quando vier."""
+        saida: dict[str, dict] = {}
+        for filtro, ativo_pelo_filtro in (("0", True), ("1", False)):
+            for u in self._paginas("users/ListAll", {"Status": filtro}):
+                if not u.get("id"):
+                    continue
+                status = _sem_acento(u.get("status"))
+                saida[_texto(u.get("id"))] = {
+                    "id_externo": _texto(u.get("id")), "nome": _texto(u.get("nome")),
+                    "email": _texto(u.get("email")) or None,
+                    "ativo": status != "inativo" if status else ativo_pelo_filtro}
+        return list(saida.values())
 
     def empresas(self) -> list[dict]:
         saida = []
@@ -1194,6 +1213,16 @@ def listar_colaboradores(escritorio_id: str) -> list[dict]:
                             (escritorio_id,)).fetchall()
 
 
+def colaboradores_inativos(escritorio_id: str) -> set[str]:
+    """Nomes dos usuários marcados como "Inativo" no Acessórias (cadastro
+    atualizado na carga completa). Se um nome também pertence a um usuário
+    ativo, não entra: na dúvida, a pessoa continua aparecendo."""
+    ativos, inativos = set(), set()
+    for c in listar_colaboradores(escritorio_id):
+        (ativos if c["ativo"] else inativos).add(c["nome"])
+    return inativos - ativos
+
+
 # ---------------------------------------------------------------- relatórios
 
 def linha_relatorio(l: dict) -> dict:
@@ -1218,7 +1247,7 @@ def linha_relatorio(l: dict) -> dict:
     }
 
 
-def gerar_excel(linhas: list[dict], titulo: str, filtros: str = "") -> bytes:
+def gerar_excel(linhas: list[dict], titulo: str, filtros: str = "", ocultar: Iterable[str] = ()) -> bytes:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -1264,13 +1293,14 @@ def gerar_excel(linhas: list[dict], titulo: str, filtros: str = "") -> bytes:
         "No prazo": g["no_prazo"], "Com atraso": g["com_atraso"], "Em atraso": g["atrasadas"],
         "Pendentes": g["pendentes"], "Entregas feitas": g["entregas_feitas"], "Envios": g["envios"],
         "Cumprimento (%)": g["taxa"] if g["taxa"] is not None else "—",
-    } for g in por_colaborador(linhas)])
+    } for g in por_colaborador(linhas, ocultar)])
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
 
 
-def gerar_pdf(linhas: list[dict], titulo: str, escritorio: str = "", filtros: str = "") -> bytes:
+def gerar_pdf(linhas: list[dict], titulo: str, escritorio: str = "", filtros: str = "",
+              ocultar: Iterable[str] = ()) -> bytes:
     """Relatório gerencial (A4 deitado): indicadores, colaboradores e a
     lista de pendências/atrasos (até 400 linhas). PyMuPDF a partir de HTML."""
     import html as _h
@@ -1298,7 +1328,7 @@ def gerar_pdf(linhas: list[dict], titulo: str, escritorio: str = "", filtros: st
     colab = "".join(
         f"<tr><td>{esc(g['colaborador'])}</td><td>{g['atribuidas']}</td><td>{g['concluidas']}</td>"
         f"<td>{g['no_prazo']}</td><td>{g['atrasadas']}</td><td>{g['pendentes']}</td><td>{g['envios']}</td>"
-        f"<td>{_pc(g['taxa'])}</td></tr>" for g in por_colaborador(linhas)[:60])
+        f"<td>{_pc(g['taxa'])}</td></tr>" for g in por_colaborador(linhas, ocultar)[:60])
     abertas_html = "".join(
         f"<tr><td>{esc(l.get('empresa_nome') or '')}</td><td>{esc(l.get('nome') or '')}</td>"
         f"<td>{esc(l.get('departamento_nome') or '')}</td><td>{data_br(l.get('prazo'))}</td>"
