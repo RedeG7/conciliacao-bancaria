@@ -104,6 +104,12 @@ def test_normalizar_sem_config_tem_chave_estavel_e_prazo_pelo_atraso():
     assert a["prazo"] == date(2026, 11, 20) and a["resp_prazo"] is None
 
 
+def test_competencia_em_dia_mes_ano():
+    assert ob.competencia_br("2026-08-01") == "01-08-2026"
+    assert ob.competencia_br("2026-10-02") == "02-10-2026"
+    assert ob.competencia_br("10/2026") == "10/2026" and ob.competencia_br(None) == ""
+
+
 def test_nome_com_html_vira_so_texto():
     ecac = "<a href='https://cav.receita.fazenda.gov.br/autenticacao/login'> ECAC</a>"
     assert ob.sem_html(ecac) == "ECAC"

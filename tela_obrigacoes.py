@@ -361,7 +361,7 @@ def _aba_dashboard(linhas: list[dict], ocultar: set) -> None:
     if len(comp) > 1:
         st.write("")
         st.markdown("**Por competência**")
-        st.dataframe([{"Competência": g["grupo"], "Total": g["total"], "Concluídas": g["concluidas"],
+        st.dataframe([{"Competência": ob.competencia_br(g["grupo"]), "Total": g["total"], "Concluídas": g["concluidas"],
                        "Pendentes": g["pendentes"], "Em atraso": g["atrasadas"],
                        "Cumprimento": _pct(g["cumprimento"])} for g in sorted(comp, key=lambda g: g["grupo"])],
                      hide_index=True, use_container_width=True)
@@ -421,7 +421,7 @@ def _detalhe(esc: str, entrega_id: int) -> None:
                     + (f" por {d['envio_por']}" if d.get("envio_por") else "")
                     + (f"  \n{d['guia_lida']}" if d.get("guia_lida") else ""))
         st.caption(f"Status no Acessórias: {d.get('status_origem') or '—'} · Competência: "
-                   f"{d.get('competencia') or '—'} · Departamento: {d.get('departamento_nome') or '—'} · "
+                   f"{ob.competencia_br(d.get('competencia')) or '—'} · Departamento: {d.get('departamento_nome') or '—'} · "
                    f"CNPJ: {ob.formatar_cnpj(d.get('cnpj'))} · Multa: "
                    f"{'sim' if d.get('multa') else 'não' if d.get('multa') is False else '—'}")
         if d["eventos"]:

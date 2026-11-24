@@ -61,8 +61,12 @@ log = logging.getLogger(__name__)
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.9"
+VERSAO = "1.10"
 NOVIDADES = [
+    ("1.10", "24/11/2026", [
+        "Competência no formato dia-mês-ano (01-08-2026) nas listas, no detalhe da obrigação, no Excel e no "
+        "quadro \"Por competência\" do Dashboard (o Acessórias manda 2026-08-01).",
+    ]),
     ("1.9", "24/11/2026", [
         "Colaboradores marcados como Inativo no Acessórias não aparecem mais no filtro de colaborador, no "
         "gráfico de produtividade, na tela Colaboradores nem nos relatórios. As obrigações deles continuam "
@@ -232,6 +236,15 @@ def ler_data_hora(valor) -> Optional[datetime]:
             continue
     d = ler_data(texto)
     return datetime(d.year, d.month, d.day, tzinfo=FUSO) if d else None
+
+
+def competencia_br(valor) -> str:
+    """Competência para exibir: o Acessórias manda "2026-08-01"; na tela vira
+    "01-08-2026". Outro formato (ex.: "10/2026") fica como veio."""
+    t = _texto(valor)
+    if len(t) == 10 and t[4] == "-" and t[7] == "-" and t.replace("-", "").isdigit():
+        return f"{t[8:10]}-{t[5:7]}-{t[0:4]}"
+    return t
 
 
 def data_br(valor) -> str:
@@ -1232,7 +1245,7 @@ def linha_relatorio(l: dict) -> dict:
         "Obrigação": l.get("nome") or "",
         "Tipo": TIPOS.get(l.get("tipo") or "", "Não informado"),
         "Departamento": l.get("departamento_nome") or "Não informado",
-        "Competência": l.get("competencia") or "",
+        "Competência": competencia_br(l.get("competencia")),
         "Prazo": data_br(l.get("prazo")),
         "Entrega": data_br(l.get("dt_entrega")),
         "Situação": SITUACOES[l["situacao"]],
