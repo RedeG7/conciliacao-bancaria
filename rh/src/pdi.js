@@ -11,7 +11,9 @@ const M = require('./metricas');
 const P = require('./comportamental');
 const PF = require('./profiler');
 const { hoje } = require('./datas');
-const { html, raw, n2, dataBr, layout, tabela, select, campo } = require('./views');
+const { html, raw, dataBr, layout, tabela, select, campo } = require('./views');
+// notas da AVD são guardadas de 0 a 10; no PDI aparecem de 0 a 100
+const n100 = v => String(Math.round(Number(v) * 10));
 
 const ABAS = [['Aberto', 'PDIs abertos'], ['Em revisão', 'PDIs em revisão'], ['Finalizado', 'PDIs finalizados']];
 const META_FEITA = ['sucesso', 'concluido', 'concluida', 'finalizado', 'finalizada', 'atingida'];
@@ -73,7 +75,7 @@ function rotas(app, { h, exige, auditar, flash, falha }) {
         html`<a class="pdi-titulo" href="/pdi/${p.id}" title="${p.titulo}">${p.titulo}</a>`, c.nome('colaborador', sup) || html`<span class="desc">-</span>`,
         html`<span class="pdi-prazo">${dataBr(p.inicio)}<br><span class="${atrasado(p, dia) ? 'pdi-atraso' : ''}">até ${dataBr(p.entrega)}</span></span>`,
         barraProg(p.progresso ?? progressoDe(metasDe(p)) ?? 0),
-        avd ? html`<span class="pdi-avd" title="${c.nome('ciclo', avd.ciclo_id)}: desempenho ${n2(avd.desempenho)}">${n2(avd.desempenho)}<small>${c.nome('ciclo', avd.ciclo_id)}</small></span>` : html`<span class="pdi-chip vazio">Não informada</span>`,
+        avd ? html`<span class="pdi-avd" title="${c.nome('ciclo', avd.ciclo_id)}: desempenho ${n100(avd.desempenho)} de 100">${n100(avd.desempenho)}<small>${c.nome('ciclo', avd.ciclo_id)}</small></span>` : html`<span class="pdi-chip vazio">Não informada</span>`,
         menu(req, p)];
     });
     const qs = o => new URLSearchParams({ ...Object.fromEntries(Object.entries(q).filter(([, v]) => typeof v === 'string' && v)), ...o }).toString();
@@ -131,11 +133,11 @@ function rotas(app, { h, exige, auditar, flash, falha }) {
       const daArea = c.listar('avaliacao').filter(a => a.ciclo_id === avd.ciclo_id && a.colaborador_id !== p.colaborador_id && c.registro('colaborador', a.colaborador_id)?.departamento_id === pe.departamento_id);
       const mediaArea = comp => { const v = daArea.flatMap(a => (a.itens || []).filter(i => sem(i.competencia) === sem(comp)).map(i => i.nota)); return v.length ? M.media(v) : null; };
       const menores = [...itens].sort((a, b) => a.nota - b.nota).slice(0, 4);
-      const barra = (v, cls) => html`<div class="pdi-dupla ${cls}"><i style="width:${(v / 10) * 100}%"></i><b>${n2(v)}</b></div>`;
+      const barra = (v, cls) => html`<div class="pdi-dupla ${cls}"><i style="width:${(v / 10) * 100}%"></i><b>${n100(v)}</b></div>`;
       blocoAvd = html`<small class="desc">${c.nome('ciclo', avd.ciclo_id)}${avd.data_resposta ? ` · respondido em ${dataBr(avd.data_resposta)}` : ''}</small>
-        <div class="pdi-notas"><div><span>Desempenho</span><b>${n2(avd.desempenho)}</b></div><div><span>Comportamento</span><b>${avd.potencial == null ? '-' : n2(avd.potencial)}</b></div></div>
+        <div class="pdi-notas"><div><span>Desempenho</span><b>${n100(avd.desempenho)}</b></div><div><span>Comportamento</span><b>${avd.potencial == null ? '-' : n100(avd.potencial)}</b></div></div>
         ${menores.length ? html`${menores.map(i => { const ma = mediaArea(i.competencia); return html`<div class="pdi-comp"><span title="${i.competencia}">${i.competencia}</span>${barra(i.nota, 'pessoa')}${ma == null ? '' : barra(ma, 'area')}</div>`; })}
-          <p class="desc pf-legenda-radar"><i class="pdi-l-pessoa"></i> ${nome.split(' ')[0]} <i class="pdi-l-area"></i> Média da área · escala de 0 a 10</p>` : html`<p class="desc">A avaliação não traz notas por competência.</p>`}
+          <p class="desc pf-legenda-radar"><i class="pdi-l-pessoa"></i> ${nome.split(' ')[0]} <i class="pdi-l-area"></i> Média da área · escala de 0 a 100</p>` : html`<p class="desc">A avaliação não traz notas por competência.</p>`}
         ${ve(req.papel, 'pessoal') ? html`<a class="botao sec pequeno" href="/avaliacoes/${avd.id}">Ver todas as competências na avaliação</a>` : ''}`;
     }
 
