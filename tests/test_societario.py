@@ -1,0 +1,305 @@
+"""Testes do Hub Societário (societario.py): regras de alerta, licenças,
+resumo do dia, filtros, Word, revisão da IA (com cliente falso) e, com
+TEST_DATABASE_URL, o fluxo no banco (processo, andamento, lembrete,
+licença, revisão) separado por escritório."""
+
+from __future__ import annotations
+
+import json
+from datetime import date, datetime, timedelta
+from types import SimpleNamespace
+
+import pytest
+
+import societario as so
+
+HOJE = date(2026, 11, 24)  # terça-feira
+
+
+def _dt(d: date) -> datetime:
+    return datetime(d.year, d.month, d.day, 10, 0, tzinfo=so.FUSO)
+
+
+def _proc(**kw):
+    base = {"id": 1, "numero": "SOC-2026-00001", "tipo": "alteracao", "empresa_nome": "Empresa Alfa LTDA",
+            "cnpj": "11222333000181", "responsavel": "ana", "prioridade": "normal", "etapa": so.EM_ELABORACAO,
+            "orgao": "Junta Comercial (JUCEG)", "protocolo": None, "descricao": "Saída de sócio",
+            "previsao": HOJE + timedelta(days=20), "proxima_verificacao": None, "proxima_acao": None,
+            "criado_em": _dt(HOJE - timedelta(days=1)), "ultima_movimentacao": _dt(HOJE - timedelta(days=1))}
+    base.update(kw)
+    return base
+
+
+def test_versao_bate_com_as_novidades():
+    assert so.NOVIDADES[0][0] == so.VERSAO
+    versoes = [tuple(int(x) for x in v.split(".")) for v, _, _ in so.NOVIDADES]
+    assert versoes == sorted(versoes, reverse=True) and len(set(versoes)) == len(versoes)
+
+
+def test_cadastros_coerentes():
+    for t in so.TIPOS.values():
+        assert t["checklist"] and t["orgao"] in so.ORGAOS
+    assert set(so.ETAPAS_KANBAN) <= set(so.ETAPAS)
+    assert so.numero_processo(2026, 48) == "SOC-2026-00048"
+    assert so.formatar_cnpj("11222333000181") == "11.222.333/0001-81"
+
+
+def test_dias_uteis():
+    sexta = date(2026, 11, 20)
+    assert so.dias_uteis_entre(sexta, date(2026, 11, 23)) == 1  # sábado e domingo não contam
+    assert so.dias_uteis_entre(sexta, date(2026, 11, 24)) == 2
+    assert so.dias_uteis_entre(HOJE, HOJE) == 0
+
+
+def test_processo_em_dia_sem_alerta():
+    assert so.alertas_processo(_proc(), HOJE) == []
+
+
+def test_exigencia_e_atraso_sao_criticos():
+    al = so.alertas_processo(_proc(etapa=so.EM_EXIGENCIA, previsao=HOJE - timedelta(days=2)), HOJE)
+    tipos = {a["tipo"]: a["nivel"] for a in al}
+    assert tipos["exigencia"] == so.CRITICO and tipos["atrasado"] == so.CRITICO
+
+
+def test_prazo_proximo_conforme_regras():
+    assert [a["tipo"] for a in so.alertas_processo(_proc(previsao=HOJE + timedelta(days=3)), HOJE)] == ["prazo"]
+    assert so.alertas_processo(_proc(previsao=HOJE + timedelta(days=6)), HOJE) == []
+    # regra do escritório: avisa a partir de 10 dias
+    assert so.alertas_processo(_proc(previsao=HOJE + timedelta(days=6)), HOJE, {"prazo_avisos": [10, 2]})
+
+
+def test_protocolado_verificar_a_cada_dois_dias_uteis():
+    p = _proc(etapa=so.PROTOCOLADO, ultima_movimentacao=_dt(date(2026, 11, 20)))  # sexta
+    assert so.alertas_processo(p, date(2026, 11, 23)) == []  # segunda: 1 dia útil
+    assert [a["tipo"] for a in so.alertas_processo(p, HOJE)] == ["protocolo"]
+
+
+def test_verificacao_marcada_e_parado():
+    p = _proc(proxima_verificacao=HOJE, proxima_acao="Ligar na Junta")
+    al = so.alertas_processo(p, HOJE)
+    assert al[0]["tipo"] == "verificar" and "Ligar na Junta" in al[0]["texto"]
+    parado = so.alertas_processo(_proc(ultima_movimentacao=_dt(HOJE - timedelta(days=5))), HOJE)
+    assert [a["tipo"] for a in parado] == ["parado"]
+
+
+def test_encerrado_nao_alerta():
+    p = _proc(etapa=so.CONCLUIDO, previsao=HOJE - timedelta(days=30), ultima_movimentacao=_dt(HOJE - timedelta(days=40)))
+    assert so.alertas_processo(p, HOJE) == []
+
+
+def test_licencas():
+    assert so.situacao_licenca(None, HOJE) == so.SEM_VALIDADE
+    assert so.situacao_licenca(HOJE - timedelta(days=1), HOJE) == so.VENCIDA
+    assert so.situacao_licenca(HOJE + timedelta(days=21), HOJE) == so.A_VENCER
+    assert so.situacao_licenca(HOJE + timedelta(days=200), HOJE) == so.VIGENTE
+    lic = {"id": 9, "tipo": "alvara", "empresa_nome": "Beta", "validade": HOJE + timedelta(days=5)}
+    al = so.alertas_licenca(lic, HOJE)
+    assert al and al[0]["nivel"] == so.CRITICO  # dentro do menor aviso (7 dias)
+    assert so.alertas_licenca({**lic, "validade": HOJE + timedelta(days=60)}, HOJE)[0]["nivel"] == so.ATENCAO
+    assert so.alertas_licenca({**lic, "validade": HOJE + timedelta(days=120)}, HOJE) == []
+    # com renovação aberta, a licença para de alertar
+    assert so.alertas_licenca({**lic, "processo_renovacao_id": 3}, HOJE) == []
+
+
+def test_painel_indicadores_e_resumo():
+    procs = [_proc(id=1, etapa=so.EM_EXIGENCIA), _proc(id=2, etapa=so.CONCLUIDO, tipo="alvara"),
+             _proc(id=3, etapa=so.PROTOCOLADO, responsavel="bruno"), _proc(id=4, etapa=so.CANCELADO)]
+    lics = [{"id": 1, "tipo": "bombeiros", "empresa_nome": "Beta", "validade": HOJE - timedelta(days=4),
+             "responsavel": "ana"}]
+    painel = so.painel_alertas(procs, lics, HOJE)
+    assert painel[0]["nivel"] == so.CRITICO
+    ind = so.indicadores(procs, HOJE)
+    assert (ind["total"], ind["andamento"], ind["pendencias"], ind["concluidos"]) == (3, 2, 1, 1)
+    res = so.resumo_do_dia(procs, lics, 2, HOJE, usuario="ana")
+    chaves = {k: n for k, _, n in res["itens"]}
+    assert chaves["exigencia"] == 1 and chaves["licenca"] == 1 and chaves["revisao"] == 2
+    assert "protocolo" not in chaves  # o protocolado é do bruno
+    assert res["prioridade"].startswith("resolver as exigências")
+
+
+def test_filtrar():
+    procs = [_proc(id=1), _proc(id=2, empresa_nome="Padaria Gama", cnpj="99888777000166", tipo="alvara",
+                                responsavel="bruno", protocolo="GOJ2600012345")]
+    assert [p["id"] for p in so.filtrar(procs, busca="padaria")] == [2]
+    assert [p["id"] for p in so.filtrar(procs, busca="99.888")] == [2]
+    assert [p["id"] for p in so.filtrar(procs, busca="GOJ26")] == [2]
+    assert [p["id"] for p in so.filtrar(procs, tipos=["alteracao"])] == [1]
+    assert [p["id"] for p in so.filtrar(procs, responsavel="bruno")] == [2]
+
+
+def test_regras_do_escritorio_por_cima_das_padrao():
+    rg = so.regras({"sem_movimentacao_dias": 7, "desconhecida": 1, "prazo_avisos": []})
+    assert rg["sem_movimentacao_dias"] == 7 and rg["prazo_avisos"] == so.REGRAS_PADRAO["prazo_avisos"]
+    assert "desconhecida" not in rg
+
+
+def test_word_ida_e_volta():
+    texto = "CLÁUSULA TERCEIRA – Capital social\nO capital social será de R$ 100.000,00 & <quotas>."
+    docx = so.gerar_docx(texto)
+    assert so.extrair_texto("minuta.docx", docx) == texto
+    assert so.extrair_texto("a.txt", "Sócio A: R$ 60.000,00".encode("cp1252")) == "Sócio A: R$ 60.000,00"
+    with pytest.raises(ValueError):
+        so.extrair_texto("a.xls", b"x")
+
+
+def test_normalizar_e_aplicar_sugestoes():
+    res = so.normalizar_revisao({"resumo": "ok", "apontamentos": [
+        {"categoria": "ortografia", "gravidade": "baixa", "titulo": "Erro", "trecho": "sosio", "problema": "p",
+         "sugestao": "sócio", "fundamento": ""},
+        {"categoria": "inventada", "gravidade": "alta", "titulo": "Capital", "trecho": "R$ 90.000,00",
+         "problema": "p", "sugestao": "R$ 100.000,00", "fundamento": "CC art. 1.055"},
+        {"categoria": "ausente", "gravidade": "media", "titulo": "Foro", "trecho": "", "problema": "p",
+         "sugestao": "Fica eleito o foro…", "fundamento": ""},
+    ]})
+    aps = res["apontamentos"]
+    assert [a["gravidade"] for a in aps] == ["alta", "media", "baixa"]  # mais grave primeiro
+    assert aps[0]["categoria"] == "outro" and all(a["status"] == "pendente" for a in aps)
+    for a in aps:
+        a["status"] = "aceito" if a["titulo"] != "Erro" else "recusado"
+    novo, manuais = so.aplicar_sugestoes("O sosio integraliza R$ 90.000,00.", aps)
+    assert novo == "O sosio integraliza R$ 100.000,00."  # recusado não muda
+    assert [a["titulo"] for a in manuais] == ["Foro"]
+
+
+class _StreamFalso:
+    def __init__(self, resp, pedidos, kw):
+        self.resp, pedidos_ = resp, pedidos
+        pedidos_.append(kw)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get_final_message(self):
+        return self.resp
+
+
+def _cliente_falso(resp):
+    pedidos = []
+    msgs = SimpleNamespace(stream=lambda **kw: _StreamFalso(resp, pedidos, kw))
+    return SimpleNamespace(beta=SimpleNamespace(messages=msgs)), pedidos
+
+
+def test_revisar_minuta_com_cliente_falso():
+    pytest.importorskip("anthropic")
+    saida = {"resumo": "Capital não fecha.", "apontamentos": [
+        {"categoria": "capital", "gravidade": "alta", "titulo": "Quotas × capital", "trecho": "R$ 30.000,00",
+         "problema": "Soma 90 mil, capital 100 mil.", "sugestao": "R$ 40.000,00", "fundamento": "CC art. 1.055"}]}
+    resp = SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=json.dumps(saida))])
+    cliente, pedidos = _cliente_falso(resp)
+    res = so.revisar_minuta("Sócio A: R$ 60.000,00\nSócio B: R$ 30.000,00", "", "alteracao", "ctx", cliente=cliente)
+    assert res["apontamentos"][0]["categoria"] == "capital"
+    kw = pedidos[0]
+    assert kw["model"] == so.MODELO_IA and kw["output_config"]["format"]["schema"] == so.SCHEMA_REVISAO
+    assert "<documento>" in kw["messages"][0]["content"] and "Alteração contratual" in kw["messages"][0]["content"]
+    recusa = SimpleNamespace(stop_reason="refusal", content=[])
+    with pytest.raises(so.ErroIA):
+        so.revisar_minuta("texto", "", cliente=_cliente_falso(recusa)[0])
+    with pytest.raises(so.ErroIA):
+        so.revisar_minuta("   ", "chave")
+
+
+# ---------------------------------------------------------------- banco
+
+
+@pytest.fixture
+def banco(db):
+    import auth
+    so.garantir_schema()
+    with auth.conectar() as conn:
+        conn.execute("TRUNCATE soc_revisoes, soc_lembretes, soc_anexos, soc_checklist, soc_andamentos, soc_licencas, "
+                     "soc_processos, soc_sequencia, soc_config RESTART IDENTITY CASCADE")
+        conn.commit()
+    return True
+
+
+def test_fluxo_do_processo_no_banco(banco):
+    from conftest import ESC_A, ESC_B
+    p = so.criar_processo(ESC_A, "dp_admin", "alteracao", "Empresa Alfa LTDA", "11.222.333/0001-81",
+                          responsavel="dp_user", descricao="Saída do sócio B")
+    p2 = so.criar_processo(ESC_A, "dp_admin", "alvara", "Padaria Gama")
+    pb = so.criar_processo(ESC_B, "agente_b", "baixa", "Mercado Beta")
+    ano = datetime.now(so.FUSO).year
+    assert (p["numero"], p2["numero"], pb["numero"]) == (f"SOC-{ano}-00001", f"SOC-{ano}-00002", f"SOC-{ano}-00001")
+    assert p["cnpj"] == "11222333000181" and p["orgao"] == "Junta Comercial (JUCEG)"
+
+    d = so.obter_processo(ESC_A, p["id"])
+    assert len(d["checklist"]) == len(so.TIPOS["alteracao"]["checklist"])
+    assert d["andamentos"][0]["titulo"] == "Abertura do processo"
+    assert so.obter_processo(ESC_B, p["id"]) is None  # outro escritório não vê
+
+    amanha = datetime.now(so.FUSO).date() + timedelta(days=1)
+    so.registrar_andamento(ESC_A, p["id"], "dp_user", "Protocolado na JUCEG", etapa=so.PROTOCOLADO,
+                           protocolo="GOJ2600012345", proxima_acao="Verificar retorno", proxima_verificacao=amanha)
+    so.marcar_item(ESC_A, d["checklist"][0]["id"], "dp_user", True)
+    d = so.obter_processo(ESC_A, p["id"])
+    assert d["etapa"] == so.PROTOCOLADO and d["protocolo"] == "GOJ2600012345"
+    assert d["andamentos"][1]["etapa_antes"] == so.A_INICIAR and d["andamentos"][1]["etapa_depois"] == so.PROTOCOLADO
+    assert d["checklist"][0]["feito"] and d["checklist"][0]["feito_por"] == "dp_user"
+    lemb = d["lembretes"][0]
+    assert lemb["usuario"] == "dp_user" and lemb["texto"] == "Verificar retorno"
+
+    # o lembrete só aparece no pop-up quando a hora chega
+    assert so.lembretes_vencidos(ESC_A, "dp_user") == []
+    depois = datetime.combine(amanha, datetime.min.time(), so.FUSO) + timedelta(hours=9)
+    assert [l["id"] for l in so.lembretes_vencidos(ESC_A, "dp_user", depois)] == [lemb["id"]]
+    so.adiar_lembrete(ESC_A, lemb["id"], depois + timedelta(hours=1))
+    assert so.lembretes_vencidos(ESC_A, "dp_user", depois) == []
+    so.concluir_lembrete(ESC_A, lemb["id"])
+    assert so.listar_lembretes(ESC_A, "dp_user") == []
+
+    # concluir o processo cancela os lembretes pendentes e limpa a próxima verificação
+    so.criar_lembrete(ESC_A, "dp_user", depois, "outro", "dp_admin", p["id"])
+    so.registrar_andamento(ESC_A, p["id"], "dp_user", "", etapa=so.CONCLUIDO)
+    d = so.obter_processo(ESC_A, p["id"])
+    assert d["concluido_em"] and d["proxima_verificacao"] is None
+    assert all(l["status"] != "pendente" for l in d["lembretes"])
+
+    so.atualizar_dados(ESC_A, p2["id"], "dp_admin", prioridade="urgente", responsavel="dp_user")
+    d2 = so.obter_processo(ESC_A, p2["id"])
+    assert d2["prioridade"] == "urgente" and d2["andamentos"][-1]["titulo"] == "Dados do processo alterados"
+    assert {x["id"] for x in so.listar_processos(ESC_A)} == {p["id"], p2["id"]}
+
+
+def test_licenca_e_renovacao(banco):
+    from conftest import ESC_A
+    lid = so.salvar_licenca(ESC_A, "dp_admin", {"empresa_nome": "Padaria Gama", "tipo": "bombeiros",
+                                                 "validade": date(2026, 12, 1), "responsavel": "dp_user",
+                                                 "numero": "CERCON 123"})
+    p = so.abrir_renovacao(ESC_A, lid, "dp_admin")
+    assert p["tipo"] == "bombeiros" and p["licenca_id"] == lid and p["responsavel"] == "dp_user"
+    lic = so.listar_licencas(ESC_A)[0]
+    assert lic["processo_renovacao_id"] == p["id"] and lic["renovacao_numero"] == p["numero"]
+    with pytest.raises(ValueError):
+        so.abrir_renovacao(ESC_A, lid, "dp_admin")
+    so.arquivar_licenca(ESC_A, lid)
+    assert so.listar_licencas(ESC_A) == []
+
+
+def test_revisao_finalizada_vira_anexo(banco):
+    from conftest import ESC_A
+    p = so.criar_processo(ESC_A, "dp_admin", "alteracao", "Empresa Alfa LTDA")
+    texto = "Sócio A: R$ 60.000,00\nSócio B: R$ 30.000,00"
+    rid = so.criar_revisao(ESC_A, "dp_admin", "Alteração.docx", texto, p["id"])
+    so.gravar_resultado(ESC_A, rid, so.normalizar_revisao({"resumo": "x", "apontamentos": [
+        {"categoria": "capital", "gravidade": "alta", "titulo": "Quotas", "trecho": "R$ 30.000,00",
+         "problema": "p", "sugestao": "R$ 40.000,00", "fundamento": "f"}]}))
+    assert so.revisoes_pendentes(ESC_A) == 1
+    so.decidir_apontamento(ESC_A, rid, 1, "aceito")
+    out = so.finalizar_revisao(ESC_A, rid, "dp_admin")
+    assert "R$ 40.000,00" in out["texto"] and out["aceitos"] == 1
+    assert so.obter_revisao(ESC_A, rid)["texto_original"] == texto  # original intacto
+    d = so.obter_processo(ESC_A, p["id"])
+    an = [a for a in d["anexos"] if a["categoria"] == "minuta_revisada"]
+    assert an and so.extrair_texto(an[0]["nome"], so.baixar_anexo(ESC_A, an[0]["id"])["conteudo"]) == out["texto"]
+    assert so.revisoes_pendentes(ESC_A) == 0
+    assert any(a["titulo"] == "Revisão validada pelo responsável" for a in d["andamentos"])
+
+
+def test_regras_salvas(banco):
+    from conftest import ESC_A
+    rg = so.salvar_regras(ESC_A, "dp_admin", {"sem_movimentacao_dias": 5, "protocolado_dias_uteis": 3,
+                                              "prazo_avisos": "7, 2", "licenca_avisos": "60,30"})
+    assert so.obter_regras(ESC_A) == rg and rg["prazo_avisos"] == [7, 2] and rg["licenca_avisos"] == [60, 30]

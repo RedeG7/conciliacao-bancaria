@@ -38,6 +38,8 @@ import calculadora_rtc_sn
 import gerador_danfse
 import obrigacoes
 import tela_obrigacoes
+import societario
+import tela_societario
 import json
 import auth
 import clientes
@@ -112,6 +114,7 @@ def _garantir_schema_extra() -> bool:
     admissoes.garantir_schema()
     admissoes_canais.garantir_schema()
     obrigacoes.garantir_schema()
+    societario.garantir_schema()
     return True
 
 
@@ -2591,6 +2594,14 @@ _APPS_HOME = [
         "tela": "obrigacoes",
     },
     {
+        "id": "societario",
+        "icone": "🏛️",
+        "titulo": "Hub Societário",
+        "descricao": "Processos societários, alvarás e licenças: Kanban, andamento, checklist, lembretes e revisão de minutas por IA.",
+        "departamento": "Societário",
+        "tela": "societario",
+    },
+    {
         "id": "marketing",
         "icone": "📣",
         "titulo": "Marketing & Comercial",
@@ -2733,6 +2744,7 @@ _DEPARTAMENTOS = {
     "Marketing & Comercial": {"icone": "📣", "cor": "#ec4899", "chip": "Comercial"},
     "RDO": {"icone": "🏗️", "cor": "#f59e0b"},
     "Gestão": {"icone": "📊", "cor": "#14b8a6"},
+    "Societário": {"icone": "🏛️", "cor": "#eab308"},
 }
 _FILTRO_TODOS_DEPTOS = "Todos os departamentos"
 
@@ -2878,7 +2890,7 @@ def _iniciais(nome: str) -> str:
     return (partes[0][0] + partes[-1][0]).upper()
 
 
-_TELAS_APPS = {"conciliacao", "obrigacoes", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "historico",
+_TELAS_APPS = {"conciliacao", "obrigacoes", "societario", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "historico",
                "gerenciar_clientes"}
 
 
@@ -2905,10 +2917,12 @@ def _sidebar_hub(papel_usuario: str) -> None:
             st.session_state.pop("home_busca", None)
             st.session_state.pop("home_depto", None)
             _ir_home("todos")
-        if _nav("Aplicativos", "aplicativos", ":material/apps:", ativo=tela in _TELAS_APPS and tela != "obrigacoes"):
+        if _nav("Aplicativos", "aplicativos", ":material/apps:", ativo=tela in _TELAS_APPS and tela not in ("obrigacoes", "societario")):
             _ir_home("todos")
         if tela == "obrigacoes":  # com o app aberto, as telas dele entram aqui no menu
             tela_obrigacoes.menu_lateral(papel_usuario in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO))
+        if tela == "societario":
+            tela_societario.menu_lateral(papel_usuario in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO))
         if _nav("Meus Favoritos", "favoritos", ":material/star:", ativo=tela == "home" and filtro == "favoritos"):
             _ir_home("favoritos")
 
@@ -3934,7 +3948,7 @@ if st.session_state.get("mostrar_trocar_senha"):
 
 # tela atual também na URL (?tela=...): F5 ou uma sessão nova do Streamlit
 # (reconexão, Hub reiniciado no deploy) voltava sempre pra tela inicial
-_TELAS_URL = {"home", "obrigacoes", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
+_TELAS_URL = {"home", "obrigacoes", "societario", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
               "gerenciar_escritorios", "gerenciar_usuarios", "logs_acesso"}
 if "tela" not in st.session_state:
     _tela_url = st.query_params.get("tela", "home")
@@ -3946,10 +3960,20 @@ if st.session_state["tela"] in _TELAS_URL and st.query_params.get("tela") != st.
 # de outra tela (lá dentro, a tela escolhida no menu lateral é mantida)
 if st.session_state.get("tela") == "obrigacoes" and st.session_state.get("_tela_anterior") != "obrigacoes":
     st.session_state["ob_secao"] = "Dashboard"
+# Hub Societário: entrando vindo de outra tela, abre na Visão geral (a não ser
+# que o pop-up de lembrete tenha mandado abrir um processo)
+if st.session_state.get("tela") == "societario" and st.session_state.get("_tela_anterior") != "societario"         and not st.session_state.get("soc_proc"):
+    st.session_state["soc_secao"] = "Visão geral"
 st.session_state["_tela_anterior"] = st.session_state.get("tela")
 
 _estilo_home()
 _sidebar_hub(st.session_state.get("papel_usuario"))
+
+# lembretes do Hub Societário vencidos abrem em pop-up em qualquer tela do Hub
+# (a própria função limita a uma consulta por minuto)
+if "societario" in _apps_permitidos_efetivos(st.session_state.get("escritorio_id"),
+                                              st.session_state.get("usuario_logado")):
+    tela_societario.popup_lembretes(st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado"))
 
 if st.session_state.get("tela") == "home":
     _tela_home()
@@ -4047,6 +4071,17 @@ if st.session_state.get("tela") == "obrigacoes":
         st.session_state["tela"] = "home"
         st.rerun()
     tela_obrigacoes.render(_cabecalho_app, st.session_state.get("papel_usuario") in (
+        auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO),
+        eh_global=st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL)
+    st.stop()
+
+if st.session_state.get("tela") == "societario":
+    if "societario" not in _apps_permitidos_efetivos(
+        st.session_state.get("escritorio_id"), st.session_state.get("usuario_logado")
+    ):
+        st.session_state["tela"] = "home"
+        st.rerun()
+    tela_societario.render(_cabecalho_app, st.session_state.get("papel_usuario") in (
         auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO),
         eh_global=st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL)
     st.stop()
