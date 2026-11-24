@@ -250,3 +250,66 @@ ol.guia { list-style: none; padding: 0; margin: 0; }
 .celula-acoes { white-space: nowrap; }
 @media (max-width: 640px) { .barras .item { grid-template-columns: 1fr 64px; } .barras .barra { grid-column: 1 / -1; grid-row: 2; } }
 .abas a.fim { margin-left: auto; }
+/* ---------------------------------------------------------------- Profiler */
+.pf-kpis { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.pf-kpis .card { margin: 0; padding: 12px 14px; }
+.pf-kpi-estilo { text-decoration: none; color: inherit; } .pf-kpi-estilo:hover, .pf-kpi-estilo.ativo { border-color: var(--verde); box-shadow: inset 0 -3px 0 var(--verde); }
+.pf-kpi-estilo small { display: flex; align-items: center; gap: 6px; } .pf-kpi-estilo small i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.pf-lista-card { padding: 0; overflow: visible; } .pf-lista-card > .card { border: 0; margin: 0; border-radius: 0 0 12px 12px; }
+.pf-barra { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 16px 0; border-bottom: 1px solid var(--borda); }
+.pf-abas-lista { display: flex; gap: 4px; flex: 1 1 auto; }
+.pf-abas-lista a { padding: 10px 14px; text-decoration: none; color: var(--suave); border-bottom: 3px solid transparent; font-weight: 500; }
+.pf-abas-lista a.ativo { color: var(--texto); border-bottom-color: var(--verde); font-weight: 600; }
+.pf-abas-lista a span { background: var(--fundo); border-radius: 99px; padding: 1px 8px; margin-left: 6px; font-size: .78rem; }
+.pf-filtros { display: flex; gap: 8px; margin: 0 0 8px; } .pf-filtros select { width: auto; padding: 6px 8px; font-size: .9rem; }
+.pf-botoes { display: flex; gap: 8px; margin: 0 0 8px; }
+.pf-pessoa { display: flex; align-items: center; gap: 10px; min-width: 200px; } .pf-pessoa a { font-weight: 600; text-decoration: none; color: var(--texto); } .pf-pessoa a:hover { color: var(--verde); }
+.pf-pessoa small { display: block; color: var(--suave); font-size: .8rem; }
+.pf-avatar, .card .pf-avatar { flex: none; width: 38px; height: 38px; border-radius: 50%; display: inline-grid; place-items: center; font-weight: 700; font-size: .85rem; color: #fff; background: var(--suave); }
+.pf-avatar.s1 { background: var(--s1); } .pf-avatar.s2 { background: var(--s2); } .pf-avatar.s3 { background: var(--s3); } .pf-avatar.s4 { background: var(--s4); }
+.pf-selos { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.pf-selo { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: .8rem; font-weight: 600; border: 1px solid currentColor; white-space: nowrap; }
+.pf-selo.s1 { color: var(--s1); } .pf-selo.s2 { color: var(--s2); } .pf-selo.s3 { color: var(--s3); } .pf-selo.s4 { color: var(--s4); }
+.pf-selo.vazio { color: var(--suave); border-style: dashed; font-weight: 500; }
+/* menu de 3 pontos */
+.kebab { position: relative; display: inline-block; }
+.kebab > summary { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; cursor: pointer; font-size: 1.25rem; line-height: 1; color: var(--suave); }
+.kebab > summary:hover, .kebab[open] > summary { background: var(--fundo); color: var(--texto); }
+.kebab-menu { position: absolute; right: 0; top: 100%; z-index: 30; min-width: 240px; background: var(--card); border: 1px solid var(--borda); border-radius: 10px; padding: 6px; box-shadow: 0 10px 30px #0003; }
+.kebab-menu a, .kebab-menu button, .kebab-off { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border-radius: 6px; text-decoration: none; color: var(--texto); background: none; border: 0; font: inherit; font-size: .92rem; cursor: pointer; text-align: left; }
+.kebab-menu a:hover, .kebab-menu button:hover { background: var(--fundo); }
+.kebab-menu span[aria-hidden] { width: 18px; text-align: center; } .kebab-off { color: var(--suave); cursor: not-allowed; opacity: .6; }
+.kebab-menu form { margin: 4px 0 0; border-top: 1px solid var(--borda); padding-top: 4px; } .kebab-perigo { color: var(--erro) !important; }
+.lista td:last-child .kebab { float: right; }
+/* Visualizar Profiler */
+.pf-cabeca { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.pf-cabeca .pf-avatar { width: 64px; height: 64px; font-size: 1.3rem; }
+.pf-cabeca-txt { flex: 1; min-width: 200px; } .pf-cabeca-txt h2 { margin: 0; font-size: 1.35rem; } .pf-cabeca-txt p { margin: 2px 0 6px; color: var(--suave); }
+.pf-cabeca-dados { display: grid; grid-template-columns: auto auto; gap: 2px 16px; align-items: baseline; }
+.pf-cabeca-dados small { color: var(--suave); } .pf-cabeca-dados b { font-size: 1rem; display: inline; }
+.pf-abas { margin-top: 0; }
+.pf-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; } .pf-grade > .card { margin-bottom: 16px; }
+.pf-radar { display: block; width: 100%; max-width: 340px; margin: 8px auto 0; overflow: visible; }
+.pf-radar-anel { fill: none; stroke: var(--borda); } .pf-radar-eixo { stroke: var(--borda); }
+.pf-radar-area { fill: color-mix(in srgb, var(--verde) 28%, transparent); stroke: var(--verde); stroke-width: 2; }
+.pf-radar-alvo { fill: none; stroke: var(--suave); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.pf-radar-rot { font-size: 11px; font-weight: 600; fill: var(--texto); } .pf-radar-num { fill: var(--suave); font-weight: 500; }
+.pf-legenda-radar { display: flex; gap: 6px; align-items: center; justify-content: center; font-size: .82rem; }
+.pf-legenda-radar i { display: inline-block; width: 16px; height: 10px; margin-left: 8px; } .pf-l-area { background: color-mix(in srgb, var(--verde) 40%, transparent); border: 2px solid var(--verde); } .pf-l-alvo { border-top: 2px dashed var(--suave); height: 0 !important; }
+.pf-nivel { margin-bottom: 12px; } .pf-nivel-topo { display: flex; justify-content: space-between; gap: 8px; font-size: .9rem; }
+.pf-nivel-topo b { font-size: .95rem; display: inline; } .pf-nivel-topo small { color: var(--suave); font-weight: 500; display: inline; }
+.pf-trilho { position: relative; height: 10px; background: var(--fundo); border: 1px solid var(--borda); border-radius: 99px; overflow: hidden; margin-top: 4px; }
+.pf-trilho i { display: block; height: 100%; border-radius: 99px; } .pf-trilho span { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--card); }
+.pf-tag { font-style: normal; font-size: .72rem; background: var(--ok-fundo); color: var(--verde-esc); padding: 1px 7px; border-radius: 99px; margin-left: 4px; }
+.pf-ind { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.pf-ind > div { border: 1px solid var(--borda); border-radius: 10px; padding: 10px; } .pf-ind b { font-size: 1.4rem; display: block; } .pf-ind span { font-weight: 600; font-size: .88rem; color: var(--texto); } .pf-ind small { display: block; color: var(--suave); font-size: .78rem; margin-top: 2px; }
+.pf-hab { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 28px; }
+.pf-lista { list-style: none; padding: 0; margin: 0; } .pf-lista li { padding: 7px 0 7px 26px; position: relative; border-bottom: 1px solid var(--borda); } .pf-lista li:last-child { border: 0; }
+.pf-lista li::before { position: absolute; left: 2px; font-weight: 700; } .pf-lista.ok li::before { content: '✓'; color: var(--verde); } .pf-lista.atencao li::before { content: '!'; color: var(--alerta); left: 7px; }
+.pf-mini { display: flex; flex-wrap: wrap; gap: 8px 18px; } .pf-mini span { display: inline-flex; align-items: center; gap: 6px; } .pf-mini i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; } .pf-mini b { display: inline; font-size: 1rem; }
+@media (max-width: 1100px) { .pf-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .pf-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; } .pf-kpis .card { padding: 8px 10px; } .pf-kpis .card b { font-size: 1.1rem; } .pf-grade, .pf-hab { grid-template-columns: 1fr; } .pf-ind { grid-template-columns: 1fr; }
+  .pf-abas-lista { flex-basis: 100%; overflow-x: auto; } .pf-filtros, .pf-botoes { flex-wrap: wrap; }
+  .lista td:last-child .kebab { float: none; }
+}

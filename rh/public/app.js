@@ -197,3 +197,22 @@
     render();
   });
 })();
+
+// menu de 3 pontos: um aberto por vez, fecha ao clicar fora ou com Esc, e abre
+// em posição fixa para não ser cortado pela rolagem da tabela
+(function () {
+  const fechar = exceto => document.querySelectorAll('details.kebab[open]').forEach(d => { if (d !== exceto) d.open = false; });
+  document.addEventListener('click', e => { const k = e.target.closest('details.kebab'); fechar(k); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') fechar(null); });
+  document.querySelectorAll('details.kebab').forEach(d => d.addEventListener('toggle', () => {
+    const m = d.querySelector('.kebab-menu');
+    if (!d.open) { m.removeAttribute('style'); return; }
+    if (!d.closest('.rolagem')) return;
+    const r = d.querySelector('summary').getBoundingClientRect();
+    const alto = m.offsetHeight, cabeBaixo = r.bottom + alto + 8 < innerHeight;
+    m.style.position = 'fixed';
+    m.style.right = `${Math.max(8, innerWidth - r.right)}px`;
+    m.style.top = `${cabeBaixo ? r.bottom + 4 : Math.max(8, r.top - alto - 4)}px`;
+  }));
+  addEventListener('scroll', () => fechar(null), { passive: true });
+})();
