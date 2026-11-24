@@ -298,6 +298,8 @@ function salvar(req, res, k, atual) {
   res.redirect(destino(k, ficha) || `/cad/colaboradores/${novoId}/ficha`);
 }
 
+// PDI tem lista e visualização próprias (src/pdi.js); cadastro e edição seguem no genérico
+require('./pdi').rotas(app, { h, exige, auditar, flash, falha });
 app.get('/cad/:slug', h((req, res) => telaLista(req, res, carregarKind(req))));
 app.get('/cad/:slug/exportar', h((req, res) => {
   const k = carregarKind(req);
