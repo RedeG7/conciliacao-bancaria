@@ -217,6 +217,7 @@ test('treinamento com horas e competências; PDI a partir de quem foi avaliado',
   await post('/cad/pdi/novo', ck, { colaborador_id: id, ciclo_id: ciclo, titulo: 'Plano', inicio: '2026-01-01', entrega: '2026-06-01', status: 'Aberto' });
   assert.ok(!(await texto('/cad/pdi/avaliados-sem-pdi', ck)).includes('Avaliada'));
   assert.match(await texto('/cad/pdi', ck), /Ciclo A/);
+  assert.match(await texto('/cad/pdi', ck), /class="pdi-avd"[^>]*>20<small>/, 'nota da AVD no PDI de 0 a 100');
 });
 
 test('modelos de pesquisa, última resposta e comparação sem quebrar o anonimato', async () => {
