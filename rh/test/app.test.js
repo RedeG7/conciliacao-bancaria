@@ -397,6 +397,21 @@ test('perfil comportamental: link individual, link geral, permissões e isolamen
   const detalhe = await texto(`/comportamental/perfis/${id}`, ck);
   assert.match(detalhe, /Realizador/);
   assert.match(detalhe, /Aderência a Analista/);
+  assert.match(detalhe, /Habilidades/);
+  assert.match(detalhe, /class="pf-radar"/);
+  const menu = await texto('/comportamental/perfis', ck);
+  assert.match(menu, /Visualizar Profiler[\s\S]*Editar dados Profiler[\s\S]*Baixar relatório Profiler/);
+  const pdf = await get(`/comportamental/perfis/${id}/relatorio.pdf`, ck);
+  assert.strictEqual(pdf.status, 200);
+  assert.strictEqual(pdf.headers.get('content-type'), 'application/pdf');
+  assert.match(pdf.headers.get('content-disposition'), /attachment; filename="profiler-pessoa-perfil\.pdf"/);
+  assert.strictEqual(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
+  assert.match(await texto(`/comportamental/perfis/${id}/editar`, ck), /Colaborador vinculado/);
+  assert.strictEqual((await post(`/comportamental/perfis/${id}/editar`, ck, { nome: '', email: 'x@exemplo.com', vinculo: 'Colaborador', colaborador_id: colab })).status, 422);
+  assert.strictEqual((await post(`/comportamental/perfis/${id}/editar`, ck, { nome: 'Pessoa Perfil', email: 'novo@exemplo.com', vinculo: 'Colaborador', colaborador_id: colab })).status, 302);
+  assert.match(await texto(`/comportamental/perfis/${id}`, ck), /Visualizar Profiler/);
+  const pendente = (await texto('/comportamental/perfis?aba=Aguardando', ck)).match(/\/comportamental\/perfis\/(\d+)">Cand Um/)[1];
+  assert.strictEqual((await get(`/comportamental/perfis/${pendente}/relatorio.pdf`, ck)).status, 409, 'sem resposta não tem relatório');
 
   const aberto = (await texto('/comportamental/enviar', ck)).match(/\/perfil-aberto\/([\w-]+)/)[1];
   assert.strictEqual((await post(`/perfil-aberto/${aberto}`, '', { ...respostas, aceite: '1', nome: 'Cand Aberto', email: 'aberto@exemplo.com' })).status, 200);
@@ -425,6 +440,8 @@ test('perfil comportamental: link individual, link geral, permissões e isolamen
   assert.doesNotMatch(await texto('/dash', leitor), /Perfil Comportamental/);
   const outro = await login('?office=pc2');
   assert.strictEqual((await get(`/comportamental/perfis/${id}`, outro)).status, 404, 'outro escritório não vê');
+  assert.strictEqual((await get(`/comportamental/perfis/${id}/relatorio.pdf`, outro)).status, 404, 'outro escritório não baixa');
+  assert.strictEqual((await get(`/comportamental/perfis/${id}/relatorio.pdf`, leitor)).status, 403);
 });
 
 test('visão geral reúne AVD, PDI e feedbacks', async () => {
