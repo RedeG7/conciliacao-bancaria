@@ -367,3 +367,10 @@ ol.guia { list-style: none; padding: 0; margin: 0; }
   .pdi-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pdi-dados { grid-template-columns: 1fr 1fr; } .pdi-resumo { flex-direction: column; align-items: flex-start; }
   .pdi-hist { grid-template-columns: 1fr; } .pdi-meta-corpo { padding-left: 14px; } .pdi-meta-corpo dl { grid-template-columns: 1fr 1fr; } .pdi-fb p { padding-left: 12px; }
 }
+
+/* Profiler: aba "Resultado importado" */
+.pf-tab-mini { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.pf-tab-mini th, .pf-tab-mini td { padding: 6px 8px; border-bottom: 1px solid var(--linha, #e6e8ee); text-align: right; }
+.pf-tab-mini th:first-child, .pf-tab-mini td:first-child { text-align: left; }
+.pf-ponto { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.pf-ind-sol { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }

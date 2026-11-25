@@ -445,6 +445,40 @@ test('perfil comportamental: link individual, link geral, permissões e isolamen
   assert.strictEqual((await get(`/comportamental/perfis/${id}/relatorio.pdf`, leitor)).status, 403);
 });
 
+test('Profiler: importar resultados da Sólides com prévia, vínculo e aba do resultado', async () => {
+  const ck = await login('?office=psol&u=adm');
+  await novoColab(ck, { nome: 'Joana Exemplo Teste', email: 'joana@exemplo.com' });
+  const pessoa = (id, nome, email, pct) => ({ id, nome, email, letra: 'PA', resposta: '2026-09-09', envio: '2026-09-09', cargo: 'Analista', departamento: 'Geral',
+    percentuais: pct, energia: { executor: 3, comunicador: 2, planejador: 8, analista: 7 }, detalhado: { executor: [20, 5], comunicador: [10, 2], planejador: [60, 10], analista: [55, 4] },
+    indicadores: { nivelenergia: 5, nivelestress: 4, moral_nivel: 4 }, habilidades: { planejamento: 88, sociabilidade: 30 }, tempo: 250 });
+  const dados = JSON.stringify([
+    pessoa(1001, 'JOANA EXEMPLO TESTE', 'outro@exemplo.com', { executor: 20, comunicador: 15, planejador: 35, analista: 30 }),
+    pessoa(1002, 'Candidato Sem Cadastro', 'cand@exemplo.com', { executor: 40, comunicador: 20, planejador: 20, analista: 20 }),
+    { nome: 'Sem Dados' },
+  ]);
+  const previa = await (await post('/comportamental/importar-solides', ck, { dados, acao: 'previa' })).text();
+  assert.match(previa, /Joana Exemplo Teste[\s\S]*Cria perfil novo/, 'vincula pelo nome sem acento e caixa');
+  assert.match(previa, /Dados incompletos/);
+  assert.doesNotMatch(await texto('/comportamental/perfis', ck), /JOANA EXEMPLO/, 'prévia não grava');
+  assert.strictEqual((await post('/comportamental/importar-solides', ck, { dados: 'x', acao: 'previa' })).status, 422);
+
+  assert.strictEqual((await post('/comportamental/importar-solides', ck, { dados, acao: 'gravar' })).status, 302);
+  const lista = await texto('/comportamental/perfis?aba=Respondidos', ck);
+  const id = lista.match(/\/comportamental\/perfis\/(\d+)">JOANA EXEMPLO TESTE/)[1];
+  const tela = await texto(`/comportamental/perfis/${id}`, ck);
+  assert.match(tela, /Perfil Constante</, 'principal pelos percentuais');
+  assert.match(tela, /Resultado importado[\s\S]*35%[\s\S]*Planejamento/);
+  assert.match(tela, /Joana Exemplo Teste|Geral/);
+  assert.strictEqual((await get(`/comportamental/perfis/${id}/relatorio.pdf`, ck)).status, 200);
+
+  // reimportar atualiza o mesmo perfil, sem duplicar
+  await post('/comportamental/importar-solides', ck, { dados, acao: 'gravar' });
+  assert.strictEqual(((await texto('/comportamental/perfis?aba=Respondidos', ck)).match(/">JOANA EXEMPLO TESTE</g) || []).length, 1);
+
+  const leitor = await login('?office=psol&u=leitor2&admin=0');
+  assert.strictEqual((await post('/comportamental/importar-solides', leitor, { dados, acao: 'gravar' })).status, 403);
+});
+
 test('visão geral reúne AVD, PDI e feedbacks', async () => {
   const ck = await login('?office=vg');
   await novoColab(ck, { nome: 'Pessoa Avaliada' });

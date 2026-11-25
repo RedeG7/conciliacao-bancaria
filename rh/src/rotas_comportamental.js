@@ -10,6 +10,7 @@ const M = require('./metricas');
 const P = require('./comportamental');
 const G = require('./graficos');
 const PF = require('./profiler');
+const SP = require('./solides_profiler');
 const { hoje } = require('./datas');
 const { html, raw, dataBr, layout, page, tabela, select, campo, cartao, barras } = require('./views');
 
@@ -256,7 +257,7 @@ function internas(app, { h, exige, auditar, flash, falha, baseUrl }) {
             ${select('estilo', [['', 'Todos os estilos'], ...P.CHAVES.map(e => [e, nomeEstilo(e)])], estilo, 'aria-label="Estilo principal" onchange="this.form.submit()"')}
             ${select('vinculo', [['', 'Todos os vínculos'], 'Colaborador', 'Candidato'], vinculo, 'aria-label="Vínculo" onchange="this.form.submit()"')}
             <noscript><button class="botao sec pequeno">Filtrar</button></noscript></form>
-          <div class="pf-botoes">${pode(req.papel, 'edita') ? html`<a class="botao" href="/comportamental/enviar">+ Enviar questionário</a>` : ''}<a class="botao sec" href="/comportamental/perfis/exportar">Exportar CSV</a></div>
+          <div class="pf-botoes">${pode(req.papel, 'edita') ? html`<a class="botao" href="/comportamental/enviar">+ Enviar questionário</a><a class="botao sec" href="/comportamental/importar-solides">Importar resultados</a>` : ''}<a class="botao sec" href="/comportamental/perfis/exportar">Exportar CSV</a></div>
         </div>
         ${tabela(['Nome', 'Perfil', 'Vínculo', 'Cargo', 'Respondido em', ''], linhas, 'Nenhum perfil aqui.')}
       </div>`, { migalha: MIGALHA, descricao: AVISO }));
@@ -342,6 +343,42 @@ function internas(app, { h, exige, auditar, flash, falha, baseUrl }) {
     tx(() => { R.apagar(req.office, 'perfil', p.id); auditar(req, 'Apagou', 'perfil', p.id); });
     flash(res, 'Apagado.');
     res.redirect('/comportamental/perfis');
+  }));
+
+  // -------------------------------------------------------------- importar da Sólides
+  // Recebe os resultados em JSON (lista de pessoas), mostra a prévia e só grava
+  // quando a pessoa confirma.
+  const lerImportacao = body => {
+    try { const v = JSON.parse(texto(body.dados)); return Array.isArray(v) ? v.slice(0, 500) : null; } catch { return null; }
+  };
+  const telaImportar = (req, res, { dados = '', plano = null, erro = '' } = {}) => {
+    const linhas = (plano || []).map(i => [i.nome, i.erro ? html`<span class="pdi-chip atraso">${i.erro}</span>` : html`${PF.selos({ principal: i.conv.principal, secundario: i.conv.secundario })} <small>${i.conv.solides.letra}</small>`,
+      i.colab ? i.colab.nome : html`<span class="desc">sem vínculo</span>`, i.erro ? '' : i.perfil ? 'Atualiza o perfil existente' : 'Cria perfil novo', dataBr(i.resposta)]);
+    res.status(erro ? 422 : 200).send(layout(req, 'Importar Profiler da Sólides', html`${erro ? html`<div class="aviso erro">${erro}</div>` : ''}
+      <form method="post" action="/comportamental/importar-solides" class="card">
+        <p class="desc">Cole os resultados em JSON. Antes de gravar aparece a prévia com o perfil de cada pessoa e o colaborador vinculado (pelo e-mail ou pelo nome).
+          Perfis respondidos no questionário daqui não são alterados: nesse caso entra um perfil novo.</p>
+        ${campo('Resultados (JSON)', html`<textarea name="dados" rows="${plano ? 3 : 10}" required>${dados}</textarea>`)}
+        ${plano ? html`${tabela(['Pessoa', 'Perfil', 'Colaborador', 'O que acontece', 'Respondido em'], linhas, 'Nada para importar.')}
+          <div class="acoes"><button class="botao" name="acao" value="gravar">Gravar ${plano.filter(i => !i.erro).length} perfis</button><button class="botao sec" name="acao" value="previa">Atualizar prévia</button></div>`
+        : html`<div class="acoes"><button class="botao" name="acao" value="previa">Ver prévia</button></div>`}
+      </form>`, { migalha: 'Profiler', descricao: AVISO }));
+  };
+  app.get('/comportamental/importar-solides', exige('edita'), h((req, res) => telaImportar(req, res)));
+  app.post('/comportamental/importar-solides', exige('edita'), h((req, res) => {
+    const pessoas = lerImportacao(req.body), dados = texto(req.body.dados);
+    if (!pessoas) return telaImportar(req, res, { dados, erro: 'O conteúdo não é uma lista em JSON.' });
+    const plano = SP.planejar(pessoas, { colaboradores: req.c.listar('colaborador', { inativos: true }), perfis: lista(req) });
+    if (texto(req.body.acao) !== 'gravar') return telaImportar(req, res, { dados, plano });
+    let novos = 0, atualizados = 0;
+    tx(() => {
+      for (const i of plano.filter(x => !x.erro)) {
+        if (i.perfil) { R.atualizar(req.office, 'perfil', i.perfil.id, SP.dadosPerfil(i, R.soDados(i.perfil))); atualizados++; } else { R.criar(req.office, 'perfil', SP.dadosPerfil(i, { token: R.novoToken(), tipo_envio: 'Importado da Sólides' }), req.user.name); novos++; }
+      }
+      auditar(req, 'Importou', 'perfil', null, `Sólides: ${novos} novos, ${atualizados} atualizados`);
+    });
+    flash(res, `Profiler importado: ${novos} perfis novos e ${atualizados} atualizados.`);
+    res.redirect('/comportamental/perfis?aba=Respondidos');
   }));
 
   // -------------------------------------------------------------- envio
