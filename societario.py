@@ -38,8 +38,15 @@ import minuta_layout
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.6"
+VERSAO = "1.7"
 NOVIDADES = [
+    ("1.7", "25/11/2026", [
+        "Gerar versão revisada (Word e PDF): as correções aceitas entram no próprio contrato anexado, sem mudar "
+        "a formatação, também quando o trecho passa de uma linha ou parágrafo para outro, atravessa uma "
+        "tabulação (campos como \"Nome:<tab>Fulano\") ou tem diferença de espaços, aspas ou travessões. "
+        "No PDF, o texto novo sai com o tamanho, a cor e o estilo (negrito, itálico, serifa) do original, sem "
+        "apagar linhas de tabela ou fundos.",
+    ]),
     ("1.6", "25/11/2026", [
         "Super admin vê os dados de todos os usuários do escritório escolhido: o sininho conta os alertas de "
         "todos, o resumo da Visão geral cobre os processos de todos e a Agenda abre com os lembretes e alertas "
@@ -920,14 +927,15 @@ def normalizar_revisao(dados: dict) -> dict:
 def aplicar_sugestoes(texto: str, apontamentos: list[dict]) -> tuple[str, list[dict]]:
     """Texto com os apontamentos ACEITOS aplicados (troca o trecho pela
     sugestão). Devolve também os aceitos que não puderam ser aplicados
-    sozinhos (trecho vazio ou não encontrado), para o colaborador ajustar à mão."""
+    sozinhos (trecho vazio ou não encontrado), para o colaborador ajustar à mão.
+    O trecho é achado mesmo com diferença de espaços, quebras, aspas ou travessões."""
     novo, manuais = texto, []
     for a in apontamentos:
         if a.get("status") != "aceito":
             continue
-        trecho, sug = a.get("trecho") or "", a.get("sugestao") or ""
-        if trecho and trecho in novo:
-            novo = novo.replace(trecho, sug, 1)
+        achado = minuta_layout.achar(novo, a.get("trecho") or "")
+        if achado:
+            novo = novo[:achado[0]] + (a.get("sugestao") or "") + novo[achado[1]:]
         else:
             manuais.append(a)
     return novo, manuais

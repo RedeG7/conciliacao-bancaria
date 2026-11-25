@@ -52,13 +52,13 @@ def test_aplica_no_word_mantendo_o_layout():
            _ap("Objeto & sede", "Objeto & endereço", i=2),
            _ap("CONTRATO SOCIAL", "CONTRATO SOCIAL - 3ª ALTERAÇÃO", i=3),
            _ap("Cláusula 2", "Cláusula 9", status="recusado", i=4),
-           _ap("parágrafo\ncomeço", "x", i=5),        # passa de um parágrafo para outro: à mão
-           _ap("Cláusula 2\tObjeto", "x", i=6),        # atravessa a tabulação: à mão
+           _ap("parágrafo\ncomeço", "texto\ninício", i=5),   # passa de um parágrafo para outro
+           _ap("Cláusula 2\tObjeto", "Cláusula 3\tObjeto", i=6),  # atravessa a tabulação
            _ap("não existe", "x", i=7)]
     novo, manuais = ml.aplicar_no_docx(_docx(), aps)
-    assert [a["id"] for a in manuais] == [5, 6, 7]
+    assert [a["id"] for a in manuais] == [7]
     assert ml.texto_docx(novo) == ("CONTRATO SOCIAL - 3ª ALTERAÇÃO\nSócio B: R$ 40.000,00 (quarenta mil reais) em quotas\n"
-                                   "Cláusula 2\tObjeto & endereço\nFim do parágrafo\ncomeço do outro")
+                                   "Cláusula 3\tObjeto & endereço\nFim do texto\ninício do outro")
     xml = _ler(novo, "word/document.xml").decode()
     # formatação preservada: o valor novo fica no run em negrito, estilos e
     # namespaces (mc:Ignorable) intactos, demais partes do arquivo iguais
@@ -67,6 +67,21 @@ def test_aplica_no_word_mantendo_o_layout():
     assert 'mc:Ignorable="w14"' in xml and "&amp; endereço" in xml
     assert _ler(novo, "word/header1.xml") == HEADER
     assert _ler(novo, "word/styles.xml") == b"<w:styles/>"
+
+
+def test_trecho_com_diferenca_de_espacos_aspas_e_tabulacao():
+    # a IA escreveu espaço onde há tabulação e espaços duplos: o campo depois
+    # da tabulação é preenchido e a tabulação continua lá
+    aps = [_ap("Cláusula  2 Objeto", "Cláusula 5 Finalidade", i=1),
+           _ap("Sócio B:\nR$ 30.000,00", "Sócio C: R$ 1,00", i=2)]
+    novo, manuais = ml.aplicar_no_docx(_docx(), aps)
+    assert not manuais
+    texto = ml.texto_docx(novo)
+    assert "Cláusula 5\tFinalidade & sede" in texto
+    assert "Sócio C: R$ 1,00 em quotas" in texto
+    xml = _ler(novo, "word/document.xml").decode()
+    assert "Sócio C: R$ 1,00</w:t>" in xml
+    assert ml.achar("cláusula “primeira” – sede", 'cláusula "primeira" - sede') == (0, 26)
 
 
 def test_quebra_de_linha_na_sugestao():
@@ -88,6 +103,45 @@ def test_aplica_no_pdf():
     assert [a["id"] for a in manuais] == [2]
     texto = fitz.open(stream=novo, filetype="pdf")[0].get_text()
     assert "R$ 40.000,00" in texto and "R$ 30.000,00" not in texto and "CONTRATO SOCIAL" in texto
+
+
+def test_pdf_trecho_em_varias_linhas_mantem_estilo_e_linhas():
+    fitz = pytest.importorskip("pymupdf")
+    doc = fitz.open()
+    pg = doc.new_page()
+    pg.draw_line((72, 140), (500, 140), color=(0, 0, 0))  # linha de tabela/assinatura
+    pg.insert_text((72, 100), "O socio FULANO DE TAL, brasileiro,", fontname="tibo", fontsize=12, color=(0, 0, 1))
+    pg.insert_text((72, 116), "casado, residente na Rua A, assina.", fontname="tibo", fontsize=12, color=(0, 0, 1))
+    original = doc.tobytes()
+    # o texto do PDF vem linha a linha: o trecho da IA tem a quebra no meio
+    novo, manuais = ml.aplicar_no_pdf(original, [_ap("FULANO DE TAL, brasileiro,\ncasado, residente na Rua A",
+                                                     "BELTRANO SILVA, brasileiro, solteiro, residente na Rua B")])
+    assert not manuais
+    pg2 = fitz.open(stream=novo, filetype="pdf")[0]
+    texto = " ".join(pg2.get_text(sort=True).split())
+    assert "BELTRANO SILVA" in texto and "Rua B" in texto and "FULANO" not in texto and "Rua A" not in texto
+    assert texto.startswith("O socio") and texto.endswith("assina.")
+    spans = [sp for b in pg2.get_text("dict")["blocks"] for l in b.get("lines", []) for sp in l["spans"]
+             if "BELTRANO" in sp["text"]]
+    assert spans and spans[0]["flags"] & 16 and spans[0]["color"] == 0x0000FF  # negrito e azul, como antes
+    assert pg2.get_drawings()  # a linha continua no PDF
+
+
+def test_pdf_correcao_maior_empurra_o_resto_da_linha():
+    fitz = pytest.importorskip("pymupdf")
+    doc = fitz.open()
+    pg = doc.new_page()
+    pg.insert_text((72, 100), "Capital social: R$ 30.000,00 dividido em quotas iguais de todos os socios.",
+                   fontname="helv", fontsize=11)
+    pg.insert_text((72, 160), "Outro paragrafo.", fontname="helv", fontsize=11)
+    novo, manuais = ml.aplicar_no_pdf(doc.tobytes(), [_ap("R$ 30.000,00", "R$ 50.000,00 (cinquenta mil reais)")])
+    assert not manuais
+    pg2 = fitz.open(stream=novo, filetype="pdf")[0]
+    assert " ".join(pg2.get_text(sort=True).split()) == ("Capital social: R$ 50.000,00 (cinquenta mil reais) "
+                                                         "dividido em quotas iguais de todos os socios. Outro paragrafo.")
+    tamanhos = {round(sp["size"], 1) for b in pg2.get_text("dict")["blocks"] for l in b.get("lines", [])
+                for sp in l["spans"] if "cinquenta" in sp["text"]}
+    assert tamanhos and min(tamanhos) >= 6.6  # não vira letra miúda (>= 60% de 11)
 
 
 def test_pdf_sem_libreoffice(monkeypatch):
