@@ -46,6 +46,8 @@ NOVIDADES = [
         "tabulação (campos como \"Nome:<tab>Fulano\") ou tem diferença de espaços, aspas ou travessões. "
         "No PDF, o texto novo sai com o tamanho, a cor e o estilo (negrito, itálico, serifa) do original, sem "
         "apagar linhas de tabela ou fundos.",
+        "Cadastrar licença: o campo Empresa tem a busca das empresas cadastradas (Societário, clientes do Hub "
+        "e Acessórias); ao escolher, Empresa e CNPJ são preenchidos. Empresa fora da lista ainda pode ser digitada.",
     ]),
     ("1.6", "25/11/2026", [
         "Super admin vê os dados de todos os usuários do escritório escolhido: o sininho conta os alertas de "

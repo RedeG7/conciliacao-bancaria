@@ -844,10 +844,25 @@ def _tela_licencas(esc: str, usuario: str) -> None:
 def _form_licenca(esc: str, usuario: str, l: dict | None) -> None:
     k = f"soc_lic_{l['id'] if l else 'nova'}"
     usuarios = _usuarios(esc)
+    # busca nas empresas cadastradas (Societário, clientes do Hub, Acessórias):
+    # fica fora do formulário para já preencher Empresa e CNPJ ao escolher
+    lista = _empresas_escolha(esc, _versao())
+    por_chave = {(e["cnpj"] or "n:" + e["nome"]): e for e in lista}
+    if st.session_state.get(f"{k}_emp") not in por_chave:
+        st.session_state.pop(f"{k}_emp", None)
+    sel = st.selectbox(
+        "Buscar empresa cadastrada", list(por_chave), index=None, key=f"{k}_emp",
+        format_func=lambda c: so.rotulo_empresa(por_chave[c]),
+        placeholder=f"Digite o nome ou o CNPJ para buscar entre {len(lista)} empresa(s)…",
+        help="Escolha uma empresa cadastrada para preencher Empresa e CNPJ. Se ela não estiver na lista, "
+             "digite direto nos campos abaixo.")
+    escolhida = por_chave.get(sel) if sel else None
+    nome_ini = escolhida["nome"] if escolhida else (l or {}).get("empresa_nome", "")
+    cnpj_ini = escolhida["cnpj"] if escolhida else (l or {}).get("cnpj")
     with st.form(k, clear_on_submit=l is None):
         c1, c2, c3 = st.columns([2, 1, 1.4])
-        empresa = c1.text_input("Empresa", value=(l or {}).get("empresa_nome", ""))
-        cnpj = c2.text_input("CNPJ", value=so.formatar_cnpj((l or {}).get("cnpj")))
+        empresa = c1.text_input("Empresa", value=nome_ini)
+        cnpj = c2.text_input("CNPJ", value=so.formatar_cnpj(cnpj_ini))
         tipos = list(so.LICENCAS)
         tipo = c3.selectbox("Tipo", tipos, format_func=so.LICENCAS.get,
                             index=tipos.index(l["tipo"]) if l else 0)
@@ -872,6 +887,7 @@ def _form_licenca(esc: str, usuario: str, l: dict | None) -> None:
                 st.error(str(exc))
                 return
             st.session_state.pop("soc_lic_edit", None)
+            st.session_state.pop(f"{k}_emp", None)
             _recarregar()
             st.rerun()
         if arquivar:
