@@ -41,6 +41,9 @@ import minuta_layout
 VERSAO = "1.5"
 NOVIDADES = [
     ("1.5", "25/11/2026", [
+        "Kanban de processos: arraste o cartão para outra coluna para mudar a etapa (os botões ◀ ▶ "
+        "continuam). Etapas na ordem do fluxo: A iniciar, Em elaboração, Protocolado, Em análise, "
+        "Em exigência, Concluído.",
         "Lembretes também como aviso do Windows: aparecem no canto da tela, com som, mesmo trabalhando em "
         "outro programa (com o Hub aberto numa aba do navegador). Ative uma vez no botão \"Ativar avisos no "
         "Windows\" do Hub Societário.",
@@ -108,13 +111,14 @@ CANCELADO = "cancelado"
 ETAPAS = {
     A_INICIAR: "A iniciar",
     EM_ELABORACAO: "Em elaboração",
-    EM_ANALISE: "Em análise",
     PROTOCOLADO: "Protocolado",
+    EM_ANALISE: "Em análise",
     EM_EXIGENCIA: "Em exigência",
     CONCLUIDO: "Concluído",
     CANCELADO: "Cancelado",
 }
-ETAPAS_KANBAN = [A_INICIAR, EM_ELABORACAO, EM_ANALISE, PROTOCOLADO, EM_EXIGENCIA, CONCLUIDO]
+# ordem do fluxo: depois de protocolado, o órgão analisa e pode fazer exigência
+ETAPAS_KANBAN = [A_INICIAR, EM_ELABORACAO, PROTOCOLADO, EM_ANALISE, EM_EXIGENCIA, CONCLUIDO]
 ENCERRADAS = (CONCLUIDO, CANCELADO)
 
 PRIORIDADES = {"baixa": "Baixa", "normal": "Normal", "alta": "Alta", "urgente": "Urgente"}

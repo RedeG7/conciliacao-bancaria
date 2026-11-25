@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import html
 import json
+from pathlib import Path
 from datetime import date, datetime, time, timedelta
 from typing import Callable
 
@@ -22,6 +23,9 @@ _ROT_NIVEL = {so.CRITICO: "Urgente", so.ATENCAO: "Atenção", so.INFO: "Acompanh
 _COR_ETAPA = {so.A_INICIAR: "#64748b", so.EM_ELABORACAO: "#3b82f6", so.EM_ANALISE: "#a855f7",
               so.PROTOCOLADO: "#14b8a6", so.EM_EXIGENCIA: "#ef4444", so.CONCLUIDO: "#22e08a",
               so.CANCELADO: "#475569"}
+# Kanban com arrastar e soltar (componente em componentes/soc_kanban/index.html)
+_kanban = components.declare_component("soc_kanban", path=str(Path(__file__).parent / "componentes" / "soc_kanban"))
+
 _COR_LIC = {so.VIGENTE: "#22e08a", so.A_VENCER: "#f59e0b", so.VENCIDA: "#ef4444", so.SEM_VALIDADE: "#94a3b8"}
 _COR_GRAV = {"alta": "#ef4444", "media": "#f59e0b", "baixa": "#3b82f6"}
 
@@ -376,39 +380,40 @@ def _lista(esc: str) -> None:
             st.rerun()
         return
 
-    # Kanban: uma coluna por etapa; ◀ ▶ movem o cartão e registram o andamento
-    cols = st.columns(len(so.ETAPAS_KANBAN))
-    for c, etapa in zip(cols, so.ETAPAS_KANBAN):
-        cartoes = [p for p in vis if p["etapa"] == etapa]
-        if etapa == so.CONCLUIDO:
-            cartoes = cartoes[:15]
-        c.markdown(f'<div class="soc-col-h" style="border-color:{_COR_ETAPA[etapa]}">{so.ETAPAS[etapa]} '
-                   f'<span class="soc-muted">({sum(1 for p in vis if p["etapa"] == etapa)})</span></div>',
-                   unsafe_allow_html=True)
-        idx = so.ETAPAS_KANBAN.index(etapa)
+    # Kanban: uma coluna por etapa; arrastar o cartão (ou ◀ ▶) muda a etapa e registra o andamento
+    por_id = {p["id"]: p for p in vis}
+    colunas = []
+    for etapa in so.ETAPAS_KANBAN:
+        todos = [p for p in vis if p["etapa"] == etapa]
+        cartoes = todos[:15] if etapa == so.CONCLUIDO else todos
+        itens = []
         for p in cartoes:
             al = so.alertas_processo(p, hoje, rg)
             nivel = min((a["nivel"] for a in al), key=lambda n: so._PESO[n], default=None)
-            with c.container(border=True):
-                st.markdown(
-                    f'<div class="soc-muted">{_e(p["numero"])}</div><b>{_e(p["empresa_nome"])}</b><br>'
-                    f'<span style="font-size:.85rem">{_e(so.TIPOS[p["tipo"]]["nome"])}</span><br>'
-                    + (_chip(so.PRIORIDADES[p["prioridade"]], "#ef4444" if p["prioridade"] in ("alta", "urgente")
-                             else "#94a3b8") if p["prioridade"] != "normal" else "")
-                    + (_chip(_ROT_NIVEL[nivel], _COR_NIVEL[nivel]) if nivel else "")
-                    + f'<div class="soc-muted">{_e(p.get("responsavel") or "sem responsável")} · '
-                      f'☑ {p["check_feitos"]}/{p["check_total"]}'
-                    + (f' · 📎 {p["n_anexos"]}' if p.get("n_anexos") else "") + '</div>', unsafe_allow_html=True)
-                st.button("Abrir", key=f"soc_k_o_{p['id']}", on_click=abrir_processo, args=(p["id"],),
-                          use_container_width=True)
-                b1, b2 = st.columns(2)
-                b1.button("◀", key=f"soc_k_l_{p['id']}", disabled=idx == 0, use_container_width=True,
-                          help=f"Voltar para {so.ETAPAS[so.ETAPAS_KANBAN[idx - 1]]}" if idx else None,
-                          on_click=_mover, args=(esc, usuario, p, so.ETAPAS_KANBAN[idx - 1] if idx else etapa))
-                ult = idx == len(so.ETAPAS_KANBAN) - 1
-                b2.button("▶", key=f"soc_k_r_{p['id']}", disabled=ult, use_container_width=True,
-                          help=None if ult else f"Mover para {so.ETAPAS[so.ETAPAS_KANBAN[idx + 1]]}",
-                          on_click=_mover, args=(esc, usuario, p, so.ETAPAS_KANBAN[idx if ult else idx + 1]))
+            chips = []
+            if p["prioridade"] != "normal":
+                chips.append([so.PRIORIDADES[p["prioridade"]],
+                              "#ef4444" if p["prioridade"] in ("alta", "urgente") else "#94a3b8"])
+            if nivel:
+                chips.append([_ROT_NIVEL[nivel], _COR_NIVEL[nivel]])
+            itens.append({"id": p["id"], "numero": p["numero"], "empresa": p["empresa_nome"],
+                          "tipo": so.TIPOS[p["tipo"]]["nome"], "chips": chips,
+                          "rodape": f"{p.get('responsavel') or 'sem responsável'} · ☑ {p['check_feitos']}/"
+                                    f"{p['check_total']}" + (f" · 📎 {p['n_anexos']}" if p.get("n_anexos") else "")})
+        colunas.append({"id": etapa, "nome": so.ETAPAS[etapa], "cor": _COR_ETAPA[etapa], "total": len(todos),
+                        "cartoes": itens, "ocultos": len(todos) - len(cartoes)})
+    ev = _kanban(colunas=colunas, key="soc_kanban", default=None)
+    # o valor do componente fica guardado entre as recargas: "n" separa um gesto novo de um já tratado
+    if ev and ev.get("n") != st.session_state.get("soc_kanban_n"):
+        st.session_state["soc_kanban_n"] = ev["n"]
+        p = por_id.get(ev.get("id"))
+        if p and ev.get("acao") == "abrir":
+            abrir_processo(p["id"])
+            st.rerun()
+        elif p and ev.get("acao") == "mover" and ev.get("etapa") in so.ETAPAS_KANBAN and ev["etapa"] != p["etapa"]:
+            _mover(esc, usuario, p, ev["etapa"])
+            st.toast(f"{p['numero']}: {so.ETAPAS[p['etapa']]} → {so.ETAPAS[ev['etapa']]}")
+            st.rerun()
 
 
 # ---------------------------------------------------------------- novo processo

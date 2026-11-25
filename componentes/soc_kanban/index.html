@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<!-- Kanban do Hub Societário: arrastar o cartão para outra coluna muda a
+     etapa. Componente Streamlit em JS puro (protocolo de mensagens do
+     Streamlit, sem build): recebe colunas/cartões em "streamlit:render" e
+     devolve {acao, id, etapa, n} com setComponentValue. -->
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Source Sans Pro", system-ui, -apple-system, sans-serif; color: #e6edf3;
+         background: transparent; font-size: 14px; }
+  .quadro { display: grid; gap: 14px; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
+  .col { min-height: 140px; border-radius: 12px; padding: 0 0 10px; transition: background .12s, outline-color .12s;
+         outline: 2px dashed transparent; outline-offset: -2px; }
+  .col.alvo { background: rgba(34, 224, 138, .06); outline-color: rgba(34, 224, 138, .55); }
+  .cab { font-weight: 700; font-size: .9rem; padding: 8px 12px; border-radius: 10px; margin-bottom: 10px;
+         background: rgba(255, 255, 255, .04); border-top: 3px solid; }
+  .cab span { color: #94a3b8; font-weight: 400; }
+  .card { border: 1px solid rgba(255, 255, 255, .13); border-radius: 12px; padding: 12px; margin-bottom: 10px;
+          background: rgba(15, 23, 42, .55); cursor: grab; user-select: none; }
+  .card:hover { border-color: rgba(255, 255, 255, .3); }
+  .card.arrastando { opacity: .35; }
+  .num { color: #94a3b8; font-size: .82rem; }
+  .emp { font-weight: 700; margin: 2px 0; word-break: break-word; }
+  .tipo { font-size: .85rem; margin-bottom: 4px; }
+  .chip { display: inline-block; border: 1px solid; border-radius: 999px; padding: 1px 9px; font-size: .75rem;
+          margin: 2px 4px 2px 0; }
+  .rod { color: #94a3b8; font-size: .8rem; margin-top: 4px; }
+  .acoes { display: flex; gap: 6px; margin-top: 10px; }
+  button { font: inherit; color: #e6edf3; background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .18);
+           border-radius: 8px; padding: 5px 8px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: #22e08a; color: #22e08a; }
+  button:disabled { opacity: .3; cursor: default; }
+  .abrir { flex: 1; }
+  .mais { color: #94a3b8; font-size: .8rem; text-align: center; }
+  .dica { color: #94a3b8; font-size: .8rem; margin: 0 0 10px; }
+</style>
+</head>
+<body>
+<div id="raiz">
+<p class="dica">Arraste o cartão para outra coluna para mudar a etapa (ou use ◀ ▶).</p>
+<div class="quadro" id="quadro"></div>
+</div>
+<script>
+(function () {
+  const enviar = (type, extra) => window.parent.postMessage(Object.assign({isStreamlitMessage: true, type}, extra), "*");
+  // mede o conteúdo (não a página: a página cresce junto com o iframe e a altura nunca para)
+  const raiz = document.getElementById("raiz");
+  let ultima = 0;
+  const altura = () => { const h = Math.ceil(raiz.getBoundingClientRect().height) + 6;
+    if (h !== ultima) { ultima = h; enviar("streamlit:setFrameHeight", {height: h}); } };
+  const devolver = (valor) => {
+    valor.n = Date.now() + "-" + Math.random().toString(36).slice(2);
+    enviar("streamlit:setComponentValue", {value: valor, dataType: "json"});
+  };
+  const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+
+  let colunas = [], arrastado = null;
+
+  function mover(id, etapa, de) {
+    if (etapa === de) return;
+    devolver({acao: "mover", id, etapa});
+  }
+
+  function desenhar(args) {
+    colunas = args.colunas || [];
+    const quadro = document.getElementById("quadro");
+    quadro.style.setProperty("--n", colunas.length);
+    quadro.innerHTML = "";
+    const ordem = colunas.map(c => c.id);
+    colunas.forEach((c, i) => {
+      const col = el("div", "col");
+      col.dataset.etapa = c.id;
+      const cab = el("div", "cab", c.nome + " ");
+      cab.style.borderTopColor = c.cor;
+      cab.appendChild(el("span", null, "(" + c.total + ")"));
+      col.appendChild(cab);
+      (c.cartoes || []).forEach(k => {
+        const card = el("div", "card");
+        card.draggable = true;
+        card.dataset.id = k.id;
+        card.appendChild(el("div", "num", k.numero));
+        card.appendChild(el("div", "emp", k.empresa));
+        card.appendChild(el("div", "tipo", k.tipo));
+        (k.chips || []).forEach(([t, cor]) => { const ch = el("span", "chip", t); ch.style.color = cor; ch.style.borderColor = cor; card.appendChild(ch); });
+        card.appendChild(el("div", "rod", k.rodape));
+        const acoes = el("div", "acoes");
+        const esq = el("button", null, "◀"), abrir = el("button", "abrir", "Abrir"), dir = el("button", null, "▶");
+        esq.disabled = i === 0; dir.disabled = i === ordem.length - 1;
+        if (i > 0) esq.title = "Voltar para " + colunas[i - 1].nome;
+        if (i < ordem.length - 1) dir.title = "Mover para " + colunas[i + 1].nome;
+        esq.onclick = () => mover(k.id, ordem[i - 1], c.id);
+        dir.onclick = () => mover(k.id, ordem[i + 1], c.id);
+        abrir.onclick = () => devolver({acao: "abrir", id: k.id});
+        acoes.append(esq, abrir, dir);
+        card.appendChild(acoes);
+        card.addEventListener("dragstart", (ev) => {
+          arrastado = {id: k.id, de: c.id};
+          ev.dataTransfer.effectAllowed = "move";
+          ev.dataTransfer.setData("text/plain", String(k.id));
+          setTimeout(() => card.classList.add("arrastando"), 0);
+        });
+        card.addEventListener("dragend", () => {
+          card.classList.remove("arrastando");
+          document.querySelectorAll(".col.alvo").forEach(x => x.classList.remove("alvo"));
+          arrastado = null;
+        });
+        col.appendChild(card);
+      });
+      if (c.ocultos) col.appendChild(el("div", "mais", "+ " + c.ocultos + " na lista"));
+      col.addEventListener("dragover", (ev) => {
+        if (!arrastado) return;
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+        col.classList.add("alvo");
+      });
+      col.addEventListener("dragleave", (ev) => { if (!col.contains(ev.relatedTarget)) col.classList.remove("alvo"); });
+      col.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        col.classList.remove("alvo");
+        if (arrastado) mover(arrastado.id, c.id, arrastado.de);
+      });
+      quadro.appendChild(col);
+    });
+    altura();
+  }
+
+  window.addEventListener("message", (ev) => {
+    const d = ev.data || {};
+    if (d.type === "streamlit:render") desenhar(d.args || {});
+  });
+  new ResizeObserver(altura).observe(raiz);
+  enviar("streamlit:componentReady", {apiVersion: 1});
+})();
+</script>
+</body>
+</html>
