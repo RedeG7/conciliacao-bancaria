@@ -38,8 +38,16 @@ import minuta_layout
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.7"
+VERSAO = "1.8"
 NOVIDADES = [
+    ("1.8", "25/11/2026", [
+        "Revisão com IA: a IA passa a separar a explicação (Sugestão) do texto exato que entra no documento; "
+        "instruções, alternativas e campos como \"[informar]\" não são mais colados no contrato, ficam para "
+        "ajustar à mão. Cada apontamento mostra o que acontece se for aceito.",
+        "PDF revisado: correção maior que o trecho continua nas linhas seguintes do mesmo parágrafo, "
+        "justificada e dentro da margem; se não couber, fica para ajustar à mão em vez de sair miúda ou "
+        "fora da página.",
+    ]),
     ("1.7", "25/11/2026", [
         "Gerar versão revisada (Word e PDF): as correções aceitas entram no próprio contrato anexado, sem mudar "
         "a formatação, também quando o trecho passa de uma linha ou parágrafo para outro, atravessa uma "
@@ -783,6 +791,10 @@ CATEGORIAS_IA = {
     "outro": "Outro",
 }
 GRAVIDADES = {"alta": "Alta", "media": "Média", "baixa": "Baixa"}
+# o que acontece com o trecho na versão revisada
+ACOES_IA = {"substituir": "Troca o trecho pelo texto novo", "remover": "Remove o trecho",
+            "incluir": "Acrescentar (ajuste à mão)", "manual": "Ajuste à mão"}
+_MARCADOR = re.compile(r"\[[^\]]{0,40}\]|_{4,}|\bX{3,}\b")
 
 SCHEMA_REVISAO = {
     "type": "object",
@@ -795,7 +807,8 @@ SCHEMA_REVISAO = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["categoria", "gravidade", "titulo", "trecho", "problema", "sugestao", "fundamento"],
+                "required": ["categoria", "gravidade", "titulo", "trecho", "problema", "sugestao", "acao",
+                             "texto_novo", "fundamento"],
                 "properties": {
                     "categoria": {"type": "string", "enum": list(CATEGORIAS_IA)},
                     "gravidade": {"type": "string", "enum": list(GRAVIDADES)},
@@ -803,6 +816,8 @@ SCHEMA_REVISAO = {
                     "trecho": {"type": "string"},
                     "problema": {"type": "string"},
                     "sugestao": {"type": "string"},
+                    "acao": {"type": "string", "enum": list(ACOES_IA)},
+                    "texto_novo": {"type": "string"},
                     "fundamento": {"type": "string"},
                 },
             },
@@ -834,11 +849,20 @@ descrição do processo e com a exigência da Junta, quando forem informadas.
 Regras:
 - Aponte só o que está no documento. Não invente dados; se uma informação não aparece e é obrigatória, \
 aponte a ausência.
-- "trecho" é a cópia EXATA de um pedaço do documento (até umas 40 palavras), para o colaborador achar e \
-substituir; deixe vazio quando o problema é de ausência.
-- "sugestao" é o texto corrigido que pode substituir o trecho tal como está, ou a cláusula a acrescentar. \
-Quando a correção depende de uma informação que só o cliente tem (por exemplo, qual valor de quota está \
-certo), diga isso em "sugestao" em vez de chutar.
+- "trecho" é a cópia EXATA de um pedaço do documento, o MENOR possível que contenha o erro (a palavra, o \
+número, a expressão ou a frase errada, não a cláusula inteira), para ser trocado no próprio arquivo sem \
+mexer no resto; deixe vazio quando o problema é de ausência. Se o mesmo erro aparece em mais de um lugar, \
+faça um apontamento para cada ocorrência, cada um com o seu trecho.
+- "sugestao" explica para o colaborador o que corrigir e como (pode ter comentários e alternativas).
+- "acao" e "texto_novo" dizem o que a versão revisada faz sozinha no documento:
+  - "substituir": "texto_novo" é EXATAMENTE o texto que fica no lugar do trecho, pronto, como deve aparecer \
+no documento - sem aspas em volta, sem comentários, sem explicações, sem alternativas e sem campos a \
+preencher como "[informar]";
+  - "remover": o trecho deve ser apagado ("texto_novo" vazio);
+  - "incluir": falta algo no documento (trecho vazio); "texto_novo" é a cláusula a acrescentar;
+  - "manual": a correção depende de informação que só o cliente tem (por exemplo, qual valor de quota está \
+certo ou o número de um documento), de uma escolha entre alternativas, ou mexe em vários lugares de uma vez; \
+"texto_novo" vazio. Não chute dados.
 - "fundamento" cita o dispositivo legal ou normativo quando houver; em ortografia, a regra gramatical.
 - Gravidade: "alta" para o que gera exigência da Junta ou erro jurídico; "media" para inconsistência que \
 pode gerar dúvida; "baixa" para estilo e ortografia.
@@ -918,6 +942,8 @@ def normalizar_revisao(dados: dict) -> dict:
             "trecho": str(a.get("trecho") or "").strip(),
             "problema": str(a.get("problema") or "").strip(),
             "sugestao": str(a.get("sugestao") or "").strip(),
+            "acao": a.get("acao") if a.get("acao") in ACOES_IA else "manual",
+            "texto_novo": str(a.get("texto_novo") or "").strip(),
             "fundamento": str(a.get("fundamento") or "").strip(),
             "status": "pendente",
         })
@@ -926,18 +952,51 @@ def normalizar_revisao(dados: dict) -> dict:
     return {"resumo": str(dados.get("resumo") or "").strip(), "apontamentos": aps}
 
 
+def texto_aplicavel(a: dict) -> Optional[str]:
+    """O que entra no documento no lugar do trecho, ou None quando o
+    apontamento fica para ajuste à mão (falta dado do cliente, é escolha,
+    é cláusula a acrescentar ou o texto ainda tem campo a preencher).
+    Revisões feitas antes de existir "acao" usam a própria sugestão."""
+    acao = a.get("acao")
+    if acao is None:
+        t = a.get("sugestao") or ""
+    elif acao == "remover":
+        return ""
+    elif acao == "substituir":
+        t = a.get("texto_novo") or ""
+    else:
+        return None
+    if not t.strip() or _MARCADOR.search(t):
+        return None
+    return t
+
+
+def preparar_aplicacao(apontamentos: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Aceitos que dá para aplicar sozinho (com 'texto_aplicar') e aceitos
+    que ficam para ajuste à mão."""
+    aplicar, manuais = [], []
+    for a in apontamentos:
+        if a.get("status") != "aceito":
+            continue
+        t = texto_aplicavel(a)
+        if t is None or not (a.get("trecho") or "").strip():
+            manuais.append(a)
+        else:
+            aplicar.append({**a, "texto_aplicar": t})
+    return aplicar, manuais
+
+
 def aplicar_sugestoes(texto: str, apontamentos: list[dict]) -> tuple[str, list[dict]]:
     """Texto com os apontamentos ACEITOS aplicados (troca o trecho pela
     sugestão). Devolve também os aceitos que não puderam ser aplicados
     sozinhos (trecho vazio ou não encontrado), para o colaborador ajustar à mão.
     O trecho é achado mesmo com diferença de espaços, quebras, aspas ou travessões."""
-    novo, manuais = texto, []
-    for a in apontamentos:
-        if a.get("status") != "aceito":
-            continue
+    aplicar, manuais = preparar_aplicacao(apontamentos)
+    novo = texto
+    for a in aplicar:
         achado = minuta_layout.achar(novo, a.get("trecho") or "")
         if achado:
-            novo = novo[:achado[0]] + (a.get("sugestao") or "") + novo[achado[1]:]
+            novo = novo[:achado[0]] + a["texto_aplicar"] + novo[achado[1]:]
         else:
             manuais.append(a)
     return novo, manuais
@@ -1755,16 +1814,19 @@ def gerar_versoes(r: dict) -> dict:
     Sem arquivo (texto colado), Word simples e PDF convertido dele."""
     aps = r["resultado"].get("apontamentos") or []
     novo, manuais = aplicar_sugestoes(r["texto_original"], aps)
+    aplicar, a_mao = preparar_aplicacao(aps)
     original, nome_arq = r.get("arquivo"), (r.get("arquivo_nome") or "").lower()
     original = bytes(original) if original is not None else None
     pdf, aviso_pdf, layout = None, "", False
     if original and nome_arq.endswith(".docx"):
-        docx, manuais = minuta_layout.aplicar_no_docx(original, aps)
+        docx, falhas = minuta_layout.aplicar_no_docx(original, aplicar)
+        manuais = a_mao + falhas
         layout = True
     elif original and nome_arq.endswith(".pdf"):
         docx = gerar_docx(novo)
         try:
-            pdf, manuais = minuta_layout.aplicar_no_pdf(original, aps)
+            pdf, falhas = minuta_layout.aplicar_no_pdf(original, aplicar)
+            manuais = a_mao + falhas
             layout = True
         except Exception as exc:  # noqa: BLE001 - PDF protegido ou estranho: fica o Word simples
             aviso_pdf = f"Não consegui aplicar as correções no PDF original ({exc})."

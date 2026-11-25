@@ -209,7 +209,7 @@ def aplicar_no_docx(dados: bytes, apontamentos: list[dict]) -> tuple[bytes, list
         if a.get("status") != "aceito":
             continue
         trecho = a.get("trecho") or ""
-        novo = _trocar(doc, trecho, a.get("sugestao") or "") if trecho else None
+        novo = _trocar(doc, trecho, _novo_texto(a)) if trecho else None
         if novo is None:
             manuais.append(a)
         else:
@@ -227,10 +227,110 @@ def aplicar_no_docx(dados: bytes, apontamentos: list[dict]) -> tuple[bytes, list
 _FONTES = {(True, False, False): "tiro", (True, True, False): "tibo", (True, False, True): "tiit",
            (True, True, True): "tibi", (False, False, False): "helv", (False, True, False): "hebo",
            (False, False, True): "heit", (False, True, True): "hebi"}
+_PADRAO = {"f": "tiro", "s": 11.0, "c": (0, 0, 0)}
+
+
+def _novo_texto(a: dict) -> str:
+    """Texto que entra no lugar do trecho (preparado pelo societario em
+    'texto_aplicar'; revisões antigas usam a própria sugestão)."""
+    return a["texto_aplicar"] if "texto_aplicar" in a else (a.get("sugestao") or "")
 
 
 def _sem_espaco(texto: str) -> str:
     return re.sub(r"\s+", "", texto or "")
+
+
+def _estilo_span(sp: dict) -> dict:
+    """Fonte padrão do PDF mais parecida com a do trecho, tamanho e cor."""
+    nome, flags = (sp.get("font") or "").lower(), int(sp.get("flags") or 0)
+    serifa = bool(flags & 4) or any(x in nome for x in ("times", "serif", "roman", "georgia",
+                                                          "garamond", "cambria", "book"))
+    serifa = serifa and "sans" not in nome and "arial" not in nome and "helvetica" not in nome
+    negrito = bool(flags & 16) or "bold" in nome or "black" in nome
+    italico = bool(flags & 2) or "italic" in nome or "oblique" in nome
+    c = int(sp.get("color") or 0)
+    return {"f": _FONTES[(serifa, negrito, italico)], "s": float(sp.get("size") or 11),
+            "c": (((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255)}
+
+
+def _letras(pg) -> list[tuple]:
+    """(centro x, centro y, letra, x0, y0, x1, y1, estilo, linha de base) de
+    cada caractere da página."""
+    saida = []
+    for bloco in pg.get_text("rawdict").get("blocks", []):
+        for linha in bloco.get("lines", []):
+            for sp in linha.get("spans", []):
+                est = _estilo_span(sp)
+                base = float(sp["origin"][1]) if sp.get("origin") else None
+                for ch in sp.get("chars", []):
+                    x0, y0, x1, y1 = ch["bbox"]
+                    saida.append(((x0 + x1) / 2, (y0 + y1) / 2, ch["c"], x0, y0, x1, y1, est, base))
+    return saida
+
+
+def _no_rect(letras: list, r) -> list[tuple]:
+    """Letras cujo centro está no retângulo (as das linhas vizinhas, que
+    encostam nele, ficam de fora), da esquerda para a direita."""
+    return sorted((l for l in letras if r.x0 <= l[0] <= r.x1 and r.y0 <= l[1] <= r.y1), key=lambda l: l[0])
+
+
+def _palavras(letras: list[tuple], colado: bool = False) -> list[dict]:
+    """Palavras (com o estilo da 1ª letra) de uma sequência de letras;
+    'cola' marca a que vem grudada na anterior (sem espaço, ex.: pontuação)."""
+    saida, atual, espaco, ant = [], None, not colado, None
+    for l in letras:
+        if l[2].isspace():
+            atual, espaco = None, True
+            continue
+        # PDF do Word muitas vezes não tem o caractere de espaço: o espaço é só
+        # um vão entre as letras
+        if ant is not None and l[3] - ant[5] > (l[6] - l[4]) * 0.15:
+            atual, espaco = None, True
+        ant = l
+        if atual is None:
+            atual = {"t": "", **l[7], "cola": not espaco}
+            saida.append(atual)
+            espaco = False
+        atual["t"] += l[2]
+    return saida
+
+
+def _linhas_visuais(letras: list) -> list[dict]:
+    """Linhas da página como aparecem (letras agrupadas pela altura), de
+    cima para baixo: {x0, y0, x1, y1, cy, letras}."""
+    grupos: list[dict] = []
+    for l in sorted(letras, key=lambda l: l[1]):
+        alt = max(l[6] - l[4], 1)
+        if grupos and abs(l[1] - grupos[-1]["cy"]) <= alt * 0.35:
+            grupos[-1]["letras"].append(l)
+        else:
+            grupos.append({"cy": l[1], "letras": [l]})
+    saida = []
+    for g in grupos:
+        ls = sorted(g["letras"], key=lambda l: l[0])
+        vis = [l for l in ls if not l[2].isspace()] or ls
+        saida.append({"x0": min(l[3] for l in vis), "x1": max(l[5] for l in vis), "y0": min(l[4] for l in ls),
+                      "y1": max(l[6] for l in ls), "cy": g["cy"], "letras": ls,
+                      "base": next((l[8] for l in vis if l[8] is not None), None)})
+    return saida
+
+
+def _margens(pg, linhas: list[dict]) -> tuple[float, float]:
+    """Margem esquerda e direita do corpo do texto (a borda mais comum das
+    linhas largas, que ignora cabeçalho, numeração de página etc.)."""
+    larg = pg.rect.width
+    cheias = [l for l in linhas if l["x1"] - l["x0"] > larg * 0.4]
+    if not cheias:
+        return 72.0, larg - 72.0
+
+    def moda(vals):
+        cont: dict[int, int] = {}
+        for v in vals:
+            cont[round(v)] = cont.get(round(v), 0) + 1
+        alvo = max(cont.items(), key=lambda kv: (kv[1], kv[0]))[0]
+        return max(v for v in vals if round(v) == alvo)
+
+    return moda([l["x0"] for l in cheias]), moda([l["x1"] for l in cheias])
 
 
 def _achar_no_pdf(pg, trecho: str, letras: list) -> Optional[list]:
@@ -245,30 +345,12 @@ def _achar_no_pdf(pg, trecho: str, letras: list) -> Optional[list]:
     for i in range(len(rects)):
         junto = ""
         for j in range(i, len(rects)):
-            junto += _sem_espaco(_texto_no_rect(letras, rects[j]))
+            junto += _sem_espaco("".join(l[2] for l in _no_rect(letras, rects[j])))
             if junto == alvo:
                 return rects[i:j + 1]
             if not alvo.startswith(junto):
                 break
     return None
-
-
-def _letras(pg) -> list:
-    """(centro x, centro y, letra, borda direita) de cada caractere da página."""
-    saida = []
-    for bloco in pg.get_text("rawdict").get("blocks", []):
-        for linha in bloco.get("lines", []):
-            for sp in linha.get("spans", []):
-                for ch in sp.get("chars", []):
-                    x0, y0, x1, y1 = ch["bbox"]
-                    saida.append(((x0 + x1) / 2, (y0 + y1) / 2, ch["c"], x1))
-    return saida
-
-
-def _texto_no_rect(letras: list, r) -> str:
-    """Letras cujo centro está no retângulo (as das linhas vizinhas, que
-    encostam nele, ficam de fora)."""
-    return "".join(c for x, y, c, _ in letras if r.x0 <= x <= r.x1 and r.y0 <= y <= r.y1)
 
 
 def _miolo(r):
@@ -279,65 +361,159 @@ def _miolo(r):
     return fitz.Rect(r.x0, r.y0 + folga, r.x1, r.y1 - folga)
 
 
-def _estilo(pg, r) -> dict:
-    """Tamanho, fonte, cor e linha de base do texto original no retângulo."""
-    for bloco in pg.get_text("dict", clip=_miolo(r)).get("blocks", []):
-        for linha in bloco.get("lines", []):
-            for sp in linha.get("spans", []):
-                if not (sp.get("text") or "").strip():
-                    continue
-                nome, flags = (sp.get("font") or "").lower(), int(sp.get("flags") or 0)
-                serifa = bool(flags & 4) or any(x in nome for x in ("times", "serif", "roman", "georgia",
-                                                                      "garamond", "cambria", "book"))
-                serifa = serifa and "sans" not in nome
-                negrito = bool(flags & 16) or "bold" in nome or "black" in nome
-                italico = bool(flags & 2) or "italic" in nome or "oblique" in nome
-                c = int(sp.get("color") or 0)
-                return {"tam": float(sp.get("size") or 11), "fonte": _FONTES[(serifa, negrito, italico)],
-                        "cor": (((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255),
-                        "base": float(sp["origin"][1]) if sp.get("origin") else None}
-    return {"tam": 11.0, "fonte": "tiro", "cor": (0, 0, 0), "base": None}
+_FONTES_CACHE: dict = {}
 
 
-def _distribuir(palavras: list[str], rects: list, fonte: str, tam: float, forcar: bool = False) -> Optional[list[str]]:
-    """Palavras repartidas pelas linhas (retângulos) do trecho original, na
-    fonte e tamanho dados. None se não couber."""
+def _medir(texto: str, fonte: str, tam: float) -> float:
+    """Largura do texto como ele sai desenhado (fitz.get_text_length mede
+    menos as letras acentuadas, e a palavra seguinte encavalaria)."""
     import pymupdf as fitz
+    if fonte not in _FONTES_CACHE:
+        _FONTES_CACHE[fonte] = fitz.Font(fonte)
+    return _FONTES_CACHE[fonte].text_length(texto, fontsize=tam)
 
+
+def _larg(p: dict, escala: float) -> float:
+    return _medir(p["t"], p["f"], p["s"] * escala)
+
+
+def _espaco(p: dict, escala: float) -> float:
+    return 0.0 if p.get("cola") else _medir(" ", p["f"], p["s"] * escala)
+
+
+def _distribuir(palavras: list[dict], rects: list, escala: float) -> Optional[list[list[dict]]]:
+    """Palavras repartidas pelas linhas (retângulos); None se não couber."""
     linhas, k = [], 0
     for r in rects:
-        atual: list[str] = []
+        atual: list[dict] = []
+        usado = 0.0
         while k < len(palavras):
-            teste = " ".join(atual + [palavras[k]])
-            if fitz.get_text_length(teste, fontname=fonte, fontsize=tam) <= r.width + 0.5:
-                atual.append(palavras[k])
+            p = palavras[k]
+            w = _larg(p, escala) + (_espaco(p, escala) if atual else 0)
+            if usado + w <= r.width + 0.5:
+                atual.append(p)
+                usado += w
                 k += 1
+            elif not atual and p.get("cola"):  # pontuação não começa linha sozinha
+                break
             else:
                 break
-        linhas.append(" ".join(atual))
-    if k < len(palavras):
-        if not forcar:
-            return None
-        linhas[-1] = " ".join(filter(None, [linhas[-1]] + palavras[k:]))
-    return linhas
+        linhas.append(atual)
+    return linhas if k >= len(palavras) else None
 
 
-def _caber(palavras: list[str], rects: list, fonte: str, tam: float, minimo: float):
-    """(linhas, tamanho) com o maior tamanho de fonte, até `minimo` x o
-    original, em que as palavras cabem nas linhas; (None, menor tamanho)."""
-    t = tam
-    while t >= tam * minimo:
-        linhas = _distribuir(palavras, rects, fonte, t)
+def _caber(palavras: list[dict], rects: list, minimo: float):
+    """(linhas, escala) com a maior fonte, até `minimo` x a original, em que
+    as palavras cabem; (None, 1) se não cabe."""
+    e = 1.0
+    while e >= minimo - 1e-6:
+        linhas = _distribuir(palavras, rects, e)
         if linhas is not None:
-            return linhas, t
-        t -= 0.25
-    return None, max(t + 0.25, tam * minimo)
+            return linhas, e
+        e -= 0.02
+    return None, 1.0
+
+
+def _plano_pdf(pg, rects: list, sug: str, letras: list) -> Optional[dict]:
+    """Onde e como reescrever a correção. Cada palavra mantém o próprio
+    estilo (a do texto novo, o estilo do trecho original). Tenta:
+    1) nas mesmas linhas do trecho (fonte até 15% menor), quando o texto novo
+       tem mais ou menos o tamanho do antigo;
+    2) refazendo o resto da última linha (o texto anda para a direita ou
+       volta para a esquerda, sem buraco), justificado até a margem;
+    3) refazendo também as linhas seguintes do mesmo parágrafo;
+    4) usando o espaço em branco logo abaixo do parágrafo.
+    None se nem assim couber (fica para ajustar à mão: melhor do que letra
+    miúda ou texto por cima de outro)."""
+    import pymupdf as fitz
+
+    orig = [l for r in rects for l in _no_rect(letras, r)]
+    est = next((l[7] for l in orig if l[2].isalnum()), orig[0][7] if orig else _PADRAO)
+    novas = [{"t": t, **est, "cola": False} for t in sug.split()]
+    bases = [next((l[8] for l in _no_rect(letras, r) if l[8] is not None), None) for r in rects]
+    alvo, apagar = list(rects), list(rects)
+    larg_orig = sum(r.width for r in rects)
+    larg_nova = sum(_larg(p, 1) + (_espaco(p, 1) if i else 0) for i, p in enumerate(novas))
+    ult = rects[-1]
+    resto = sorted((l for l in letras if ult.y0 <= l[1] <= ult.y1 and l[0] > ult.x1 + 0.5), key=lambda l: l[0])
+    linhas, escala = _caber(novas, alvo, 0.85)
+    parecido = abs(larg_nova - larg_orig) <= max(_espaco(novas[0], 1) * 2 if novas else 0, 3)
+    if linhas is not None and (parecido or not resto or not novas):
+        return {"alvo": alvo, "apagar": apagar, "bases": bases, "linhas": linhas, "escala": escala,
+                "cheias": [i < len(alvo) - 1 for i in range(len(alvo))]}
+
+    visuais = _linhas_visuais(letras)
+    esq, dir_ = _margens(pg, visuais)
+    cy = (ult.y0 + ult.y1) / 2
+    idx = min(range(len(visuais)), key=lambda i: abs(visuais[i]["cy"] - cy)) if visuais else None
+    tam0 = est["s"]
+    linha_ult = visuais[idx] if idx is not None else None
+    cheia_ult = bool(linha_ult and linha_ult["x1"] >= dir_ - tam0 * 2)
+    # o resto começa grudado no trecho (ex.: "." ou "," logo depois)? continua grudado
+    colado = bool(resto) and not resto[0][2].isspace() and resto[0][3] - ult.x1 < (resto[0][6] - resto[0][4]) * 0.15
+    palavras = novas + _palavras(resto, colado)
+    if resto:
+        apagar.append(fitz.Rect(ult.x1, ult.y0, max(l[5] for l in resto), ult.y1))
+    alvo[-1] = fitz.Rect(ult.x0, ult.y0, max(dir_, ult.x1) if (cheia_ult or resto) else ult.x1, ult.y1)
+    cheias = [True] * (len(alvo) - 1) + [cheia_ult]
+    linhas, escala = _caber(palavras, alvo, 0.85)
+    passo = ult.height * 1.15
+    j = idx + 1 if idx is not None else 0
+    if linhas is None and idx is not None:
+        # 3) linhas seguintes do mesmo parágrafo
+        ant = linha_ult
+        while (j < len(visuais) and ant["x1"] >= dir_ - tam0 * 2
+               and visuais[j]["y0"] - ant["y1"] < tam0 * 0.8 and visuais[j]["x1"] <= dir_ + 2):
+            v = visuais[j]
+            passo = v["cy"] - ant["cy"]
+            alvo.append(fitz.Rect(esq, v["y0"], dir_, v["y1"]))
+            apagar.append(fitz.Rect(v["x0"], v["y0"], v["x1"], v["y1"]))
+            bases.append(v["base"])
+            cheias.append(v["x1"] >= dir_ - tam0 * 2)
+            palavras = palavras + _palavras(v["letras"])
+            ant, j = v, j + 1
+        linhas, escala = _caber(palavras, alvo, 0.85)
+        if linhas is None:
+            # 4) espaço em branco abaixo do parágrafo, até a próxima linha
+            limite = visuais[j]["y0"] if j < len(visuais) else pg.rect.height - 40
+            r, base = alvo[-1], bases[-1] if bases[-1] is not None else alvo[-1].y1 - ult.height * 0.25
+            while r.y1 + passo <= limite - passo * 0.3:
+                r = fitz.Rect(esq, r.y0 + passo, dir_, r.y1 + passo)
+                base += passo
+                alvo.append(r)
+                bases.append(base)
+                cheias.append(False)
+            linhas, escala = _caber(palavras, alvo, 0.85)
+    if linhas is None:
+        return None
+    # a linha que antes ia até a margem continua justificada, menos a última
+    # linha que recebeu texto (fim do parágrafo)
+    ultima = max((i for i, l in enumerate(linhas) if l), default=-1)
+    # (ou a última, se ela é a última linha usada e o parágrafo segue abaixo)
+    cheias = [c and (i < ultima or i == ultima == len(alvo) - 1) for i, c in enumerate(cheias)]
+    return {"alvo": alvo, "apagar": apagar, "bases": bases, "linhas": linhas, "escala": escala, "cheias": cheias}
+
+
+def _escrever_linha(pg, r, base: float, linha: list[dict], escala: float, justificar: bool) -> None:
+    larguras = [_larg(p, escala) for p in linha]
+    espacos = [(_espaco(p, escala) if i else 0.0) for i, p in enumerate(linha)]
+    folga = r.width - sum(larguras) - sum(espacos)
+    vaos = sum(1 for i, p in enumerate(linha) if i and not p.get("cola"))
+    extra = folga / vaos if justificar and vaos and 0 < folga else 0.0
+    if extra > max(espacos + [3.0]) * 3:  # linha com poucas palavras: não estica
+        extra = 0.0
+    x = r.x0
+    for i, (p, w) in enumerate(zip(linha, larguras)):
+        if i:
+            x += espacos[i] + (extra if not p.get("cola") else 0)
+        pg.insert_text((x, base), p["t"], fontname=p["f"], fontsize=p["s"] * escala, color=p["c"])
+        x += w
 
 
 def aplicar_no_pdf(dados: bytes, apontamentos: list[dict]) -> tuple[bytes, list[dict]]:
     """PDF original com cada trecho aceito apagado e reescrito no mesmo
-    lugar e no mesmo estilo; trecho em várias linhas é reescrito nas mesmas
-    linhas. Os que não forem achados voltam como manuais."""
+    lugar e no mesmo estilo (veja `_plano_pdf`). Os que não forem achados,
+    ou que não couberem sem estragar a página, voltam como manuais."""
     import pymupdf as fitz
 
     pdf = fitz.open(stream=dados, filetype="pdf")
@@ -345,7 +521,7 @@ def aplicar_no_pdf(dados: bytes, apontamentos: list[dict]) -> tuple[bytes, list[
     for a in apontamentos:
         if a.get("status") != "aceito":
             continue
-        trecho, sug = _normal(a.get("trecho")), _normal(a.get("sugestao"))
+        trecho, sug = _normal(a.get("trecho")), _normal(_novo_texto(a))
         feito = False
         if trecho:
             for pg in pdf:
@@ -353,33 +529,19 @@ def aplicar_no_pdf(dados: bytes, apontamentos: list[dict]) -> tuple[bytes, list[
                 rects = _achar_no_pdf(pg, trecho, letras)
                 if not rects:
                     continue
-                estilos = [_estilo(pg, r) for r in rects]
-                e0 = estilos[0]
-                fonte, palavras, apagar = e0["fonte"], sug.split(), list(rects)
-                # 1º: nas mesmas linhas, diminuindo a fonte no máximo 15%
-                linhas, tam = _caber(palavras, rects, fonte, e0["tam"], 0.85)
-                if linhas is None:
-                    # não coube: o resto da última linha anda para a direita, até a
-                    # margem do texto da página (como num editor), em vez de
-                    # espremer a letra
-                    ult = rects[-1]
-                    resto = [(c, x1) for x, y, c, x1 in letras if ult.y0 <= y <= ult.y1 and x > ult.x1]
-                    margem = max([x1 for *_, x1 in letras] + [ult.x1])
-                    if resto:
-                        apagar.append(fitz.Rect(ult.x1, ult.y0, max(x1 for _, x1 in resto), ult.y1))
-                    rects = rects[:-1] + [fitz.Rect(ult.x0, ult.y0, margem, ult.y1)]
-                    palavras = palavras + "".join(c for c, _ in resto).split()
-                    linhas, tam = _caber(palavras, rects, fonte, e0["tam"], 0.6)
-                    if linhas is None:
-                        linhas = _distribuir(palavras, rects, fonte, tam, forcar=True)
-                for r in apagar:
+                plano = _plano_pdf(pg, rects, sug, letras)
+                if plano is None:
+                    break
+                for r in plano["apagar"]:
                     pg.add_redact_annot(_miolo(r), fill=False)
                 pg.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
-                for r, est, linha in zip(rects, estilos, linhas):
+                for r, base, linha, cheia in zip(plano["alvo"], plano["bases"], plano["linhas"], plano["cheias"]):
                     if not linha:
                         continue
-                    base = est["base"] if est["base"] is not None else r.y1 - (r.height - tam) / 2 - tam * 0.2
-                    pg.insert_text((r.x0, base), linha, fontname=fonte, fontsize=tam, color=e0["cor"])
+                    if base is None:
+                        tam = linha[0]["s"] * plano["escala"]
+                        base = r.y1 - (r.height - tam) / 2 - tam * 0.2
+                    _escrever_linha(pg, r, base, linha, plano["escala"], cheia)
                 feito = True
                 break
         if not feito:

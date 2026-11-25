@@ -145,11 +145,11 @@ def test_word_ida_e_volta():
 def test_normalizar_e_aplicar_sugestoes():
     res = so.normalizar_revisao({"resumo": "ok", "apontamentos": [
         {"categoria": "ortografia", "gravidade": "baixa", "titulo": "Erro", "trecho": "sosio", "problema": "p",
-         "sugestao": "sócio", "fundamento": ""},
+         "sugestao": "sócio", "acao": "substituir", "texto_novo": "sócio", "fundamento": ""},
         {"categoria": "inventada", "gravidade": "alta", "titulo": "Capital", "trecho": "R$ 90.000,00",
-         "problema": "p", "sugestao": "R$ 100.000,00", "fundamento": "CC art. 1.055"},
+         "problema": "p", "sugestao": "R$ 100.000,00", "acao": "substituir", "texto_novo": "R$ 100.000,00", "fundamento": "CC art. 1.055"},
         {"categoria": "ausente", "gravidade": "media", "titulo": "Foro", "trecho": "", "problema": "p",
-         "sugestao": "Fica eleito o foro…", "fundamento": ""},
+         "sugestao": "Fica eleito o foro…", "acao": "substituir", "texto_novo": "Fica eleito o foro…", "fundamento": ""},
     ]})
     aps = res["apontamentos"]
     assert [a["gravidade"] for a in aps] == ["alta", "media", "baixa"]  # mais grave primeiro
@@ -186,7 +186,7 @@ def test_revisar_minuta_com_cliente_falso():
     pytest.importorskip("anthropic")
     saida = {"resumo": "Capital não fecha.", "apontamentos": [
         {"categoria": "capital", "gravidade": "alta", "titulo": "Quotas × capital", "trecho": "R$ 30.000,00",
-         "problema": "Soma 90 mil, capital 100 mil.", "sugestao": "R$ 40.000,00", "fundamento": "CC art. 1.055"}]}
+         "problema": "Soma 90 mil, capital 100 mil.", "sugestao": "R$ 40.000,00", "acao": "substituir", "texto_novo": "R$ 40.000,00", "fundamento": "CC art. 1.055"}]}
     resp = SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=json.dumps(saida))])
     cliente, pedidos = _cliente_falso(resp)
     res = so.revisar_minuta("Sócio A: R$ 60.000,00\nSócio B: R$ 30.000,00", "", "alteracao", "ctx", cliente=cliente)
@@ -285,7 +285,7 @@ def test_revisao_finalizada_vira_anexo(banco):
     rid = so.criar_revisao(ESC_A, "dp_admin", "Alteração.docx", texto, p["id"])
     so.gravar_resultado(ESC_A, rid, so.normalizar_revisao({"resumo": "x", "apontamentos": [
         {"categoria": "capital", "gravidade": "alta", "titulo": "Quotas", "trecho": "R$ 30.000,00",
-         "problema": "p", "sugestao": "R$ 40.000,00", "fundamento": "f"}]}))
+         "problema": "p", "sugestao": "R$ 40.000,00", "acao": "substituir", "texto_novo": "R$ 40.000,00", "fundamento": "f"}]}))
     assert so.revisoes_pendentes(ESC_A) == 1
     so.decidir_apontamento(ESC_A, rid, 1, "aceito")
     out = so.finalizar_revisao(ESC_A, rid, "dp_admin")
@@ -549,7 +549,7 @@ def test_revisao_do_word_sai_no_layout_original(banco, monkeypatch):
     rid = so.criar_revisao(ESC_A, "dp_admin", "Alteração.docx", texto, p["id"], "Alteração.docx", original)
     so.gravar_resultado(ESC_A, rid, so.normalizar_revisao({"resumo": "x", "apontamentos": [
         {"categoria": "capital", "gravidade": "alta", "titulo": "Quotas", "trecho": "R$ 30.000,00",
-         "problema": "p", "sugestao": "R$ 40.000,00", "fundamento": "f"}]}))
+         "problema": "p", "sugestao": "R$ 40.000,00", "acao": "substituir", "texto_novo": "R$ 40.000,00", "fundamento": "f"}]}))
     so.decidir_apontamento(ESC_A, rid, 1, "aceito")
     out = so.finalizar_revisao(ESC_A, rid, "dp_admin")
     assert out["layout_original"] and not out["manuais"] and out["pdf"] == b"%PDF-fake"
@@ -564,3 +564,18 @@ def test_texto_colado_nao_guarda_arquivo(banco):
     from conftest import ESC_A
     rid = so.criar_revisao(ESC_A, "dp_admin", "Texto colado", "abc", None, "nota.txt", b"abc")
     assert so.obter_revisao(ESC_A, rid)["arquivo"] is None
+
+
+def test_texto_aplicavel_separa_instrucao_do_texto():
+    base = {"trecho": "x", "status": "aceito", "sugestao": "Explicação para o colaborador"}
+    assert so.texto_aplicavel({**base, "acao": "substituir", "texto_novo": "R$ 1,00"}) == "R$ 1,00"
+    assert so.texto_aplicavel({**base, "acao": "remover", "texto_novo": ""}) == ""
+    assert so.texto_aplicavel({**base, "acao": "manual", "texto_novo": "algo"}) is None
+    assert so.texto_aplicavel({**base, "acao": "incluir", "texto_novo": "Cláusula X"}) is None
+    assert so.texto_aplicavel({**base, "acao": "substituir", "texto_novo": "CPF [informar]"}) is None
+    assert so.texto_aplicavel({**base, "acao": "substituir", "texto_novo": "RG ________"}) is None
+    assert so.texto_aplicavel({**base}) == "Explicação para o colaborador"  # revisão antiga
+    aps = [{**base, "id": 1, "trecho": "Remover", "acao": "remover", "texto_novo": ""},
+           {**base, "id": 2, "trecho": "valor", "acao": "manual", "texto_novo": ""}]
+    novo, manuais = so.aplicar_sugestoes("Remover esta linha. O valor fica.", aps)
+    assert novo == " esta linha. O valor fica." and [a["id"] for a in manuais] == [2]

@@ -1328,13 +1328,27 @@ def _decidir(esc: str, rid: int, aid: int, status: str) -> None:
     so.decidir_apontamento(esc, rid, aid, status)
 
 
+def _como_aplica(a: dict) -> str:
+    """O que 'Gerar versão revisada' faz com o apontamento, se aceito."""
+    if a.get("acao") is None:  # revisão antiga
+        return ""
+    novo = so.texto_aplicavel(a)
+    if novo is None:
+        return ('<div class="soc-muted" style="margin-top:6px">✋ Se aceito, fica para <b>ajustar à mão</b> '
+                '(depende de dado do cliente, de uma escolha ou é texto a acrescentar).</div>')
+    if novo == "":
+        return '<div class="soc-muted" style="margin-top:6px">Se aceito, o trecho é <b>removido</b> do documento.</div>'
+    return (f'<div class="soc-muted" style="margin-top:6px">Se aceito, entra no documento:</div>'
+            f'<div class="sg">{_e(novo)}</div>')
+
+
 def _trecho_html(texto: str, i, aps: list[dict]) -> str:
     if i is None:
         return _e(texto)
     a = aps[i]
     cor = _COR_GRAV.get(a.get("gravidade"), "#f59e0b")
-    corpo = (f"<del>{_e(texto)}</del> <ins>{_e(a['sugestao'])}</ins>"
-             if a.get("status") == "aceito" and a.get("sugestao") else _e(texto))
+    novo = so.texto_aplicavel(a) if a.get("status") == "aceito" else None
+    corpo = f"<del>{_e(texto)}</del> <ins>{_e(novo)}</ins>" if novo is not None else _e(texto)
     return (f'<mark style="background:{cor}26; border-bottom:2px solid {cor}" title="{_e(a.get("titulo"))}">'
             f'<sup style="color:{cor}">{i + 1}</sup>{corpo}</mark>')
 
@@ -1382,6 +1396,7 @@ def _revisao(esc: str, usuario: str, rid: int) -> None:
                    if a.get("trecho") else "")
                 + (f'<div class="soc-muted" style="margin-top:6px">Sugestão:</div><div class="sg">{_e(a["sugestao"])}</div>'
                    if a.get("sugestao") else "")
+                + _como_aplica(a)
                 + (f'<div class="soc-muted" style="margin-top:6px">Fundamento: {_e(a["fundamento"])}</div>'
                    if a.get("fundamento") else "") + "</div>", unsafe_allow_html=True)
             b1, b2, b3 = st.columns([1, 1, 2])
@@ -1404,8 +1419,9 @@ def _revisao(esc: str, usuario: str, rid: int) -> None:
         st.success(f"Versão revisada pronta: {out['aceitos'] - len(out['manuais'])} sugestão(ões) aplicada(s)."
                    + (" Também anexada ao processo." if out.get("anexo_id") else ""))
         if out["manuais"]:
-            st.warning("Estas sugestões aceitas não puderam ser aplicadas sozinhas (trecho não encontrado ou cláusula "
-                       "a acrescentar) — ajuste à mão no Word:\n\n"
+            st.warning("Estas sugestões aceitas não foram aplicadas sozinhas (dependem de dado do cliente, são "
+                       "cláusula a acrescentar, o trecho não foi achado ou a correção não cabia sem estragar a "
+                       "página) — ajuste à mão:\n\n"
                        + "\n".join(f"- **{a['titulo']}**: {a['sugestao']}" for a in out["manuais"]))
         if not out.get("layout_original"):
             st.caption("A minuta foi colada como texto (ou não veio em Word): o Word sai com o texto corrigido, "

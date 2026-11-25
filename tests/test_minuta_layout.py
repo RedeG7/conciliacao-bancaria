@@ -148,3 +148,29 @@ def test_pdf_sem_libreoffice(monkeypatch):
     monkeypatch.setattr(ml, "libreoffice", lambda: None)
     with pytest.raises(ml.ErroConversao):
         ml.docx_para_pdf(_docx())
+
+
+def test_pdf_acentos_e_pontuacao_nao_encavalam():
+    fitz = pytest.importorskip("pymupdf")
+    doc = fitz.open()
+    pg = doc.new_page()
+    pg.insert_text((72, 100), "CLAUSULA QUARTA - A Administracao da sociedade e exercida", fontname="tibo", fontsize=12)
+    novo, manuais = ml.aplicar_no_pdf(doc.tobytes(), [_ap("CLAUSULA QUARTA", "CLÁUSULA QUARTA DA ADMINISTRAÇÃO")])
+    assert not manuais
+    pg2 = fitz.open(stream=novo, filetype="pdf")[0]
+    palavras = [w[4] for w in pg2.get_text("words", sort=True)]
+    assert palavras[:5] == ["CLÁUSULA", "QUARTA", "DA", "ADMINISTRAÇÃO", "-"]
+    caixas = sorted(pg2.get_text("words"), key=lambda w: (round(w[3]), w[0]))
+    assert all(a[2] <= b[0] + 0.5 for a, b in zip(caixas, caixas[1:]) if round(a[3]) == round(b[3]))  # nada encavalado
+
+
+def test_pdf_correcao_que_nao_cabe_fica_a_mao():
+    fitz = pytest.importorskip("pymupdf")
+    doc = fitz.open()
+    pg = doc.new_page()
+    pg.insert_text((72, 100), "Fica eleito o foro de Goiania.", fontname="tiro", fontsize=12)
+    pg.insert_text((72, 114), "Segunda linha logo abaixo, sem espaco livre.", fontname="tiro", fontsize=12)
+    original = doc.tobytes()
+    novo, manuais = ml.aplicar_no_pdf(original, [_ap("foro de Goiania", "foro " + "muito longo " * 60)])
+    assert [a["id"] for a in manuais] == [1]
+    assert "foro de Goiania" in fitz.open(stream=novo, filetype="pdf")[0].get_text()  # página intacta
