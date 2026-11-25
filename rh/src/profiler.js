@@ -5,6 +5,7 @@
 const P = require('./comportamental');
 const { Pdf, A4 } = require('./pdf');
 const { html, raw, dataBr } = require('./views');
+const SP = require('./solides_profiler');
 
 const CORES = { realizador: '#2a78d6', conector: '#eb6834', constante: '#1baf7a', criterioso: '#eda100' };
 const cls = e => `s${P.CHAVES.indexOf(e) + 1}`;
@@ -62,7 +63,7 @@ function visualizar(p, { cargo = null, colab = null, menu = '' } = {}) {
       <div class="pf-cabeca-dados"><small>Respondido em</small><b>${dataBr(p.data_resposta)}</b>${alvo ? html`<small>Aderência a ${cargo.nome}</small><b>${P.aderencia(p.pontos, alvo)}%</b>` : ''}</div>
       ${menu}
     </div>
-    <div class="abas-form pf-abas"><button type="button" data-aba="resumo" class="ativo">Resumo do perfil</button><button type="button" data-aba="habilidades">Habilidades</button><button type="button" data-aba="graficos">Gráficos</button><button type="button" data-aba="gestao">Como trabalhar com ${p.nome.split(' ')[0]}</button></div>
+    <div class="abas-form pf-abas"><button type="button" data-aba="resumo" class="ativo">Resumo do perfil</button><button type="button" data-aba="habilidades">Habilidades</button><button type="button" data-aba="graficos">Gráficos</button><button type="button" data-aba="gestao">Como trabalhar com ${p.nome.split(' ')[0]}</button>${p.solides ? html`<button type="button" data-aba="importado">Resultado importado</button>` : ''}</div>
 
     <div data-painel="resumo">
       <div class="pf-grade">
@@ -102,7 +103,31 @@ function visualizar(p, { cargo = null, colab = null, menu = '' } = {}) {
     <div data-painel="gestao" hidden><div class="pf-grade">
       <div class="card"><h3 class="primeiro">Como apoiar</h3><p>${est.gestao}</p>${sec ? html`<p>${sec.gestao}</p>` : ''}</div>
       <div class="card"><h3 class="primeiro">Ambiente em que rende mais</h3><ul class="pf-lista ok">${AMBIENTE[p.principal].map(t => html`<li>${t}</li>`)}</ul></div>
-    </div></div>`;
+    </div></div>
+    ${p.solides ? importado(p) : ''}`;
+}
+// aba com o resultado como veio da Sólides (percentuais, energia, indicadores e habilidades)
+function importado(p) {
+  const s = p.solides, ordem = [...P.CHAVES].sort((a, b) => (s.percentuais[b] ?? 0) - (s.percentuais[a] ?? 0));
+  const n1 = v => (v == null ? '-' : String(Math.round(v * 10) / 10).replace('.', ','));
+  const hab = SP.HABILIDADES.filter(([k]) => s.habilidades?.[k] != null).map(([k, nome]) => ({ nome, valor: s.habilidades[k] })).sort((a, b) => b.valor - a.valor);
+  return html`<div data-painel="importado" hidden>
+    <div class="pf-grade">
+      <div class="card"><h3 class="primeiro">Composição do perfil${s.letra ? html` <em class="pf-tag">${s.letra}</em>` : ''}</h3>
+        <p class="desc">Percentual de cada estilo no resultado importado. Os pontos das outras abas saem destes percentuais: o estilo mais forte vale 80.</p>
+        <div class="vg-seg">${P.CHAVES.map(e => html`<i class="vg-${cls(e)}" style="flex-grow:${s.percentuais[e] || 0}" data-dica="${nomeEstilo(e)}: ${n1(s.percentuais[e])}%"></i>`)}</div>
+        <div class="vg-pesos">${ordem.map(e => html`<div><i class="vg-${cls(e)}"></i><b>${n1(s.percentuais[e])}%</b><span>${nomeEstilo(e)}</span></div>`)}</div>
+        <h3>Natural e adaptado</h3><p class="desc">Como a pessoa é e como se adapta ao que o ambiente cobra.</p>
+        <table class="pf-tab-mini"><thead><tr><th>Estilo</th><th>Natural</th><th>Adaptado</th><th>Energia</th></tr></thead>
+          <tbody>${ordem.map(e => html`<tr><td><i class="pf-ponto vg-${cls(e)}"></i>${nomeEstilo(e)}</td><td>${n1(s.natural?.[e])}</td><td>${n1(s.adaptado?.[e])}</td><td>${s.energia?.[e] ?? '-'}</td></tr>`)}</tbody></table></div>
+      <div class="card"><h3 class="primeiro">Indicadores</h3><p class="desc">Níveis como vieram no resultado importado.</p>
+        <div class="pf-ind pf-ind-sol">${SP.INDICADORES.filter(([k]) => s.indicadores?.[k] != null).map(([k, nome]) => html`<div><b>${s.indicadores[k]}</b><span>${nome}</span></div>`)}</div>
+        ${s.tempo ? html`<p class="desc">Tempo de resposta do questionário: ${Math.floor(s.tempo / 60)} min ${s.tempo % 60} s.</p>` : ''}
+        ${s.cargo || s.departamento ? html`<p class="desc">Cargo no resultado: ${[s.cargo, s.departamento].filter(Boolean).join(' · ')}</p>` : ''}</div>
+    </div>
+    ${hab.length ? html`<div class="card"><h3 class="primeiro">Habilidades do resultado importado</h3><p class="desc">De 0 a 100.</p>
+      <div class="pf-hab">${hab.map(h => barraNivel(h.nome, h.valor, p.principal))}</div></div>` : ''}
+  </div>`;
 }
 const AMBIENTE = {
   realizador: ['Metas claras e desafiadoras', 'Autonomia para decidir o caminho', 'Retorno rápido sobre resultados'],
