@@ -6,7 +6,7 @@ licença, revisão) separado por escritório."""
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -501,3 +501,21 @@ def test_empresas_do_acessorias(banco):
 
     with pytest.raises(ValueError, match="token"):
         so.atualizar_empresas_acessorias(ESC_A, Quebrado())
+
+
+def test_proxima_verificacao_com_hora(banco):
+    from conftest import ESC_A
+    p = so.criar_processo(ESC_A, "dp_admin", "alteracao", "Empresa Hora LTDA", responsavel="dp_user")
+    dia = datetime.now(so.FUSO).date() + timedelta(days=3)
+    so.registrar_andamento(ESC_A, p["id"], "dp_user", "Protocolado", proxima_verificacao=dia,
+                           hora_lembrete=time(14, 30))
+    lemb = so.obter_processo(ESC_A, p["id"])["lembretes"][0]
+    assert lemb["quando"].astimezone(so.FUSO).replace(tzinfo=None) == datetime.combine(dia, time(14, 30))
+    # antes da hora não aparece; na hora, aparece no pop-up
+    antes = datetime.combine(dia, time(14, 29), so.FUSO)
+    assert so.lembretes_vencidos(ESC_A, "dp_user", antes) == []
+    assert len(so.lembretes_vencidos(ESC_A, "dp_user", antes + timedelta(minutes=1))) == 1
+    # sem hora, continua às 8h
+    so.registrar_andamento(ESC_A, p["id"], "dp_user", "Outro", proxima_verificacao=dia)
+    horas = sorted(l["quando"].astimezone(so.FUSO).time() for l in so.obter_processo(ESC_A, p["id"])["lembretes"])
+    assert horas == [time(8, 0), time(14, 30)]

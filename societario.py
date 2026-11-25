@@ -27,7 +27,7 @@ import json
 import re
 import unicodedata
 import zipfile
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Iterable, Optional
 from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
@@ -38,8 +38,14 @@ import auth
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.2"
+VERSAO = "1.3"
 NOVIDADES = [
+    ("1.3", "25/11/2026", [
+        "Atualizar andamento: a próxima verificação agora tem dia e hora, e o lembrete em pop-up aparece "
+        "nessa hora (antes era sempre às 8h).",
+        "O pop-up de lembretes aparece sozinho quando chega a hora, mesmo com a tela do Hub parada: o Hub "
+        "confere a cada minuto.",
+    ]),
     ("1.2", "25/11/2026", [
         "Novo processo: a empresa é buscada pelo nome ou CNPJ numa lista só, com as empresas cadastradas no "
         "Societário, os clientes do Hub e as empresas do Acessórias (com botão para atualizar a lista na hora).",
@@ -1392,10 +1398,11 @@ def atualizar_dados(escritorio_id: str, processo_id: int, usuario: str, **campos
 
 def registrar_andamento(escritorio_id: str, processo_id: int, usuario: str, titulo: str, texto: str = "",
                         etapa: Optional[str] = None, protocolo: str = "", proxima_acao: str = "",
-                        proxima_verificacao: Optional[date] = None, lembrar: bool = True) -> dict:
+                        proxima_verificacao: Optional[date] = None, lembrar: bool = True,
+                        hora_lembrete: Optional[time] = None) -> dict:
     """Nova linha na linha do tempo. Pode mudar a etapa, gravar o protocolo,
     a próxima ação e a data da próxima verificação (que vira lembrete
-    para o responsável, se `lembrar`)."""
+    para o responsável na `hora_lembrete` desse dia, ou às 8h, se `lembrar`)."""
     if etapa and etapa not in ETAPAS:
         raise ValueError("Etapa inválida.")
     titulo = (titulo or "").strip() or (f"Etapa: {ETAPAS[etapa]}" if etapa else "Andamento")
@@ -1425,7 +1432,7 @@ def registrar_andamento(escritorio_id: str, processo_id: int, usuario: str, titu
             conn.execute("UPDATE soc_lembretes SET status = 'cancelado', concluido_em = now() "
                          "WHERE processo_id = %s AND status = 'pendente'", (processo_id,))
         elif proxima_verificacao and lembrar and p["lembretes_habilitados"]:
-            quando = datetime.combine(proxima_verificacao, datetime.min.time().replace(hour=8), FUSO)
+            quando = datetime.combine(proxima_verificacao, hora_lembrete or time(8, 0), FUSO)
             conn.execute("""
                 INSERT INTO soc_lembretes (escritorio_id, processo_id, usuario, quando, texto, criado_por)
                 VALUES (%s, %s, %s, %s, %s, %s)

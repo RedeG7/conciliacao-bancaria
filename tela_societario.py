@@ -6,7 +6,7 @@ menu_lateral(pode_configurar) e popup_lembretes(...)."""
 from __future__ import annotations
 
 import html
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Callable
 
 import streamlit as st
@@ -631,15 +631,18 @@ def _aba_andamento(esc: str, usuario: str, p: dict) -> None:
             etapa = st.selectbox("Etapa", etapas, index=etapas.index(p["etapa"]), format_func=so.ETAPAS.get)
             protocolo = st.text_input("Número do protocolo", value="")
             proxima_acao = st.text_input("Próxima ação", placeholder="Ex.: Verificar retorno da Junta Comercial")
-            prox = st.date_input("Próxima verificação", value=None, format="DD/MM/YYYY",
-                                 help="Vira um lembrete em pop-up para o responsável, às 8h desse dia.")
+            cd, ch = st.columns([3, 2])
+            prox = cd.date_input("Próxima verificação", value=None, format="DD/MM/YYYY",
+                                 help="Vira um lembrete em pop-up para o responsável nesse dia e hora.")
+            hora_prox = ch.time_input("Hora do lembrete", value=time(8, 0), step=timedelta(minutes=15))
             arq = st.file_uploader("Anexar comprovante (opcional)")
             if st.form_submit_button("Registrar andamento", type="primary"):
                 if not (titulo.strip() or texto.strip() or etapa != p["etapa"] or protocolo.strip() or prox):
                     st.error("Escreva o que aconteceu ou mude a etapa.")
                 else:
                     so.registrar_andamento(esc, p["id"], usuario, titulo, texto,
-                                           etapa if etapa != p["etapa"] else None, protocolo, proxima_acao, prox)
+                                           etapa if etapa != p["etapa"] else None, protocolo, proxima_acao, prox,
+                                           hora_lembrete=hora_prox)
                     if arq is not None:
                         so.anexar(esc, p["id"], usuario, arq.name, arq.getvalue(), arq.type or "", "comprovante")
                     _recarregar()
@@ -729,7 +732,7 @@ def _aba_lembretes(esc: str, usuario: str, p: dict) -> None:
         texto = st.text_input("Lembrar de", placeholder="Verificar o retorno do processo protocolado na Junta")
         c1, c2, c3 = st.columns(3)
         dia = c1.date_input("Dia", value=_hoje() + timedelta(days=2), format="DD/MM/YYYY")
-        hora = c2.time_input("Hora", value=datetime.strptime("08:00", "%H:%M").time())
+        hora = c2.time_input("Hora", value=time(8, 0), step=timedelta(minutes=15))
         usuarios = _usuarios(esc)
         alvo = p.get("responsavel") or usuario
         para = c3.selectbox("Para", usuarios, index=usuarios.index(alvo) if alvo in usuarios else 0)
@@ -885,7 +888,7 @@ def _agenda(esc: str, usuario: str) -> None:
             texto = st.text_input("Lembrar de")
             c1, c2, c3 = st.columns(3)
             dia = c1.date_input("Dia", value=hoje + timedelta(days=1), format="DD/MM/YYYY")
-            hora = c2.time_input("Hora", value=datetime.strptime("08:00", "%H:%M").time())
+            hora = c2.time_input("Hora", value=time(8, 0), step=timedelta(minutes=15))
             usuarios = _usuarios(esc)
             para = c3.selectbox("Para", usuarios, index=usuarios.index(usuario) if usuario in usuarios else 0)
             if st.form_submit_button("Agendar"):
@@ -1408,13 +1411,42 @@ def _adiar(esc: str, lembrete_id: int, horas: int) -> None:
     so.adiar_lembrete(esc, lembrete_id, datetime.now(so.FUSO) + timedelta(hours=horas))
 
 
+@st.fragment(run_every=60)
+def _vigiar_lembretes(esc: str, usuario: str) -> None:
+    """Roda sozinho a cada minuto, mesmo com a tela parada. Quando chega
+    a hora de um lembrete que ainda não apareceu (ou passaram os 30 minutos
+    dos já mostrados), recarrega a tela para o pop-up abrir."""
+    agora = datetime.now(so.FUSO)
+    ultima = st.session_state.get("soc_pp_consulta")
+    if ultima and agora - ultima < timedelta(seconds=55):
+        return  # a tela acabou de consultar
+    st.session_state["soc_pp_consulta"] = agora
+    try:
+        lembs = so.lembretes_vencidos(esc, usuario, agora)
+    except Exception:  # noqa: BLE001 - banco fora do ar não pode derrubar a tela
+        return
+    if not lembs:
+        return
+    visto = st.session_state.get("soc_pp_visto")
+    novos = {l["id"] for l in lembs} - st.session_state.get("soc_pp_ids", set())
+    if novos or not visto or agora - visto >= timedelta(minutes=30):
+        st.session_state.pop("soc_pp_consulta", None)  # a tela inteira consulta de novo e abre o pop-up
+        st.rerun(scope="app")
+
+
 def popup_lembretes(esc: str, usuario: str) -> None:
     """Abre o pop-up com os lembretes vencidos do usuário. Chamado pelo
     app_conciliacao.py nas telas do Hub. Abre quando vence um lembrete que
     ainda não apareceu nesta sessão; os já mostrados voltam depois de 30
-    minutos (fechar no X ou em "Fechar" não apaga o lembrete)."""
+    minutos (fechar no X ou em "Fechar" não apaga o lembrete). Um vigia
+    confere a cada minuto, então o pop-up abre na hora mesmo sem cliques."""
     if not esc or not usuario:
         return
+    _checar_popup(esc, usuario)
+    _vigiar_lembretes(esc, usuario)
+
+
+def _checar_popup(esc: str, usuario: str) -> None:
     agora = datetime.now(so.FUSO)
     ultima = st.session_state.get("soc_pp_consulta")
     if ultima and agora - ultima < timedelta(seconds=60):
