@@ -38,8 +38,13 @@ import minuta_layout
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.5"
+VERSAO = "1.6"
 NOVIDADES = [
+    ("1.6", "25/11/2026", [
+        "Super admin vê os dados de todos os usuários do escritório escolhido: o sininho conta os alertas de "
+        "todos, o resumo da Visão geral cobre os processos de todos e a Agenda abre com os lembretes e alertas "
+        "de todos (com o nome de cada um).",
+    ]),
     ("1.5", "25/11/2026", [
         "Kanban de processos: arraste o cartão para outra coluna para mudar a etapa (os botões ◀ ▶ "
         "continuam). Etapas na ordem do fluxo: A iniciar, Em elaboração, Protocolado, Em análise, "

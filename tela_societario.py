@@ -207,6 +207,7 @@ def render(cabecalho: Callable, pode_configurar: bool, eh_global: bool = False) 
         for versao_, data_, itens in so.NOVIDADES:
             st.markdown(f"**{versao_}** ({data_})" + "\n" + "\n".join(f"- {i}" for i in itens))
     esc = _escolher_escritorio(eh_global)
+    st.session_state["soc_ve_todos"] = eh_global  # super admin: alertas e agenda de todos os usuários
     secao = st.session_state.get("soc_secao", "Visão geral")
     if secao not in [s[0] for s in _SECOES] or (secao == "Configurações" and not pode_configurar):
         secao = "Visão geral"
@@ -249,16 +250,26 @@ def render(cabecalho: Callable, pode_configurar: bool, eh_global: bool = False) 
         _configuracoes(esc, usuario)
 
 
+def _ve_todos() -> bool:
+    """Super admin vê os alertas, o resumo e a agenda de todos os usuários."""
+    return bool(st.session_state.get("soc_ve_todos"))
+
+
 def _sininho(alvo, esc: str, usuario: str) -> None:
-    """Contador de alertas dos processos e licenças do usuário; leva à Agenda."""
+    """Contador de alertas dos processos e licenças do usuário (do escritório
+    todo, para o super admin); leva à Agenda."""
     hoje = _hoje()
     rg = _regras(esc, _versao())
-    procs = [p for p in _processos(esc, _versao()) if p.get("responsavel") == usuario]
-    lics = [l for l in _licencas(esc, _versao()) if l.get("responsavel") in (usuario, None, "")]
+    procs = _processos(esc, _versao())
+    lics = _licencas(esc, _versao())
+    if not _ve_todos():
+        procs = [p for p in procs if p.get("responsavel") == usuario]
+        lics = [l for l in lics if l.get("responsavel") in (usuario, None, "")]
     n = len(so.painel_alertas(procs, lics, hoje, rg))
     alvo.button(f"{n} alerta{'s' if n != 1 else ''}", key="soc_sino", icon=":material/notifications:",
                 type="primary" if n else "secondary", use_container_width=True, on_click=_ir_secao, args=("Agenda",),
-                help="Alertas dos seus processos e licenças. Clique para ver na Agenda.")
+                help=("Alertas dos processos e licenças de todos os usuários" if _ve_todos()
+                      else "Alertas dos seus processos e licenças") + ". Clique para ver na Agenda.")
 
 
 # ---------------------------------------------------------------- visão geral
@@ -285,17 +296,19 @@ def _visao_geral(esc: str, usuario: str) -> None:
     procs = _processos(esc, _versao())
     lics = _licencas(esc, _versao())
     ind = so.indicadores(procs, hoje, rg)
-    resumo = so.resumo_do_dia(procs, lics, so.revisoes_pendentes(esc), hoje, usuario, rg)
+    todos = _ve_todos()
+    resumo = so.resumo_do_dia(procs, lics, so.revisoes_pendentes(esc), hoje, "" if todos else usuario, rg)
     hora = datetime.now(so.FUSO).hour
     saud = "Bom dia" if hora < 12 else "Boa tarde" if hora < 18 else "Boa noite"
     with st.container(border=True):
         st.markdown(f"#### {saud}, {usuario}!")
         if resumo["itens"]:
-            st.markdown("Estas atividades dos seus processos precisam de atenção hoje:")
+            st.markdown(f"Estas atividades {'dos processos de todos os usuários' if todos else 'dos seus processos'} "
+                        "precisam de atenção hoje:")
             st.markdown("\n".join(f"- **{n}** {t}" for _, t, n in resumo["itens"]))
             st.markdown(f"**Prioridade sugerida:** {resumo['prioridade']}")
         else:
-            st.markdown("Nada pendente nos seus processos hoje. 🎉")
+            st.markdown(f"Nada pendente {'nos processos do escritório' if todos else 'nos seus processos'} hoje. 🎉")
 
     _kpis([("Total de processos", ind["total"], "#e2e8f0"), ("Em andamento", ind["andamento"], "#3b82f6"),
            ("Com pendências", ind["pendencias"], "#ef4444"), ("Concluídos", ind["concluidos"], "#22e08a")])
@@ -874,7 +887,8 @@ def _form_licenca(esc: str, usuario: str, l: dict | None) -> None:
 def _agenda(esc: str, usuario: str) -> None:
     hoje = _hoje()
     rg = _regras(esc, _versao())
-    so_meus = st.toggle("Só os meus", value=True, key="soc_ag_meus")
+    so_meus = st.toggle("Só os meus", value=not _ve_todos(), key="soc_ag_meus",
+                        help="Desligado, mostra os lembretes e alertas de todos os usuários do escritório.")
     lembs = so.listar_lembretes(esc, usuario if so_meus else None)
     st.markdown("**Lembretes**")
     agora = datetime.now(so.FUSO)
