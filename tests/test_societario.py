@@ -209,7 +209,7 @@ def banco(db):
     import auth
     so.garantir_schema()
     with auth.conectar() as conn:
-        conn.execute("TRUNCATE soc_revisoes, soc_lembretes, soc_anexos, soc_checklist, soc_andamentos, soc_licencas, "
+        conn.execute("TRUNCATE soc_empresas, soc_revisoes, soc_lembretes, soc_anexos, soc_checklist, soc_andamentos, soc_licencas, "
                      "soc_processos, soc_sequencia, soc_config RESTART IDENTITY CASCADE")
         conn.commit()
     return True
@@ -419,3 +419,85 @@ def test_tela_compila():
     import pathlib
     import py_compile
     py_compile.compile(str(pathlib.Path(so.__file__).with_name("tela_societario.py")), doraise=True)
+
+
+# ---------------------------------------------------------------- 1.2: cadastro e busca de empresas
+
+
+def test_validar_documento():
+    assert so.validar_documento("") == ""
+    assert so.validar_documento("11.222.333/0001-81") == "11222333000181"
+    assert so.validar_documento("529.982.247-25") == "52998224725"
+    for ruim in ("11.222.333/0001-82", "111.111.111-11", "123"):
+        with pytest.raises(ValueError):
+            so.validar_documento(ruim)
+
+
+def test_unir_empresas():
+    proprias = [{"id": 1, "nome": "Nova Padaria (nome pretendido)", "cnpj": None},
+                {"id": 2, "nome": "Alfa Comércio", "cnpj": "11222333000181"}]
+    hub = [{"nome": "EMPRESA ALFA LTDA", "cnpj": "11222333000181"}, {"nome": "Beta S/A", "cnpj": ""}]
+    acess = [{"razao": "Empresa Alfa Ltda", "fantasia": "Alfa", "cnpj": "11222333000181"},
+             {"razao": "Gama ME", "fantasia": "Gama Pães", "cnpj": "99888777000166", "situacao": "Ativa"},
+             {"razao": "", "fantasia": "", "cnpj": ""}]
+    lista = so.unir_empresas(proprias, hub, acess)
+    assert [e["nome"] for e in lista] == ["Alfa Comércio", "Beta S/A", "Gama ME", "Nova Padaria (nome pretendido)"]
+    alfa = lista[0]
+    assert alfa["origens"] == [so.ORIGEM_SOCIETARIO, so.ORIGEM_HUB, so.ORIGEM_ACESSORIAS]
+    assert alfa["fantasia"] == "Alfa" and alfa["cadastro_id"] == 2
+    assert lista[2]["fantasia"] == "Gama Pães" and lista[2]["origens"] == [so.ORIGEM_ACESSORIAS]
+    assert so.rotulo_empresa(lista[3]).endswith("sem CNPJ · Cadastro do Societário")
+    assert "11.222.333/0001-81" in so.rotulo_empresa(alfa)
+
+
+def test_resumo_empresas_com_cadastradas():
+    cad = [{"id": 1, "nome": "Nova Padaria", "cnpj": None, "contato": "João"},
+           {"id": 2, "nome": "Empresa Alfa LTDA", "cnpj": "11222333000181"}]
+    emps = so.resumo_empresas([_proc(id=1)], [], HOJE, cadastradas=cad)
+    assert len(emps) == 2
+    por_nome = {e["empresa"]: e for e in emps}
+    assert por_nome["Nova Padaria"]["processos"] == [] and por_nome["Nova Padaria"]["cadastro"]["contato"] == "João"
+    assert len(por_nome["Empresa Alfa LTDA"]["processos"]) == 1 and por_nome["Empresa Alfa LTDA"]["cadastro"]["id"] == 2
+
+
+def test_cadastro_de_empresas_no_banco(banco):
+    from conftest import ESC_A, ESC_B
+    e = so.cadastrar_empresa(ESC_A, "dp_admin", "  Nova   Padaria ", "", "João", "62 99999-0000")
+    assert e["nome"] == "Nova Padaria" and e["cnpj"] is None and e["contato"] == "João"
+    a = so.cadastrar_empresa(ESC_A, "dp_admin", "Alfa", "11.222.333/0001-81")
+    assert so.cadastrar_empresa(ESC_A, "dp_user", "Alfa de novo", "11222333000181")["id"] == a["id"]  # sem duplicar
+    with pytest.raises(ValueError):
+        so.cadastrar_empresa(ESC_A, "dp_admin", "", "")
+    with pytest.raises(ValueError):
+        so.cadastrar_empresa(ESC_A, "dp_admin", "X", "11.222.333/0001-82")
+    so.cadastrar_empresa(ESC_B, "agente_b", "Alfa no outro escritório", "11222333000181")
+    assert [x["nome"] for x in so.listar_empresas_cadastradas(ESC_A)] == ["Alfa", "Nova Padaria"]
+    so.atualizar_empresa_cadastrada(ESC_A, e["id"], "Nova Padaria LTDA", "529.982.247-25", "Maria")
+    with pytest.raises(ValueError):  # CNPJ de outra empresa cadastrada
+        so.atualizar_empresa_cadastrada(ESC_A, e["id"], "Nova Padaria LTDA", "11222333000181")
+    nova = [x for x in so.listar_empresas_cadastradas(ESC_A) if x["id"] == e["id"]][0]
+    assert nova["nome"] == "Nova Padaria LTDA" and nova["cnpj"] == "52998224725" and nova["contato"] == "Maria"
+
+
+def test_empresas_do_acessorias(banco):
+    import obrigacoes
+    from conftest import ESC_A
+    obrigacoes.garantir_schema()
+    with __import__("auth").conectar() as conn:
+        conn.execute("DELETE FROM obr_empresas")
+        conn.commit()
+
+    class Falso:
+        def empresas(self):
+            return [{"id_externo": "7", "cnpj": "99888777000166", "razao": "Gama ME", "fantasia": "Gama",
+                     "situacao": "Ativa", "regime": None, "raw": {"ID": 7}}]
+
+    assert so.atualizar_empresas_acessorias(ESC_A, Falso()) == 1
+    assert [e["razao"] for e in so.empresas_acessorias(ESC_A)] == ["Gama ME"]
+
+    class Quebrado:
+        def empresas(self):
+            raise obrigacoes.ErroIntegracao("Acessórias recusou o token")
+
+    with pytest.raises(ValueError, match="token"):
+        so.atualizar_empresas_acessorias(ESC_A, Quebrado())

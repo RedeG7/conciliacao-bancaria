@@ -38,8 +38,17 @@ import auth
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.1"
+VERSAO = "1.2"
 NOVIDADES = [
+    ("1.2", "25/11/2026", [
+        "Novo processo: a empresa é buscada pelo nome ou CNPJ numa lista só, com as empresas cadastradas no "
+        "Societário, os clientes do Hub e as empresas do Acessórias (com botão para atualizar a lista na hora).",
+        "Empresa que ainda não está em lugar nenhum (ex.: constituição): \"Cadastrar empresa nova\" com nome "
+        "pretendido, CNPJ/CPF (opcional, conferido), contato, telefone e e-mail; fica guardada para os próximos "
+        "processos.",
+        "Tela Empresas: botão \"Cadastrar empresa\", empresas cadastradas aparecem mesmo sem processo, com os "
+        "dados de contato e a opção de editar.",
+    ]),
     ("1.1", "25/11/2026", [
         "Novas telas: Empresas (processos e licenças de cada cliente num só lugar), Protocolos (tudo que está "
         "no órgão, há quantos dias úteis e quando verificar), Documentos (todos os arquivos dos processos, com "
@@ -476,15 +485,18 @@ def _nome_empresa(x: dict) -> str:
     return " ".join(_sem_acento(x.get("empresa_nome") or "").split())
 
 
-def resumo_empresas(processos: list[dict], licencas: list[dict], hoje: date, rg: Optional[dict] = None) -> list[dict]:
-    """Uma linha por empresa, com os processos e licenças dela. Mesma
+def resumo_empresas(processos: list[dict], licencas: list[dict], hoje: date, rg: Optional[dict] = None,
+                    cadastradas: Iterable[dict] = ()) -> list[dict]:
+    """Uma linha por empresa, com os processos e licenças dela (e as
+    empresas cadastradas no Societário, mesmo sem processo). Mesma
     empresa = mesmo CNPJ/CPF; o que não tem documento entra na empresa de
     mesmo nome que tem (ou fica agrupado só pelo nome). As que têm alerta
     vêm primeiro."""
     rg = regras(rg)
     processos = [p for p in processos if p.get("etapa") != CANCELADO]
+    cadastradas = [{**c, "empresa_nome": c.get("nome")} for c in cadastradas]
     por_nome: dict[str, str] = {}
-    for x in processos + licencas:
+    for x in cadastradas + processos + licencas:
         d = so_digitos(x.get("cnpj"))
         if len(d) in (11, 14):
             por_nome.setdefault(_nome_empresa(x), d)
@@ -499,11 +511,13 @@ def resumo_empresas(processos: list[dict], licencas: list[dict], hoje: date, rg:
 
     def grupo(x: dict) -> dict:
         e = grupos.setdefault(chave(x), {"chave": chave(x), "empresa": x.get("empresa_nome") or "",
-                                         "cnpj": "", "processos": [], "licencas": []})
+                                         "cnpj": "", "processos": [], "licencas": [], "cadastro": None})
         if not e["cnpj"] and len(so_digitos(x.get("cnpj"))) in (11, 14):
             e["cnpj"] = so_digitos(x.get("cnpj"))
         return e
 
+    for c in cadastradas:
+        grupo(c)["cadastro"] = c
     for p in processos:
         grupo(p)["processos"].append(p)
     for l in licencas:
@@ -1042,7 +1056,177 @@ def garantir_schema() -> None:
                 decidido_por TEXT,
                 decidido_em TIMESTAMPTZ
             )""")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS soc_empresas (
+                id BIGSERIAL PRIMARY KEY,
+                escritorio_id TEXT NOT NULL REFERENCES escritorios(id),
+                nome TEXT NOT NULL,
+                cnpj TEXT,
+                contato TEXT,
+                telefone TEXT,
+                email TEXT,
+                observacao TEXT,
+                criado_por TEXT,
+                criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+            )""")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS soc_empresas_cnpj ON soc_empresas (escritorio_id, cnpj) "
+                     "WHERE cnpj IS NOT NULL")
         conn.commit()
+
+
+# ---------------------------------------------------------------- cadastro de empresas
+
+
+ORIGEM_SOCIETARIO = "Cadastro do Societário"
+ORIGEM_HUB = "Clientes do Hub"
+ORIGEM_ACESSORIAS = "Acessórias"
+
+
+def validar_documento(cnpj: str) -> str:
+    """CNPJ/CPF só com dígitos ('' se não informado). Confere os dígitos verificadores."""
+    d = so_digitos(cnpj)
+    if not d:
+        return ""
+    if len(d) == 14:
+        pesos = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+        dv = []
+        for n in (12, 13):
+            p = ([6] + pesos) if n == 13 else pesos
+            s = sum(int(d[i]) * p[i] for i in range(n)) % 11
+            dv.append("0" if s < 2 else str(11 - s))
+        ok = d[12:] == "".join(dv) and len(set(d)) > 1
+    elif len(d) == 11:
+        dv = []
+        for n in (9, 10):
+            s = sum(int(d[i]) * (n + 1 - i) for i in range(n)) % 11
+            dv.append("0" if s < 2 else str(11 - s))
+        ok = d[9:] == "".join(dv) and len(set(d)) > 1
+    else:
+        ok = False
+    if not ok:
+        raise ValueError("CNPJ/CPF inválido. Confira os números ou deixe em branco se a empresa ainda não tem.")
+    return d
+
+
+def unir_empresas(proprias: list[dict], hub: list[dict], acessorias: list[dict]) -> list[dict]:
+    """Uma lista só para escolher a empresa do processo: cadastro do
+    Societário, clientes do Hub e empresas do Acessórias. Mesmo CNPJ = uma
+    linha, com as origens juntas."""
+    saida: list[dict] = []
+    por_cnpj: dict[str, dict] = {}
+
+    def juntar(nome: str, cnpj, origem: str, fantasia: str = "", extra: Optional[dict] = None) -> None:
+        nome = " ".join(str(nome or "").split())
+        cnpj = so_digitos(cnpj)
+        if not nome and not cnpj:
+            return
+        if len(cnpj) in (11, 14) and cnpj in por_cnpj:
+            e = por_cnpj[cnpj]
+            if origem not in e["origens"]:
+                e["origens"].append(origem)
+            e["fantasia"] = e["fantasia"] or fantasia
+            return
+        e = {"nome": nome or formatar_cnpj(cnpj), "cnpj": cnpj if len(cnpj) in (11, 14) else "",
+             "fantasia": fantasia if fantasia and _sem_acento(fantasia) != _sem_acento(nome) else "",
+             "origens": [origem], **(extra or {})}
+        saida.append(e)
+        if e["cnpj"]:
+            por_cnpj[e["cnpj"]] = e
+
+    for e in proprias:
+        juntar(e.get("nome"), e.get("cnpj"), ORIGEM_SOCIETARIO, extra={"cadastro_id": e.get("id")})
+    for c in hub:
+        juntar(c.get("nome"), c.get("cnpj"), ORIGEM_HUB)
+    for a in acessorias:
+        juntar(a.get("razao") or a.get("fantasia"), a.get("cnpj"), ORIGEM_ACESSORIAS, a.get("fantasia") or "",
+               {"situacao": a.get("situacao") or ""})
+    saida.sort(key=lambda e: _sem_acento(e["nome"]))
+    return saida
+
+
+def rotulo_empresa(e: dict) -> str:
+    return (e["nome"] + (f" ({e['fantasia']})" if e.get("fantasia") else "")
+            + (f" · {formatar_cnpj(e['cnpj'])}" if e.get("cnpj") else " · sem CNPJ")
+            + f" · {', '.join(e['origens'])}")
+
+
+def cadastrar_empresa(escritorio_id: str, usuario: str, nome: str, cnpj: str = "", contato: str = "",
+                      telefone: str = "", email: str = "", observacao: str = "") -> dict:
+    """Empresa que ainda não está em nenhum cadastro (ex.: constituição).
+    Com CNPJ já cadastrado aqui, devolve a que existe."""
+    nome = " ".join((nome or "").split())
+    if not nome:
+        raise ValueError("Informe o nome da empresa (razão social ou nome pretendido).")
+    doc = validar_documento(cnpj) or None
+    with auth.conectar() as conn:
+        if doc:
+            ja = conn.execute("SELECT * FROM soc_empresas WHERE escritorio_id = %s AND cnpj = %s",
+                              (escritorio_id, doc)).fetchone()
+            if ja:
+                return dict(ja)
+        e = conn.execute("""
+            INSERT INTO soc_empresas (escritorio_id, nome, cnpj, contato, telefone, email, observacao, criado_por)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *
+        """, (escritorio_id, nome[:200], doc, contato.strip() or None, telefone.strip() or None,
+              email.strip() or None, observacao.strip() or None, usuario)).fetchone()
+        conn.commit()
+    return dict(e)
+
+
+def listar_empresas_cadastradas(escritorio_id: str) -> list[dict]:
+    with auth.conectar() as conn:
+        return [dict(l) for l in conn.execute(
+            "SELECT * FROM soc_empresas WHERE escritorio_id = %s ORDER BY nome", (escritorio_id,)).fetchall()]
+
+
+def atualizar_empresa_cadastrada(escritorio_id: str, empresa_id: int, nome: str, cnpj: str = "", contato: str = "",
+                                 telefone: str = "", email: str = "", observacao: str = "") -> None:
+    nome = " ".join((nome or "").split())
+    if not nome:
+        raise ValueError("Informe o nome da empresa.")
+    doc = validar_documento(cnpj) or None
+    with auth.conectar() as conn:
+        if doc and conn.execute("SELECT 1 FROM soc_empresas WHERE escritorio_id = %s AND cnpj = %s AND id <> %s",
+                                (escritorio_id, doc, empresa_id)).fetchone():
+            raise ValueError("Já existe outra empresa cadastrada com esse CNPJ/CPF.")
+        conn.execute("""UPDATE soc_empresas SET nome = %s, cnpj = %s, contato = %s, telefone = %s, email = %s,
+                        observacao = %s WHERE id = %s AND escritorio_id = %s""",
+                     (nome[:200], doc, contato.strip() or None, telefone.strip() or None, email.strip() or None,
+                      observacao.strip() or None, empresa_id, escritorio_id))
+        conn.commit()
+
+
+def empresas_acessorias(escritorio_id: str) -> list[dict]:
+    """Empresas do Acessórias já trazidas pelo Controle de Obrigações."""
+    try:
+        import obrigacoes
+        return [dict(l) for l in obrigacoes.listar_empresas(escritorio_id)]
+    except Exception:  # noqa: BLE001 - tabela do Controle de Obrigações pode não existir
+        return []
+
+
+def tem_acessorias(escritorio_id: str) -> bool:
+    try:
+        import obrigacoes
+        return bool(obrigacoes.token(escritorio_id))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def atualizar_empresas_acessorias(escritorio_id: str, conector=None) -> int:
+    """Busca agora a lista de empresas na API do Acessórias e guarda (a
+    mesma lista que o Controle de Obrigações usa). Devolve quantas vieram."""
+    import obrigacoes
+    try:
+        conector = conector or obrigacoes.ConectorAcessorias(obrigacoes.token(escritorio_id))
+        lista = conector.empresas()
+    except obrigacoes.ErroIntegracao as exc:
+        raise ValueError(str(exc)) from None
+    with auth.conectar() as conn:
+        for e in lista:
+            obrigacoes._gravar_empresa(conn, escritorio_id, e)
+        conn.commit()
+    return len(lista)
 
 
 def _agora() -> datetime:

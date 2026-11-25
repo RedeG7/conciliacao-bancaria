@@ -411,21 +411,73 @@ def _lista(esc: str) -> None:
 # ---------------------------------------------------------------- novo processo
 
 
-def _empresa_campos(esc: str, chave: str) -> tuple[str, str]:
-    """Empresa vinda do cadastro de clientes do Hub ou digitada."""
-    cads = clientes.listar_clientes(esc)
-    opcoes = [None] + [c["id"] for c in cads]
-    por_id = {c["id"]: c for c in cads}
-    escolha = st.selectbox("Empresa cadastrada", opcoes, key=f"{chave}_cad",
-                           format_func=lambda i: "— digitar abaixo —" if i is None else
-                           f"{por_id[i]['nome']}" + (f" · {so.formatar_cnpj(por_id[i]['cnpj'])}" if por_id[i].get("cnpj") else ""),
-                           help="Clientes cadastrados em Gerenciar Clientes. Empresa nova (constituição): digite.")
-    if escolha is not None:
-        return por_id[escolha]["nome"], por_id[escolha].get("cnpj") or ""
+@st.cache_data(ttl=120, show_spinner=False)
+def _empresas_escolha(esc: str, versao: int) -> list[dict]:
+    return so.unir_empresas(so.listar_empresas_cadastradas(esc), clientes.listar_clientes(esc),
+                            so.empresas_acessorias(esc))
+
+
+def _atualizar_acessorias(esc: str) -> None:
+    try:
+        with st.spinner("Buscando as empresas no Acessórias…"):
+            n = so.atualizar_empresas_acessorias(esc)
+    except ValueError as exc:
+        st.session_state["soc_acess_msg"] = ("erro", f"Não consegui buscar no Acessórias: {exc}")
+    else:
+        st.session_state["soc_acess_msg"] = ("ok", f"{n} empresa(s) do Acessórias atualizadas.")
+    _recarregar()
+
+
+def _botao_acessorias(esc: str, chave: str) -> None:
+    if so.tem_acessorias(esc):
+        st.button("Atualizar empresas do Acessórias", key=f"{chave}_acess", icon=":material/sync:",
+                  on_click=_atualizar_acessorias, args=(esc,),
+                  help="Busca agora na API do Acessórias a lista de empresas (é a mesma que o Controle de "
+                       "Obrigações usa e atualiza sozinho).")
+    else:
+        st.caption("Para buscar as empresas do Acessórias, cadastre o API Token do Acessórias no Controle de "
+                   "Obrigações (Configurações) ou em Admissões › Canais.")
+    msg = st.session_state.pop("soc_acess_msg", None)
+    if msg:
+        (st.success if msg[0] == "ok" else st.error)(msg[1])
+
+
+def _empresa_campos(esc: str, chave: str) -> dict:
+    """Empresa do processo: busca no cadastro do Societário, nos clientes do
+    Hub e no Acessórias, ou cadastro de uma empresa nova (ex.: constituição)."""
+    st.markdown("**Empresa**")
+    modo = st.segmented_control("Empresa", ["Buscar empresa", "Cadastrar empresa nova"], default="Buscar empresa",
+                                key=f"{chave}_modo", label_visibility="collapsed") or "Buscar empresa"
+    if modo == "Buscar empresa":
+        lista = _empresas_escolha(esc, _versao())
+        # chave estável (CNPJ ou nome): a escolha não muda quando a lista é atualizada
+        por_chave = {(e["cnpj"] or "n:" + e["nome"]): e for e in lista}
+        if st.session_state.get(f"{chave}_emp") not in por_chave:
+            st.session_state.pop(f"{chave}_emp", None)
+        sel = st.selectbox(
+            "Empresa", list(por_chave), index=None, key=f"{chave}_emp", label_visibility="collapsed",
+            format_func=lambda k: so.rotulo_empresa(por_chave[k]),
+            placeholder=f"Digite o nome ou o CNPJ para buscar entre {len(lista)} empresa(s)…")
+        orig = {o: sum(1 for e in lista if o in e["origens"])
+                for o in (so.ORIGEM_SOCIETARIO, so.ORIGEM_HUB, so.ORIGEM_ACESSORIAS)}
+        st.caption("Busca em: " + " · ".join(f"{o} ({n})" for o, n in orig.items())
+                   + ". Não achou? Use \"Cadastrar empresa nova\".")
+        _botao_acessorias(esc, chave)
+        if sel is None:
+            return {"nome": "", "cnpj": "", "novo": None}
+        e = por_chave[sel]
+        return {"nome": e["nome"], "cnpj": e["cnpj"], "novo": None}
     c1, c2 = st.columns([2, 1])
-    nome = c1.text_input("Empresa (razão social ou nome pretendido)", key=f"{chave}_nome")
-    cnpj = c2.text_input("CNPJ / CPF", key=f"{chave}_cnpj")
-    return nome, cnpj
+    nome = c1.text_input("Razão social ou nome pretendido *", key=f"{chave}_nome")
+    cnpj = c2.text_input("CNPJ / CPF", key=f"{chave}_cnpj", help="Deixe em branco se a empresa ainda não tem (constituição).")
+    c3, c4, c5 = st.columns(3)
+    contato = c3.text_input("Contato (sócio / responsável)", key=f"{chave}_contato")
+    telefone = c4.text_input("Telefone", key=f"{chave}_tel")
+    email = c5.text_input("E-mail", key=f"{chave}_email")
+    guardar = st.checkbox("Guardar no cadastro de empresas do Societário (para achar na busca nos próximos processos)",
+                          value=True, key=f"{chave}_guardar")
+    return {"nome": nome, "cnpj": cnpj, "novo": {"guardar": guardar, "contato": contato, "telefone": telefone,
+                                                  "email": email}}
 
 
 def _escolher_tipo(tipo: str) -> None:
@@ -455,7 +507,7 @@ def _novo(esc: str, usuario: str) -> None:
                 unsafe_allow_html=True)
     orgao = c2.selectbox("Órgão", so.ORGAOS, key="soc_n_orgao_" + tipo,
                          index=so.ORGAOS.index(so.TIPOS[tipo]["orgao"]))
-    empresa, cnpj = _empresa_campos(esc, "soc_n")
+    emp = _empresa_campos(esc, "soc_n")
     c3, c4, c5 = st.columns(3)
     resp = c3.selectbox("Colaborador responsável", usuarios, key="soc_n_resp",
                         index=usuarios.index(usuario) if usuario in usuarios else 0)
@@ -471,6 +523,16 @@ def _novo(esc: str, usuario: str) -> None:
     lemb = t2.toggle("Habilitar lembretes automáticos", value=True, key="soc_n_lemb")
     if st.button("Abrir processo", type="primary", icon=":material/add:"):
         try:
+            empresa, cnpj = emp["nome"].strip(), emp["cnpj"]
+            if not empresa:
+                raise ValueError("Escolha a empresa na busca ou cadastre uma empresa nova.")
+            novo = emp["novo"]
+            if novo is not None:
+                cnpj = so.validar_documento(cnpj)
+                if novo["guardar"]:
+                    cad = so.cadastrar_empresa(esc, usuario, empresa, cnpj, novo["contato"], novo["telefone"],
+                                               novo["email"])
+                    empresa, cnpj = cad["nome"], cad.get("cnpj") or ""
             p = so.criar_processo(esc, usuario, tipo, empresa, cnpj, resp, prio, prev, desc, orgao, ia, lemb)
             for a in arqs or []:
                 so.anexar(esc, p["id"], usuario, a.name, a.getvalue(), a.type or "",
@@ -479,7 +541,8 @@ def _novo(esc: str, usuario: str) -> None:
             st.error(str(exc))
             return
         _recarregar()
-        for k in ("soc_n_desc", "soc_n_nome", "soc_n_cnpj", "soc_n_arqs"):
+        for k in ("soc_n_desc", "soc_n_nome", "soc_n_cnpj", "soc_n_arqs", "soc_n_emp", "soc_n_contato",
+                  "soc_n_tel", "soc_n_email"):
             st.session_state.pop(k, None)
         st.toast(f"Processo {p['numero']} aberto.", icon="✅")
         abrir_processo(p["id"])
@@ -865,7 +928,12 @@ def _empresas(esc: str) -> None:
     hoje = _hoje()
     rg = _regras(esc, _versao())
     lics = _licencas(esc, _versao())
-    emps = so.resumo_empresas(_processos(esc, _versao()), lics, hoje, rg)
+    emps = so.resumo_empresas(_processos(esc, _versao()), lics, hoje, rg, so.listar_empresas_cadastradas(esc))
+    with st.expander("Cadastrar empresa", icon=":material/add_business:"):
+        st.caption("Para a empresa que ainda não está nos clientes do Hub nem no Acessórias (ex.: constituição). "
+                   "Ela passa a aparecer na busca do Novo processo.")
+        _form_empresa(esc, None)
+        _botao_acessorias(esc, "soc_emp")
     _kpis([("Empresas", len(emps), "#e2e8f0"),
            ("Com processo em andamento", sum(1 for e in emps if e["ativos"]), "#3b82f6"),
            ("Com alerta", sum(1 for e in emps if e["alertas"]), "#ef4444")])
@@ -881,6 +949,13 @@ def _empresas(esc: str) -> None:
                   + f" — {e['ativos']} em andamento · {e['concluidos']} concluído(s) · {len(e['licencas'])} licença(s)"
                   + (f" · ⚠️ {e['alertas']} alerta(s)" if e["alertas"] else ""))
         with st.expander(titulo):
+            cad = e.get("cadastro")
+            if cad:
+                st.markdown("<span class='soc-muted'>Cadastro do Societário: " + " · ".join(
+                    _e(x) for x in [cad.get("contato"), cad.get("telefone"), cad.get("email"), cad.get("observacao")]
+                    if x) + "</span>", unsafe_allow_html=True)
+                if st.toggle("Editar cadastro", key=f"soc_emp_ed_{k}"):
+                    _form_empresa(esc, cad)
             if e["ultima"]:
                 st.caption(f"Última movimentação: {so.data_br(e['ultima'])}")
             for p in e["processos"]:
@@ -904,6 +979,32 @@ def _empresas(esc: str) -> None:
         st.caption(f"+ {len(emps) - 150} empresa(s). Use a busca.")
     if not emps:
         st.caption("Nenhuma empresa ainda. Elas aparecem aqui ao abrir um processo ou cadastrar uma licença.")
+
+
+def _form_empresa(esc: str, cad: dict | None) -> None:
+    usuario = st.session_state.get("usuario_logado") or ""
+    with st.form(f"soc_emp_f_{cad['id'] if cad else 'nova'}", clear_on_submit=cad is None):
+        c1, c2 = st.columns([2, 1])
+        nome = c1.text_input("Razão social ou nome pretendido *", value=(cad or {}).get("nome") or "")
+        cnpj = c2.text_input("CNPJ / CPF", value=so.formatar_cnpj((cad or {}).get("cnpj")),
+                             help="Deixe em branco se a empresa ainda não tem.")
+        c3, c4, c5 = st.columns(3)
+        contato = c3.text_input("Contato (sócio / responsável)", value=(cad or {}).get("contato") or "")
+        telefone = c4.text_input("Telefone", value=(cad or {}).get("telefone") or "")
+        email = c5.text_input("E-mail", value=(cad or {}).get("email") or "")
+        obs = st.text_input("Observação", value=(cad or {}).get("observacao") or "")
+        if st.form_submit_button("Salvar empresa", type="primary"):
+            try:
+                if cad:
+                    so.atualizar_empresa_cadastrada(esc, cad["id"], nome, cnpj, contato, telefone, email, obs)
+                else:
+                    so.cadastrar_empresa(esc, usuario, nome, cnpj, contato, telefone, email, obs)
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+            _recarregar()
+            st.toast("Empresa salva.", icon="✅")
+            st.rerun()
 
 
 # ---------------------------------------------------------------- protocolos
