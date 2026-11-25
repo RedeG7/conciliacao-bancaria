@@ -27,11 +27,38 @@ _SECOES = [
     ("Visão geral", ":material/dashboard:"),
     ("Processos", ":material/view_kanban:"),
     ("Novo processo", ":material/add_circle:"),
+    ("Empresas", ":material/domain:"),
+    ("Protocolos", ":material/assignment_turned_in:"),
     ("Licenças", ":material/verified:"),
     ("Agenda", ":material/event:"),
+    ("Documentos", ":material/folder_open:"),
     ("Assistente IA", ":material/auto_awesome:"),
+    ("Relatórios", ":material/bar_chart:"),
     ("Configurações", ":material/settings:"),
 ]
+
+# ícone e descrição de cada tipo, para os cartões de "Novo processo"
+_CARTAO_TIPO = {
+    "constituicao": (":material/domain_add:", "Abertura, registro e inscrições."),
+    "alteracao": (":material/edit_document:", "Sócios, endereço, capital, CNAE e outros."),
+    "baixa": (":material/domain_disabled:", "Distrato e encerramento."),
+    "alvara": (":material/storefront:", "Emissão e renovação."),
+    "bombeiros": (":material/local_fire_department:", "Licenciamento e regularização."),
+    "sanitaria": (":material/health_and_safety:", "Licenças sanitárias."),
+    "ambiental": (":material/eco:", "Emissão e acompanhamento."),
+    "regularizacao": (":material/account_balance:", "Receita Federal, Junta, SEFAZ e Prefeitura."),
+    "outro": (":material/more_horiz:", "Qualquer outro processo do departamento."),
+}
+
+# ícone (caractere) e cor de cada tipo de andamento na linha do tempo
+_ICONE_ANDAMENTO = {
+    "abertura": ("+", "#22e08a"), "ia": ("✦", "#a855f7"), "protocolo": ("⇢", "#14b8a6"),
+    "exigencia": ("!", "#ef4444"), "concluido": ("✓", "#22e08a"), "cancelado": ("×", "#64748b"),
+    "anexo": ("⎘", "#3b82f6"), "etapa": ("→", "#3b82f6"), "dados": ("✎", "#94a3b8"), "nota": ("•", "#94a3b8"),
+}
+
+_ROT_ANEXO = {"minuta": "Minuta", "minuta_revisada": "Minuta revisada (IA)", "documento": "Documento",
+              "comprovante": "Comprovante"}
 
 
 def _estilo() -> None:
@@ -54,9 +81,16 @@ def _estilo() -> None:
                 background:rgba(255,255,255,.04); border-top:3px solid;}
     .soc-tl {border-left:2px solid rgba(255,255,255,.12); margin-left:8px; padding-left:16px;}
     .soc-tl .i {position:relative; margin-bottom:14px;}
-    .soc-tl .i:before {content:""; position:absolute; left:-23px; top:4px; width:12px; height:12px; border-radius:50%;
-                       background:#22e08a;}
-    .soc-tl .i.pend:before {background:#475569;}
+    .soc-tl .ic {position:absolute; left:-28px; top:0; width:22px; height:22px; border-radius:50%;
+                 display:flex; align-items:center; justify-content:center; font-size:.78rem; font-weight:800;
+                 color:#0b1220; line-height:1;}
+    .soc-tl .i.pend .ic {background:#334155; color:#cbd5e1;}
+    .soc-tl .i.pend .t {color:#94a3b8;}
+    .soc-doc {background:#0b1220; border:1px solid rgba(255,255,255,.08); border-radius:12px; padding:14px 16px;
+              max-height:640px; overflow-y:auto; white-space:pre-wrap; font-size:.88rem; line-height:1.55;}
+    .soc-doc mark {color:inherit; border-radius:4px; padding:0 2px;}
+    .soc-doc mark sup {font-weight:800; font-size:.65rem; margin-right:2px;}
+    .soc-doc del {color:#f87171;} .soc-doc ins {color:#22e08a; text-decoration:none; font-weight:600;}
     .soc-tl .t {font-weight:700;} .soc-tl .d {color:#94a3b8; font-size:.8rem;}
     .soc-sug {border:1px solid rgba(255,255,255,.08); border-radius:12px; padding:12px 14px; margin:8px 0;}
     .soc-sug .tr {background:rgba(239,68,68,.08); border-radius:8px; padding:6px 10px; font-family:monospace;
@@ -94,6 +128,16 @@ def _processos(esc: str, versao: int) -> list[dict]:
 @st.cache_data(ttl=60, show_spinner=False)
 def _licencas(esc: str, versao: int) -> list[dict]:
     return so.listar_licencas(esc)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _andamentos(esc: str, versao: int) -> list[dict]:
+    return so.listar_andamentos(esc)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _anexos(esc: str, versao: int) -> list[dict]:
+    return so.listar_anexos(esc)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -161,14 +205,19 @@ def render(cabecalho: Callable, pode_configurar: bool, eh_global: bool = False) 
     if secao not in [s[0] for s in _SECOES] or (secao == "Configurações" and not pode_configurar):
         secao = "Visão geral"
 
-    if secao == "Processos" and st.session_state.get("soc_proc"):
+    detalhe = secao == "Processos" and st.session_state.get("soc_proc")
+    revisao = secao == "Assistente IA" and st.session_state.get("soc_rev")
+    c1, c2 = st.columns([5, 1.3], vertical_alignment="center")
+    if not (detalhe or revisao):
+        c1.markdown(f"### {secao}")
+    _sininho(c2, esc, usuario)
+    if detalhe:
         _detalhe(esc, usuario, st.session_state["soc_proc"])
         return
-    if secao == "Assistente IA" and st.session_state.get("soc_rev"):
+    if revisao:
         _revisao(esc, usuario, st.session_state["soc_rev"])
         return
 
-    st.markdown(f"### {secao}")
     if secao == "Visão geral":
         _visao_geral(esc, usuario)
     elif secao == "Processos":
@@ -181,8 +230,28 @@ def render(cabecalho: Callable, pode_configurar: bool, eh_global: bool = False) 
         _agenda(esc, usuario)
     elif secao == "Assistente IA":
         _assistente(esc, usuario)
+    elif secao == "Empresas":
+        _empresas(esc)
+    elif secao == "Protocolos":
+        _protocolos(esc, usuario)
+    elif secao == "Documentos":
+        _documentos(esc)
+    elif secao == "Relatórios":
+        _relatorios(esc)
     elif secao == "Configurações":
         _configuracoes(esc, usuario)
+
+
+def _sininho(alvo, esc: str, usuario: str) -> None:
+    """Contador de alertas dos processos e licenças do usuário; leva à Agenda."""
+    hoje = _hoje()
+    rg = _regras(esc, _versao())
+    procs = [p for p in _processos(esc, _versao()) if p.get("responsavel") == usuario]
+    lics = [l for l in _licencas(esc, _versao()) if l.get("responsavel") in (usuario, None, "")]
+    n = len(so.painel_alertas(procs, lics, hoje, rg))
+    alvo.button(f"{n} alerta{'s' if n != 1 else ''}", key="soc_sino", icon=":material/notifications:",
+                type="primary" if n else "secondary", use_container_width=True, on_click=_ir_secao, args=("Agenda",),
+                help="Alertas dos seus processos e licenças. Clique para ver na Agenda.")
 
 
 # ---------------------------------------------------------------- visão geral
@@ -190,7 +259,7 @@ def render(cabecalho: Callable, pode_configurar: bool, eh_global: bool = False) 
 
 def _kpis(itens: list[tuple[str, object, str]]) -> None:
     st.markdown('<div class="soc-kpis">' + "".join(
-        f'<div class="soc-kpi"><div class="l">{_e(l)}</div><div class="v" style="color:{c}">{_e(v)}</div></div>'
+        f'<div class="soc-kpi"><div class="l">{_e(l)}</div><div class="v" style="color:{c}">{html.escape(str(v))}</div></div>'
         for l, v, c in itens) + "</div>", unsafe_allow_html=True)
 
 
@@ -325,7 +394,8 @@ def _lista(esc: str) -> None:
                              else "#94a3b8") if p["prioridade"] != "normal" else "")
                     + (_chip(_ROT_NIVEL[nivel], _COR_NIVEL[nivel]) if nivel else "")
                     + f'<div class="soc-muted">{_e(p.get("responsavel") or "sem responsável")} · '
-                      f'{p["check_feitos"]}/{p["check_total"]}</div>', unsafe_allow_html=True)
+                      f'☑ {p["check_feitos"]}/{p["check_total"]}'
+                    + (f' · 📎 {p["n_anexos"]}' if p.get("n_anexos") else "") + '</div>', unsafe_allow_html=True)
                 st.button("Abrir", key=f"soc_k_o_{p['id']}", on_click=abrir_processo, args=(p["id"],),
                           use_container_width=True)
                 b1, b2 = st.columns(2)
@@ -358,13 +428,31 @@ def _empresa_campos(esc: str, chave: str) -> tuple[str, str]:
     return nome, cnpj
 
 
+def _escolher_tipo(tipo: str) -> None:
+    st.session_state["soc_n_tipo"] = tipo
+
+
 def _novo(esc: str, usuario: str) -> None:
     st.caption("O número do processo, quem abriu e a data e hora ficam registrados automaticamente. O checklist do "
                "tipo escolhido é carregado na abertura.")
     usuarios = _usuarios(esc)
+    if st.session_state.get("soc_n_tipo") not in so.TIPOS:
+        st.session_state["soc_n_tipo"] = "alteracao"
+    tipo = st.session_state["soc_n_tipo"]
+    st.markdown("**Tipo de processo**")
+    tipos = list(so.TIPOS)
+    for i in range(0, len(tipos), 3):
+        cols = st.columns(3)
+        for col, t in zip(cols, tipos[i:i + 3]):
+            icone, desc = _CARTAO_TIPO.get(t, (":material/description:", ""))
+            with col.container(border=True):
+                st.button(so.TIPOS[t]["nome"], key=f"soc_n_t_{t}", icon=icone, use_container_width=True,
+                          type="primary" if t == tipo else "secondary", on_click=_escolher_tipo, args=(t,))
+                st.caption(desc)
     c1, c2 = st.columns(2)
-    tipo = c1.selectbox("Tipo de processo", list(so.TIPOS), format_func=lambda t: so.TIPOS[t]["nome"],
-                        index=1, key="soc_n_tipo")
+    c1.markdown(f"Tipo escolhido: **{so.TIPOS[tipo]['nome']}** "
+                f"<span class='soc-muted'>({len(so.TIPOS[tipo]['checklist'])} etapas no checklist)</span>",
+                unsafe_allow_html=True)
     orgao = c2.selectbox("Órgão", so.ORGAOS, key="soc_n_orgao_" + tipo,
                          index=so.ORGAOS.index(so.TIPOS[tipo]["orgao"]))
     empresa, cnpj = _empresa_campos(esc, "soc_n")
@@ -458,13 +546,15 @@ def _aba_andamento(esc: str, usuario: str, p: dict) -> None:
                 extra.append(f"Próxima ação: {a['proxima_acao']}")
             if a.get("proxima_verificacao"):
                 extra.append(f"Próxima verificação: {so.data_br(a['proxima_verificacao'])}")
-            itens.append(f'<div class="i"><div class="t">{_e(a["titulo"])}</div>'
+            simb, cor = _ICONE_ANDAMENTO[so.tipo_andamento(a)]
+            itens.append(f'<div class="i"><span class="ic" style="background:{cor}">{simb}</span>'
+                         f'<div class="t">{_e(a["titulo"])}</div>'
                          f'<div class="d">{so.data_br(a["criado_em"])} · {_e(a.get("usuario"))}</div>'
                          + (f'<div>{_e(a["texto"])}</div>' if a.get("texto") else "")
                          + "".join(f'<div class="soc-muted">{_e(x)}</div>' for x in extra) + "</div>")
         if p["etapa"] not in so.ENCERRADAS:
             prox = p.get("proxima_verificacao")
-            itens.append('<div class="i pend"><div class="t">'
+            itens.append('<div class="i pend"><span class="ic">◷</span><div class="t">'
                          + (f"Próxima verificação: {so.data_br(prox)}" if prox else "Conclusão e envio ao cliente")
                          + '</div><div class="d">Pendente</div>'
                          + (f'<div>{_e(p["proxima_acao"])}</div>' if p.get("proxima_acao") else "") + "</div>")
@@ -768,6 +858,216 @@ def _agenda(esc: str, usuario: str) -> None:
         st.caption("Nenhuma previsão nos próximos 30 dias.")
 
 
+# ---------------------------------------------------------------- empresas
+
+
+def _empresas(esc: str) -> None:
+    hoje = _hoje()
+    rg = _regras(esc, _versao())
+    lics = _licencas(esc, _versao())
+    emps = so.resumo_empresas(_processos(esc, _versao()), lics, hoje, rg)
+    _kpis([("Empresas", len(emps), "#e2e8f0"),
+           ("Com processo em andamento", sum(1 for e in emps if e["ativos"]), "#3b82f6"),
+           ("Com alerta", sum(1 for e in emps if e["alertas"]), "#ef4444")])
+    busca = st.text_input("Buscar", key="soc_emp_busca", placeholder="🔍  Nome da empresa ou CNPJ")
+    b, d = so._sem_acento(busca.strip()), so.so_digitos(busca)
+    if b:
+        emps = [e for e in emps if b in so._sem_acento(e["empresa"]) or (d and d in e["cnpj"])]
+    st.caption(f"{len(emps)} empresa(s). As com alerta aparecem primeiro. A mesma empresa é reconhecida pelo CNPJ "
+               "(ou pelo nome, quando o processo não tem CNPJ).")
+    sit_lic = {l["id"]: so.situacao_licenca(l.get("validade"), hoje, max(rg["licenca_avisos"] or [90])) for l in lics}
+    for k, e in enumerate(emps[:150]):
+        titulo = (f"**{e['empresa']}**" + (f" · {so.formatar_cnpj(e['cnpj'])}" if e["cnpj"] else "")
+                  + f" — {e['ativos']} em andamento · {e['concluidos']} concluído(s) · {len(e['licencas'])} licença(s)"
+                  + (f" · ⚠️ {e['alertas']} alerta(s)" if e["alertas"] else ""))
+        with st.expander(titulo):
+            if e["ultima"]:
+                st.caption(f"Última movimentação: {so.data_br(e['ultima'])}")
+            for p in e["processos"]:
+                c1, c2 = st.columns([5, 1])
+                al = so.alertas_processo(p, hoje, rg)
+                c1.markdown(f"**{_e(p['numero'])}** · {_e(so.TIPOS[p['tipo']]['nome'])} "
+                            + _chip(so.ETAPAS[p["etapa"]], _COR_ETAPA[p["etapa"]])
+                            + f"<span class='soc-muted'> responsável: {_e(p.get('responsavel') or '—')}"
+                            + (f" · previsão {so.data_br(p.get('previsao'))}" if p.get("previsao") else "")
+                            + (f" · {_e(al[0]['texto'])}" if al else "") + "</span>", unsafe_allow_html=True)
+                c2.button("Abrir", key=f"soc_emp_p_{k}_{p['id']}", on_click=abrir_processo, args=(p["id"],),
+                          use_container_width=True)
+            for l in e["licencas"]:
+                s = sit_lic[l["id"]]
+                st.markdown(f"{_e(so.LICENCAS[l['tipo']])}" + (f" nº {_e(l['numero'])}" if l.get("numero") else "")
+                            + f" · validade {so.data_br(l.get('validade')) or '—'} "
+                            + _chip(so.SITUACOES_LICENCA[s], _COR_LIC[s]), unsafe_allow_html=True)
+            if not e["processos"] and not e["licencas"]:
+                st.caption("Nada registrado.")
+    if len(emps) > 150:
+        st.caption(f"+ {len(emps) - 150} empresa(s). Use a busca.")
+    if not emps:
+        st.caption("Nenhuma empresa ainda. Elas aparecem aqui ao abrir um processo ou cadastrar uma licença.")
+
+
+# ---------------------------------------------------------------- protocolos
+
+
+def _protocolos(esc: str, usuario: str) -> None:
+    hoje = _hoje()
+    rg = _regras(esc, _versao())
+    procs = _processos(esc, _versao())
+    so_meus = st.toggle("Só os meus", value=False, key="soc_prot_meus")
+    if so_meus:
+        procs = [p for p in procs if p.get("responsavel") == usuario]
+    lista = so.painel_protocolos(procs, _andamentos(esc, _versao()), hoje, rg)
+    exig = [x for x in lista if x["etapa"] == so.EM_EXIGENCIA]
+    verif = [x for x in lista if x["etapa"] == so.PROTOCOLADO and x["verificar"]]
+    _kpis([("No órgão (protocolados)", sum(1 for x in lista if x["etapa"] == so.PROTOCOLADO), "#14b8a6"),
+           ("Verificar hoje", len(verif), "#f59e0b"), ("Em exigência", len(exig), "#ef4444")])
+    st.caption(f"Sem data marcada, o protocolado deve ser verificado a cada {rg['protocolado_dias_uteis']} dia(s) "
+               "útil(eis) depois da última movimentação (ajustável em Configurações).")
+    for x in lista:
+        if x["etapa"] == so.EM_EXIGENCIA:
+            situ = _chip("Responder exigência", "#ef4444")
+        elif x["verificar"]:
+            situ = _chip("Verificar hoje", "#f59e0b")
+        else:
+            situ = _chip(f"Verificar em {so.data_br(x['verificar_em'])}", "#94a3b8")
+        with st.container(border=True):
+            c1, c2 = st.columns([5, 1])
+            c1.markdown(
+                f"**{_e(x['numero'])}** · **{_e(x['empresa_nome'])}** · {_e(so.TIPOS[x['tipo']]['nome'])} "
+                + _chip(so.ETAPAS[x["etapa"]], _COR_ETAPA[x["etapa"]]) + situ
+                + "<div class='soc-muted'>" + " · ".join(v for v in [
+                    _e(x.get("orgao")), f"protocolo {_e(x['protocolo'])}" if x.get("protocolo") else "sem nº de protocolo",
+                    f"protocolado em {so.data_br(x['data_protocolo'])} ({x['dias_uteis']} dia(s) útil(eis))"
+                    if x.get("data_protocolo") else "", f"responsável: {_e(x.get('responsavel') or '—')}"] if v)
+                + "</div>" + (f"<div>{_e(x['proxima_acao'])}</div>" if x.get("proxima_acao") else ""),
+                unsafe_allow_html=True)
+            c2.button("Abrir", key=f"soc_prot_{x['id']}", on_click=abrir_processo, args=(x["id"],),
+                      use_container_width=True, type="primary" if x["verificar"] else "secondary")
+    if not lista:
+        st.caption("Nenhum processo protocolado ou em exigência.")
+
+
+# ---------------------------------------------------------------- documentos
+
+
+def _documentos(esc: str) -> None:
+    anexos = _anexos(esc, _versao())
+    c1, c2 = st.columns([2, 1.4])
+    busca = c1.text_input("Buscar", key="soc_doc_busca", placeholder="🔍  Arquivo, empresa, CNPJ ou nº do processo")
+    cats = c2.multiselect("Tipo", list(_ROT_ANEXO), format_func=_ROT_ANEXO.get, key="soc_doc_cat",
+                          placeholder="Todos")
+    b, d = so._sem_acento(busca.strip()), so.so_digitos(busca)
+    vis = [a for a in anexos if (not cats or a["categoria"] in cats) and (
+        not b or b in so._sem_acento(f"{a['nome']} {a['empresa_nome']} {a['numero']}")
+        or (len(d) >= 4 and d in so.so_digitos(a.get("cnpj"))))]
+    st.caption(f"{len(vis)} documento(s) de {len(anexos)}. Selecione uma linha para baixar ou abrir o processo.")
+    if not vis:
+        return
+    ev = st.dataframe([{"Arquivo": a["nome"], "Tipo": _ROT_ANEXO.get(a["categoria"], a["categoria"]),
+                        "Processo": a["numero"], "Empresa": a["empresa_nome"],
+                        "Enviado por": a.get("enviado_por") or "", "Data": so.data_br(a["criado_em"]),
+                        "Tamanho": f"{a['tamanho'] / 1024:,.0f} KB".replace(",", ".")} for a in vis],
+                      hide_index=True, use_container_width=True, height=min(460, 38 + 35 * len(vis)), key="soc_doc_tab",
+                      on_select="rerun", selection_mode="single-row")
+    try:
+        i = ev.selection.rows[0]
+    except (AttributeError, IndexError, TypeError):
+        return
+    if not 0 <= i < len(vis):
+        return
+    a = vis[i]
+    arq = so.baixar_anexo(esc, a["id"])
+    with st.container(border=True):
+        st.markdown(f"**{_e(a['nome'])}** · {_e(a['numero'])} · {_e(a['empresa_nome'])}")
+        b1, b2, _ = st.columns([1, 1, 3])
+        if arq:
+            b1.download_button("Baixar", arq["conteudo"], file_name=arq["nome"], icon=":material/download:",
+                               mime=arq.get("tipo_mime") or "application/octet-stream", key=f"soc_doc_dl_{a['id']}")
+        b2.button("Abrir processo", key=f"soc_doc_ab_{a['id']}", on_click=abrir_processo, args=(a["processo_id"],))
+
+
+# ---------------------------------------------------------------- relatórios
+
+
+def _periodo(hoje: date) -> tuple[date, date]:
+    op = st.segmented_control("Período", ["Este mês", "Últimos 30 dias", "Últimos 90 dias", "Este ano",
+                                          "Escolher"], default="Este mês", key="soc_rel_per")
+    if op == "Últimos 30 dias":
+        return hoje - timedelta(days=29), hoje
+    if op == "Últimos 90 dias":
+        return hoje - timedelta(days=89), hoje
+    if op == "Este ano":
+        return date(hoje.year, 1, 1), hoje
+    if op == "Escolher":
+        per = st.date_input("De / até", value=(hoje.replace(day=1), hoje), format="DD/MM/YYYY", key="soc_rel_datas")
+        if isinstance(per, (tuple, list)) and len(per) == 2:
+            return per[0], per[1]
+    return hoje.replace(day=1), hoje
+
+
+def _barras(itens: list[tuple[str, float, str]], cor: str = "#22e08a") -> str:
+    maior = max([v for _, v, _ in itens] or [1]) or 1
+    return "".join(f'<div class="soc-bar"><div class="t"><span>{_e(t)}</span><b>{_e(r)}</b></div>'
+                   f'<div class="tr"><span style="width:{v / maior * 100:.0f}%; background:{cor}"></span></div></div>'
+                   for t, v, r in itens)
+
+
+def _relatorios(esc: str) -> None:
+    hoje = _hoje()
+    rg = _regras(esc, _versao())
+    ini, fim = _periodo(hoje)
+    rel = so.relatorio_produtividade(_processos(esc, _versao()), _andamentos(esc, _versao()), ini, fim, hoje, rg)
+    t = rel["totais"]
+    st.caption(f"De {so.data_br(ini)} a {so.data_br(fim)}. Processos cancelados ficam de fora.")
+    _kpis([("Abertos no período", t["abertos"], "#3b82f6"), ("Concluídos no período", t["concluidos"], "#22e08a"),
+           ("Tempo médio até concluir", f"{t['tempo_medio']:.0f} dia(s)" if t["tempo_medio"] is not None else "—",
+            "#e2e8f0"),
+           ("Concluídos no prazo", f"{t['no_prazo_pct']}%" if t["no_prazo_pct"] is not None else "—", "#f59e0b"),
+           ("Andamentos registrados", t["andamentos"], "#a855f7")])
+
+    st.markdown("**Por colaborador**")
+    if rel["pessoas"]:
+        st.dataframe([{"Colaborador": r["responsavel"], "Em andamento": r["ativos"], "Atrasados": r["atrasados"],
+                       "Abertos no período": r["abertos"], "Concluídos": r["concluidos"],
+                       "No prazo": r["no_prazo"],
+                       "Tempo médio (dias)": f"{r['tempo_medio']:.0f}" if r["tempo_medio"] is not None else "—",
+                       "Andamentos registrados": r["andamentos"]} for r in rel["pessoas"]],
+                     hide_index=True, use_container_width=True)
+        st.caption("\"Em andamento\" e \"Atrasados\" são de hoje; as demais colunas, do período. Tempo médio = da "
+                   "abertura à conclusão, em dias corridos.")
+    else:
+        st.caption("Nenhum processo ainda.")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        g = rel["gargalos"]
+        corpo = _barras([(f"{so.ETAPAS[x['etapa']]} ({x['processos']})", x["media_dias"],
+                          f"{x['media_dias']:.0f} dia(s) em média · máx. {x['max_dias']}") for x in g], "#f59e0b") \
+            or '<div class="soc-muted">Nenhum processo em andamento.</div>'
+        st.markdown(f'<div class="soc-card"><h4>Onde os processos travam</h4>'
+                    f'<div class="soc-muted" style="margin-bottom:6px">Há quantos dias os processos em andamento '
+                    f'estão na etapa atual.</div>{corpo}</div>', unsafe_allow_html=True)
+    with c2:
+        pt = rel["por_tipo"]
+        corpo = _barras([(f"{x['tipo']} ({x['concluidos']})", x["tempo_medio"] or 0,
+                          f"{x['tempo_medio']:.0f} dia(s)") for x in pt]) \
+            or '<div class="soc-muted">Nenhum processo concluído no período.</div>'
+        st.markdown(f'<div class="soc-card"><h4>Tempo médio até concluir, por tipo</h4>{corpo}</div>',
+                    unsafe_allow_html=True)
+
+    st.markdown("**Parados há mais tempo na mesma etapa**")
+    for x in rel["mais_parados"]:
+        c1, c2 = st.columns([5, 1])
+        c1.markdown(f"**{_e(x['numero'])}** · {_e(x['empresa_nome'])} · {_e(so.TIPOS[x['tipo']]['nome'])} "
+                    + _chip(so.ETAPAS[x["etapa"]], _COR_ETAPA[x["etapa"]])
+                    + f"<span class='soc-muted'> há {x['dias_na_etapa']} dia(s) · "
+                      f"{_e(x.get('responsavel') or 'sem responsável')}</span>", unsafe_allow_html=True)
+        c2.button("Abrir", key=f"soc_rel_{x['id']}", on_click=abrir_processo, args=(x["id"],),
+                  use_container_width=True)
+    if not rel["mais_parados"]:
+        st.caption("Nenhum processo em andamento.")
+
+
 # ---------------------------------------------------------------- assistente IA
 
 _ROT_REV = {"aguardando": "Na fila", "em_validacao": "Aguardando validação", "concluida": "Validada", "erro": "Erro"}
@@ -856,6 +1156,17 @@ def _decidir(esc: str, rid: int, aid: int, status: str) -> None:
     so.decidir_apontamento(esc, rid, aid, status)
 
 
+def _trecho_html(texto: str, i, aps: list[dict]) -> str:
+    if i is None:
+        return _e(texto)
+    a = aps[i]
+    cor = _COR_GRAV.get(a.get("gravidade"), "#f59e0b")
+    corpo = (f"<del>{_e(texto)}</del> <ins>{_e(a['sugestao'])}</ins>"
+             if a.get("status") == "aceito" and a.get("sugestao") else _e(texto))
+    return (f'<mark style="background:{cor}26; border-bottom:2px solid {cor}" title="{_e(a.get("titulo"))}">'
+            f'<sup style="color:{cor}">{i + 1}</sup>{corpo}</mark>')
+
+
 def _revisao(esc: str, usuario: str, rid: int) -> None:
     st.button("← Assistente IA", key="soc_rev_voltar", on_click=_voltar_rev)
     r = so.obter_revisao(esc, rid)
@@ -876,17 +1187,24 @@ def _revisao(esc: str, usuario: str, rid: int) -> None:
     c1, c2 = st.columns([1, 1.25])
     with c1:
         st.markdown("**Minuta original**")
-        st.text_area("Minuta original", r["texto_original"], height=640, disabled=True, label_visibility="collapsed")
+        partes = so.marcar_trechos(r["texto_original"], aps)
+        marcados = {i for _, i in partes if i is not None}
+        st.html('<div class="soc-doc">' + "".join(_trecho_html(t, i, aps) for t, i in partes) + "</div>")
+        st.caption("Trechos com problema marcados com o número do apontamento. Os aceitos aparecem riscados, "
+                   "com a correção em verde. O original não muda.")
     with c2:
         st.markdown("**Análise da IA**")
         if not aps:
             st.success("A IA não encontrou problemas.")
-        for a in aps:
+        for n, a in enumerate(aps):
             cor = _COR_GRAV[a["gravidade"]]
             st.markdown(
                 f'<div class="soc-sug" style="border-left:4px solid {cor}">'
+                f'<b style="color:{cor}; margin-right:6px">#{n + 1}</b>'
                 f'{_chip(so.GRAVIDADES[a["gravidade"]], cor)}{_chip(so.CATEGORIAS_IA[a["categoria"]], "#94a3b8")}'
-                f'<div style="font-weight:700; margin:6px 0">{_e(a["titulo"])}</div>'
+                + ("" if n in marcados or not a.get("trecho") else
+                   '<span class="soc-muted">trecho não localizado no texto</span>')
+                + f'<div style="font-weight:700; margin:6px 0">{_e(a["titulo"])}</div>'
                 f'<div>{_e(a["problema"])}</div>'
                 + (f'<div class="soc-muted" style="margin-top:6px">Trecho:</div><div class="tr">{_e(a["trecho"])}</div>'
                    if a.get("trecho") else "")

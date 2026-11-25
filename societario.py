@@ -38,8 +38,17 @@ import auth
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.0"
+VERSAO = "1.1"
 NOVIDADES = [
+    ("1.1", "25/11/2026", [
+        "Novas telas: Empresas (processos e licenças de cada cliente num só lugar), Protocolos (tudo que está "
+        "no órgão, há quantos dias úteis e quando verificar), Documentos (todos os arquivos dos processos, com "
+        "busca) e Relatórios (produtividade por colaborador, tempo médio por tipo e onde os processos travam).",
+        "Sininho com o número de alertas no topo do Hub Societário; um clique leva para a Agenda.",
+        "Revisão por IA: o trecho com problema aparece marcado na minuta original, com o número do apontamento.",
+        "Linha do tempo com ícone por tipo de andamento (abertura, IA, protocolo, exigência, conclusão).",
+        "Cartão do Kanban mostra quantos anexos o processo tem, e o tipo de processo é escolhido em cartões.",
+    ]),
     ("1.0", "24/11/2026", [
         "Novo app: Hub Societário, para o departamento societário acompanhar cada processo do pedido do "
         "cliente até a conclusão, sem planilha paralela.",
@@ -422,6 +431,232 @@ def filtrar(processos: list[dict], busca: str = "", tipos=None, etapas=None, res
             if b not in alvo and not (bd and len(bd) >= 4 and bd in so_digitos(p.get("cnpj"))):
                 continue
         saida.append(p)
+    return saida
+
+
+# ---------------------------------------------------------------- empresas, protocolos e relatórios
+
+
+def somar_dias_uteis(inicio: date, n: int) -> date:
+    """O dia útil que fica `n` dias úteis depois de `inicio`."""
+    d, contados = inicio, 0
+    while contados < n:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            contados += 1
+    return d
+
+
+def tipo_andamento(a: dict) -> str:
+    """Categoria de um andamento, para o ícone da linha do tempo."""
+    t = _sem_acento(a.get("titulo") or "")
+    dep = a.get("etapa_depois")
+    if t.startswith("abertura"):
+        return "abertura"
+    if "inteligencia artificial" in t or t.startswith("revisao"):
+        return "ia"
+    if dep == CONCLUIDO:
+        return "concluido"
+    if dep == CANCELADO:
+        return "cancelado"
+    if dep == EM_EXIGENCIA or "exigencia" in t:
+        return "exigencia"
+    if dep == PROTOCOLADO or a.get("protocolo"):
+        return "protocolo"
+    if a.get("anexo_id") or t.startswith("documento anexado"):
+        return "anexo"
+    if dep:
+        return "etapa"
+    if t.startswith("dados do processo"):
+        return "dados"
+    return "nota"
+
+
+def _nome_empresa(x: dict) -> str:
+    return " ".join(_sem_acento(x.get("empresa_nome") or "").split())
+
+
+def resumo_empresas(processos: list[dict], licencas: list[dict], hoje: date, rg: Optional[dict] = None) -> list[dict]:
+    """Uma linha por empresa, com os processos e licenças dela. Mesma
+    empresa = mesmo CNPJ/CPF; o que não tem documento entra na empresa de
+    mesmo nome que tem (ou fica agrupado só pelo nome). As que têm alerta
+    vêm primeiro."""
+    rg = regras(rg)
+    processos = [p for p in processos if p.get("etapa") != CANCELADO]
+    por_nome: dict[str, str] = {}
+    for x in processos + licencas:
+        d = so_digitos(x.get("cnpj"))
+        if len(d) in (11, 14):
+            por_nome.setdefault(_nome_empresa(x), d)
+
+    def chave(x: dict) -> str:
+        d = so_digitos(x.get("cnpj"))
+        if len(d) in (11, 14):
+            return d
+        return por_nome.get(_nome_empresa(x)) or "nome:" + _nome_empresa(x)
+
+    grupos: dict[str, dict] = {}
+
+    def grupo(x: dict) -> dict:
+        e = grupos.setdefault(chave(x), {"chave": chave(x), "empresa": x.get("empresa_nome") or "",
+                                         "cnpj": "", "processos": [], "licencas": []})
+        if not e["cnpj"] and len(so_digitos(x.get("cnpj"))) in (11, 14):
+            e["cnpj"] = so_digitos(x.get("cnpj"))
+        return e
+
+    for p in processos:
+        grupo(p)["processos"].append(p)
+    for l in licencas:
+        grupo(l)["licencas"].append(l)
+    saida = []
+    for e in grupos.values():
+        ps = sorted(e["processos"], key=lambda p: str(p.get("numero") or ""), reverse=True)
+        ativos = [p for p in ps if p.get("etapa") not in ENCERRADAS]
+        datas = [d for d in (_dia(p.get("ultima_movimentacao")) for p in ps) if d]
+        e.update(processos=ps, ativos=len(ativos), concluidos=sum(1 for p in ps if p.get("etapa") == CONCLUIDO),
+                 alertas=sum(len(alertas_processo(p, hoje, rg)) for p in ativos)
+                 + sum(len(alertas_licenca(l, hoje, rg)) for l in e["licencas"]),
+                 ultima=max(datas) if datas else None)
+        saida.append(e)
+    saida.sort(key=lambda e: (-e["alertas"], -e["ativos"], _sem_acento(e["empresa"])))
+    return saida
+
+
+def painel_protocolos(processos: list[dict], andamentos: list[dict], hoje: date,
+                      rg: Optional[dict] = None) -> list[dict]:
+    """Processos protocolados ou em exigência: quando foram protocolados,
+    há quantos dias úteis aguardam e quando verificar de novo. Primeiro
+    as exigências, depois os que já passaram da hora de verificar."""
+    rg = regras(rg)
+    data_prot: dict = {}
+    for a in sorted(andamentos, key=lambda a: a["criado_em"]):
+        if a.get("etapa_depois") == PROTOCOLADO or a.get("protocolo"):
+            data_prot[a["processo_id"]] = _dia(a["criado_em"])
+    saida = []
+    for p in processos:
+        if p.get("etapa") not in (PROTOCOLADO, EM_EXIGENCIA):
+            continue
+        ult = _dia(p.get("ultima_movimentacao")) or _dia(p.get("criado_em"))
+        quando = data_prot.get(p.get("id")) or ult
+        prox = _dia(p.get("proxima_verificacao"))
+        if not prox and p.get("etapa") == PROTOCOLADO and ult:
+            prox = somar_dias_uteis(ult, int(rg["protocolado_dias_uteis"]))
+        exig = p.get("etapa") == EM_EXIGENCIA
+        saida.append({**p, "data_protocolo": quando, "dias_uteis": dias_uteis_entre(quando, hoje) if quando else 0,
+                      "verificar_em": None if exig else prox, "verificar": exig or bool(prox and prox <= hoje)})
+    saida.sort(key=lambda x: (x.get("etapa") != EM_EXIGENCIA, not x["verificar"],
+                              x["verificar_em"] or date.max, x.get("numero") or ""))
+    return saida
+
+
+def _media(valores: list) -> Optional[float]:
+    return round(sum(valores) / len(valores), 1) if valores else None
+
+
+def relatorio_produtividade(processos: list[dict], andamentos: list[dict], ini: date, fim: date, hoje: date,
+                            rg: Optional[dict] = None) -> dict:
+    """Produtividade do período [ini, fim]: por colaborador, por tipo de
+    processo e onde os processos em andamento estão parados (gargalos)."""
+    rg = regras(rg)
+
+    def no_periodo(valor) -> bool:
+        d = _dia(valor)
+        return bool(d and ini <= d <= fim)
+
+    pessoas: dict[str, dict] = {}
+
+    def pessoa(nome) -> dict:
+        nome = nome or "(sem responsável)"
+        return pessoas.setdefault(nome, {"responsavel": nome, "ativos": 0, "atrasados": 0, "abertos": 0,
+                                         "concluidos": 0, "no_prazo": 0, "dias": [], "andamentos": 0})
+
+    tipos: dict[str, list] = {}
+    concl_total, concl_prazo, abertos = [], 0, 0
+    for p in processos:
+        if p.get("etapa") == CANCELADO:
+            continue
+        r = pessoa(p.get("responsavel"))
+        if p.get("etapa") not in ENCERRADAS:
+            r["ativos"] += 1
+            if any(a["tipo"] == "atrasado" for a in alertas_processo(p, hoje, rg)):
+                r["atrasados"] += 1
+        if no_periodo(p.get("criado_em")):
+            r["abertos"] += 1
+            abertos += 1
+        if p.get("etapa") == CONCLUIDO and no_periodo(p.get("concluido_em")):
+            dias = (_dia(p["concluido_em"]) - _dia(p["criado_em"])).days
+            prev = _dia(p.get("previsao"))
+            no_prazo = not prev or _dia(p["concluido_em"]) <= prev
+            r["concluidos"] += 1
+            r["no_prazo"] += no_prazo
+            r["dias"].append(dias)
+            concl_total.append(dias)
+            concl_prazo += no_prazo
+            tipos.setdefault(TIPOS.get(p.get("tipo"), {}).get("nome", "Outro processo"), []).append(dias)
+    for a in andamentos:
+        if a.get("usuario") and no_periodo(a.get("criado_em")):
+            pessoa(a["usuario"])["andamentos"] += 1
+
+    # há quantos dias cada processo em andamento está na etapa atual
+    entrou: dict = {}
+    for a in sorted(andamentos, key=lambda a: a["criado_em"]):
+        if a.get("etapa_depois"):
+            entrou[(a["processo_id"], a["etapa_depois"])] = _dia(a["criado_em"])
+    parados = []
+    for p in processos:
+        if p.get("etapa") in ENCERRADAS:
+            continue
+        desde = entrou.get((p.get("id"), p.get("etapa"))) or _dia(p.get("criado_em"))
+        parados.append({**p, "dias_na_etapa": (hoje - desde).days if desde else 0})
+    gargalos = []
+    for e in ETAPAS_KANBAN:
+        if e == CONCLUIDO:
+            continue
+        nessa = [x["dias_na_etapa"] for x in parados if x.get("etapa") == e]
+        if nessa:
+            gargalos.append({"etapa": e, "processos": len(nessa), "media_dias": _media(nessa), "max_dias": max(nessa)})
+    gargalos.sort(key=lambda g: -(g["media_dias"] or 0))
+
+    lista = []
+    for r in pessoas.values():
+        r["tempo_medio"] = _media(r.pop("dias"))
+        lista.append(r)
+    lista.sort(key=lambda r: (-r["concluidos"], -r["andamentos"], r["responsavel"]))
+    return {
+        "totais": {"abertos": abertos, "concluidos": len(concl_total), "tempo_medio": _media(concl_total),
+                   "no_prazo_pct": round(concl_prazo / len(concl_total) * 100) if concl_total else None,
+                   "andamentos": sum(r["andamentos"] for r in lista)},
+        "pessoas": lista,
+        "por_tipo": sorted(({"tipo": t, "concluidos": len(d), "tempo_medio": _media(d)} for t, d in tipos.items()),
+                           key=lambda x: -x["concluidos"]),
+        "gargalos": gargalos,
+        "mais_parados": sorted(parados, key=lambda x: -x["dias_na_etapa"])[:10],
+    }
+
+
+def marcar_trechos(texto: str, apontamentos: list[dict]) -> list[tuple[str, Optional[int]]]:
+    """Divide a minuta em pedaços para destacar o que a IA apontou: cada
+    pedaço vem com o índice do apontamento cujo "trecho" ele é (ou None).
+    Vale a primeira ocorrência de cada trecho, sem sobreposição."""
+    marcas: list[tuple[int, int, int]] = []
+    for i, a in enumerate(apontamentos):
+        t = (a.get("trecho") or "").strip()
+        pos = texto.find(t) if t else -1
+        if pos < 0:
+            continue
+        fim = pos + len(t)
+        if any(pos < f and s < fim for s, f, _ in marcas):
+            continue
+        marcas.append((pos, fim, i))
+    saida: list[tuple[str, Optional[int]]] = []
+    atual = 0
+    for s, f, i in sorted(marcas):
+        if s > atual:
+            saida.append((texto[atual:s], None))
+        saida.append((texto[s:f], i))
+        atual = f
+    if atual < len(texto):
+        saida.append((texto[atual:], None))
     return saida
 
 
@@ -884,17 +1119,43 @@ def criar_processo(escritorio_id: str, usuario: str, tipo: str, empresa_nome: st
 
 def listar_processos(escritorio_id: str, incluir_encerrados: bool = True) -> list[dict]:
     sql = """
-        SELECT p.*, COALESCE(c.feitos, 0) AS check_feitos, COALESCE(c.total, 0) AS check_total
+        SELECT p.*, COALESCE(c.feitos, 0) AS check_feitos, COALESCE(c.total, 0) AS check_total,
+               COALESCE(an.n, 0) AS n_anexos
         FROM soc_processos p
         LEFT JOIN (SELECT processo_id, count(*) FILTER (WHERE feito) AS feitos, count(*) AS total
                    FROM soc_checklist GROUP BY processo_id) c ON c.processo_id = p.id
+        LEFT JOIN (SELECT processo_id, count(*) AS n FROM soc_anexos WHERE escritorio_id = %s
+                   GROUP BY processo_id) an ON an.processo_id = p.id
         WHERE p.escritorio_id = %s
     """
     if not incluir_encerrados:
         sql += " AND p.etapa NOT IN ('concluido', 'cancelado')"
     sql += " ORDER BY p.criado_em DESC"
     with auth.conectar() as conn:
-        return [dict(l) for l in conn.execute(sql, (escritorio_id,)).fetchall()]
+        return [dict(l) for l in conn.execute(sql, (escritorio_id, escritorio_id)).fetchall()]
+
+
+def listar_andamentos(escritorio_id: str, desde: Optional[date] = None) -> list[dict]:
+    """Andamentos de todos os processos do escritório (para protocolos e relatórios)."""
+    sql = ("SELECT processo_id, usuario, criado_em, titulo, etapa_antes, etapa_depois, protocolo "
+           "FROM soc_andamentos WHERE escritorio_id = %s")
+    args: list = [escritorio_id]
+    if desde:
+        sql += " AND criado_em >= %s"
+        args.append(datetime.combine(desde, datetime.min.time(), FUSO))
+    with auth.conectar() as conn:
+        return [dict(l) for l in conn.execute(sql + " ORDER BY criado_em, id", args).fetchall()]
+
+
+def listar_anexos(escritorio_id: str) -> list[dict]:
+    """Todos os documentos dos processos (sem o conteúdo), do mais novo ao mais antigo."""
+    with auth.conectar() as conn:
+        return [dict(l) for l in conn.execute("""
+            SELECT a.id, a.nome, a.categoria, a.tipo_mime, a.tamanho, a.enviado_por, a.criado_em, a.processo_id,
+                   p.numero, p.empresa_nome, p.cnpj, p.tipo, p.etapa
+            FROM soc_anexos a JOIN soc_processos p ON p.id = a.processo_id
+            WHERE a.escritorio_id = %s ORDER BY a.criado_em DESC, a.id DESC
+        """, (escritorio_id,)).fetchall()]
 
 
 def obter_processo(escritorio_id: str, processo_id: int) -> Optional[dict]:

@@ -303,3 +303,119 @@ def test_regras_salvas(banco):
     rg = so.salvar_regras(ESC_A, "dp_admin", {"sem_movimentacao_dias": 5, "protocolado_dias_uteis": 3,
                                               "prazo_avisos": "7, 2", "licenca_avisos": "60,30"})
     assert so.obter_regras(ESC_A) == rg and rg["prazo_avisos"] == [7, 2] and rg["licenca_avisos"] == [60, 30]
+
+
+# ---------------------------------------------------------------- 1.1: empresas, protocolos, relatórios
+
+
+def test_somar_dias_uteis():
+    sexta = date(2026, 11, 27)
+    assert so.somar_dias_uteis(sexta, 2) == date(2026, 12, 1)  # pula o fim de semana
+    assert so.dias_uteis_entre(sexta, so.somar_dias_uteis(sexta, 2)) == 2
+    assert so.somar_dias_uteis(sexta, 0) == sexta
+
+
+def test_tipo_andamento():
+    assert so.tipo_andamento({"titulo": "Abertura do processo"}) == "abertura"
+    assert so.tipo_andamento({"titulo": "Revisão por inteligência artificial"}) == "ia"
+    assert so.tipo_andamento({"titulo": "Revisão validada pelo responsável"}) == "ia"
+    assert so.tipo_andamento({"titulo": "x", "etapa_depois": so.CONCLUIDO}) == "concluido"
+    assert so.tipo_andamento({"titulo": "Exigência da Junta"}) == "exigencia"
+    assert so.tipo_andamento({"titulo": "Protocolado", "protocolo": "GO1"}) == "protocolo"
+    assert so.tipo_andamento({"titulo": "Documento anexado", "anexo_id": 3}) == "anexo"
+    assert so.tipo_andamento({"titulo": "x", "etapa_depois": so.EM_ANALISE}) == "etapa"
+    assert so.tipo_andamento({"titulo": "Dados do processo alterados"}) == "dados"
+    assert so.tipo_andamento({"titulo": "Liguei para o cliente"}) == "nota"
+
+
+def test_resumo_empresas():
+    procs = [_proc(id=1, numero="SOC-2026-00001", cnpj="11222333000181"),
+             _proc(id=2, numero="SOC-2026-00002", cnpj="11.222.333/0001-81", etapa=so.CONCLUIDO),
+             _proc(id=3, numero="SOC-2026-00003", cnpj="", empresa_nome="Padaria  Pão Quente"),
+             _proc(id=4, numero="SOC-2026-00004", cnpj="", empresa_nome="padaria pao quente", etapa=so.EM_EXIGENCIA),
+             _proc(id=5, numero="SOC-2026-00005", cnpj="99888777000166", etapa=so.CANCELADO)]
+    lics = [{"id": 9, "empresa_nome": "Empresa Alfa", "cnpj": "11222333000181", "tipo": "alvara",
+             "validade": HOJE + timedelta(days=400)},
+            # sem CNPJ, mas com o mesmo nome de uma empresa que tem: entra nela
+            {"id": 10, "empresa_nome": "EMPRESA ALFA LTDA", "cnpj": "", "tipo": "bombeiros",
+             "validade": HOJE + timedelta(days=400)}]
+    emps = so.resumo_empresas(procs, lics, HOJE)
+    assert len(emps) == 2  # o cancelado não entra; mesma empresa por CNPJ ou pelo nome
+    assert emps[0]["empresa"] == "Padaria  Pão Quente" and emps[0]["alertas"] >= 1  # com alerta, primeiro
+    alfa = emps[1]
+    assert alfa["cnpj"] == "11222333000181" and alfa["ativos"] == 1 and alfa["concluidos"] == 1
+    assert [p["id"] for p in alfa["processos"]] == [2, 1] and [l["id"] for l in alfa["licencas"]] == [9, 10]
+
+
+def test_painel_protocolos():
+    antes = HOJE - timedelta(days=6)  # quarta-feira, 4 dias úteis antes de hoje
+    procs = [_proc(id=1, numero="SOC-1", etapa=so.PROTOCOLADO, ultima_movimentacao=_dt(antes)),
+             _proc(id=2, numero="SOC-2", etapa=so.EM_EXIGENCIA),
+             _proc(id=3, numero="SOC-3", etapa=so.EM_ELABORACAO),
+             _proc(id=4, numero="SOC-4", etapa=so.PROTOCOLADO, proxima_verificacao=HOJE + timedelta(days=3))]
+    ands = [{"processo_id": 1, "criado_em": _dt(antes), "etapa_depois": so.PROTOCOLADO, "protocolo": "GO1"},
+            {"processo_id": 4, "criado_em": _dt(HOJE), "etapa_depois": None, "protocolo": "GO4"}]
+    lst = so.painel_protocolos(procs, ands, HOJE)
+    assert [x["id"] for x in lst] == [2, 1, 4]
+    um = lst[1]
+    assert um["data_protocolo"] == antes and um["dias_uteis"] == 4 and um["verificar"]
+    assert um["verificar_em"] == date(2026, 11, 20)
+    assert lst[2]["verificar_em"] == HOJE + timedelta(days=3) and not lst[2]["verificar"]
+    assert lst[2]["data_protocolo"] == HOJE
+
+
+def test_relatorio_produtividade():
+    d = lambda n: _dt(HOJE - timedelta(days=n))  # noqa: E731
+    procs = [
+        _proc(id=1, responsavel="ana", etapa=so.CONCLUIDO, criado_em=d(10), concluido_em=d(2),
+              previsao=HOJE - timedelta(days=1)),
+        _proc(id=2, responsavel="ana", etapa=so.CONCLUIDO, criado_em=d(40), concluido_em=d(35)),
+        _proc(id=3, responsavel="bia", etapa=so.EM_ANALISE, criado_em=d(5), previsao=HOJE - timedelta(days=1)),
+        _proc(id=4, responsavel="bia", etapa=so.A_INICIAR, criado_em=d(1)),
+        _proc(id=5, responsavel="bia", etapa=so.CANCELADO, criado_em=d(3)),
+    ]
+    ands = [{"processo_id": 3, "usuario": "bia", "criado_em": d(4), "etapa_depois": so.EM_ANALISE},
+            {"processo_id": 1, "usuario": "ana", "criado_em": d(2), "etapa_depois": so.CONCLUIDO},
+            {"processo_id": 2, "usuario": "ana", "criado_em": d(50), "etapa_depois": None}]
+    rel = so.relatorio_produtividade(procs, ands, HOJE - timedelta(days=29), HOJE, HOJE)
+    assert rel["totais"] == {"abertos": 3, "concluidos": 1, "tempo_medio": 8.0, "no_prazo_pct": 100, "andamentos": 2}
+    por = {r["responsavel"]: r for r in rel["pessoas"]}
+    assert por["ana"]["concluidos"] == 1 and por["ana"]["tempo_medio"] == 8.0 and por["ana"]["ativos"] == 0
+    assert por["bia"]["ativos"] == 2 and por["bia"]["atrasados"] == 1 and por["bia"]["andamentos"] == 1
+    assert [g["etapa"] for g in rel["gargalos"]] == [so.EM_ANALISE, so.A_INICIAR]
+    assert rel["gargalos"][0]["media_dias"] == 4 and rel["mais_parados"][0]["id"] == 3
+    assert rel["por_tipo"] == [{"tipo": "Alteração contratual", "concluidos": 1, "tempo_medio": 8.0}]
+
+
+def test_marcar_trechos():
+    texto = "Sócio A: R$ 60\nSócio B: R$ 30"
+    aps = [{"trecho": "R$ 30"}, {"trecho": "não existe"}, {"trecho": "Sócio B: R$ 30"}, {"trecho": "Sócio A"},
+           {"trecho": ""}]
+    partes = so.marcar_trechos(texto, aps)
+    assert "".join(t for t, _ in partes) == texto
+    assert [(t, i) for t, i in partes if i is not None] == [("Sócio A", 3), ("R$ 30", 0)]
+
+
+def test_documentos_e_andamentos_no_banco(banco):
+    from conftest import ESC_A, ESC_B
+    p = so.criar_processo(ESC_A, "dp_admin", "alteracao", "Empresa Alfa LTDA", "11222333000181")
+    pb = so.criar_processo(ESC_B, "agente_b", "baixa", "Mercado Beta")
+    so.anexar(ESC_A, p["id"], "dp_admin", "minuta.docx", b"abc", categoria="minuta")
+    so.anexar(ESC_A, p["id"], "dp_admin", "rg.pdf", b"x" * 10)
+    so.anexar(ESC_B, pb["id"], "agente_b", "outro.pdf", b"y")
+    docs = so.listar_anexos(ESC_A)
+    assert [a["nome"] for a in docs] == ["rg.pdf", "minuta.docx"]
+    assert docs[0]["numero"] == p["numero"] and docs[0]["empresa_nome"] == "Empresa Alfa LTDA"
+    assert "conteudo" not in docs[0]
+    assert {x["id"]: x["n_anexos"] for x in so.listar_processos(ESC_A)} == {p["id"]: 2}
+    so.registrar_andamento(ESC_A, p["id"], "dp_user", "Protocolado", etapa=so.PROTOCOLADO, protocolo="GO1")
+    ands = so.listar_andamentos(ESC_A)
+    assert {a["processo_id"] for a in ands} == {p["id"]} and ands[-1]["protocolo"] == "GO1"
+    assert so.listar_andamentos(ESC_A, datetime.now(so.FUSO).date() + timedelta(days=1)) == []
+
+
+def test_tela_compila():
+    # a tela não é exercitada pelos testes; ao menos não pode ter erro de sintaxe
+    import pathlib
+    import py_compile
+    py_compile.compile(str(pathlib.Path(so.__file__).with_name("tela_societario.py")), doraise=True)
