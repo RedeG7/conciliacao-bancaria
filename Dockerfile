@@ -14,7 +14,7 @@ WORKDIR /app
 # Arial, Calibri e Cambria, para o PDF nao mudar a paginacao do Word.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl tesseract-ocr tesseract-ocr-por \
-       libreoffice-writer-nogui fonts-liberationfonts-crosextra-carlito fonts-crosextra-caladea \
+       libreoffice-writer-nogui fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea \
        fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
