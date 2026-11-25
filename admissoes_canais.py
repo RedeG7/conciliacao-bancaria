@@ -1,7 +1,7 @@
 """Integrações dos canais de Admissões (Acessórias, ONVIO, WhatsApp).
 
-Cada escritório configura os próprios acessos na aba "Canais e agente" da
-tela de Admissões. Os campos secretos (tokens) ficam cifrados com a mesma
+Cada escritório configura os próprios acessos em Administração › Integrações (antes, aba "Canais e agente" da
+tela de Admissões). Os campos secretos (tokens) ficam cifrados com a mesma
 chave das credenciais do RPA (RPA_ENC_KEY, ver rpa/core.py) e nunca voltam
 para a tela.
 

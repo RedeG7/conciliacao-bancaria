@@ -564,7 +564,7 @@ def _aba_integracao(esc: str, usuario: str, cfg: dict) -> None:
     if cfg["token_salvo"]:
         st.caption("✔ Token salvo (cifrado; não volta para a tela).")
     elif cfg["token_admissoes"]:
-        st.caption("✔ Usando o token do Acessórias já salvo na integração das Admissões. Salve um aqui se "
+        st.caption("✔ Usando o token do Acessórias já salvo em Administração › Integrações. Salve um aqui se "
                    "quiser um usuário só para esta integração.")
     with st.form("ob_form_cfg"):
         ativo = st.toggle("Integração ativa (sincroniza sozinha a cada 5 minutos)", value=bool(cfg["ativo"]))

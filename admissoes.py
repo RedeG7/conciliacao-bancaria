@@ -51,8 +51,13 @@ CANAIS = ("acessorias", "onvio", "whatsapp")
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
 # O programa do agente tem versão própria em attended_worker/VERSION_ADMISSOES
 # (é ela que dispara a atualização automática do .exe).
-VERSAO = "1.7"
+VERSAO = "1.8"
 NOVIDADES = [
+    ("1.8", "25/11/2026", [
+        "As integrações (Acessórias, ONVIO, WhatsApp, IA), a chave dos canais e o programa do agente saíram "
+        "da aba Canais e agente e foram para Administração › Integrações, porque valem para todos os "
+        "módulos do Hub.",
+    ]),
     ("1.7", "25/11/2026", [
         "Usuário comum também aprova, rejeita, conclui e volta solicitações para a fila (quem preparou a "
         "prévia continua sem poder aprovar). A aba Canais e agente fica só com o administrador.",

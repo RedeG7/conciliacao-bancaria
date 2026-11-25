@@ -573,7 +573,7 @@ def admissao_material(admissao_id: int, authorization: Optional[str] = Header(No
 
 @app.post("/api/admissoes/agente/ia")
 def admissao_leitura(authorization: Optional[str] = Header(None)):
-    """Como o agente lê os documentos (aba IA de Canais e agente). A chave
+    """Como o agente lê os documentos (Administração › Integrações › IA). A chave
     da IA escolhida vai só para a conta do agente, a cada tarefa - trocar
     no Hub vale na próxima admissão."""
     usuario = _agente_admissoes(authorization)

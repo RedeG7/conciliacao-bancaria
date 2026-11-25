@@ -992,11 +992,14 @@ def _tela_admissoes() -> None:
                                   admissoes.BLOCKED, admissoes.FAILED, admissoes.QUEUED, admissoes.CLAIMED]):
         col.metric(admissoes.STATUS_ROTULO[status], contagem.get(status, 0))
 
-    # "Canais e agente" é configuração do escritório: só o administrador vê
-    _abas = st.tabs(["Solicitações", "Registrar solicitação", "Empresas"]
-                    + (["Canais e agente"] if pode_configurar else []))
-    aba_lista, aba_nova, aba_empresas = _abas[:3]
-    aba_canais = _abas[3] if pode_configurar else None
+    if pode_configurar:
+        # canais, chave e programa do agente ficam em Administração › Integrações (valem para o Hub todo)
+        c_txt, c_bt = st.columns([4, 1], vertical_alignment="center")
+        c_txt.caption("Integrações (Acessórias, ONVIO, WhatsApp, IA), chave dos canais e programa do agente: "
+                      "em Administração › Integrações.")
+        c_bt.button("Abrir Integrações", key="adm_ir_integracoes", icon=":material/hub:",
+                    on_click=_ir_tela, args=("integracoes",), use_container_width=True)
+    aba_lista, aba_nova, aba_empresas = st.tabs(["Solicitações", "Registrar solicitação", "Empresas"])
     lista_clientes = clientes.listar_clientes(escritorio_id)
 
     with aba_lista:
@@ -1078,34 +1081,63 @@ def _tela_admissoes() -> None:
     with aba_empresas:
         _adm_empresas(escritorio_id, lista_clientes)
 
-    if aba_canais is None:
-        return
-    with aba_canais:
-        _adm_integracoes(escritorio_id, usuario, pode_configurar)
-        st.divider()
-        st.markdown("**Chave dos canais**")
-        st.caption("Os conectores de Acessórias, ONVIO e WhatsApp enviam as solicitações para "
-                   "`POST /api/admissoes/eventos` com o cabeçalho `X-API-Key`.")
-        info = admissoes.info_chave_canal(escritorio_id)
-        if info:
-            st.write(f"Chave ativa `{info['prefixo']}…`, gerada por {info['criada_por']} em {_adm_quando(info['criada_em'])}.")
-        else:
-            st.write("Nenhuma chave gerada - os canais ainda não conseguem enviar solicitações.")
-        if pode_configurar:
-            c1, c2 = st.columns(2)
-            if c1.button("Gerar nova chave" if info else "Gerar chave", key="adm_gerar_chave"):
-                st.session_state["adm_chave_nova"] = admissoes.gerar_chave_canal(escritorio_id, usuario)
-                st.rerun()
-            if info and c2.button("Revogar chave", key="adm_revogar_chave"):
-                admissoes.revogar_chave_canal(escritorio_id)
-                st.session_state.pop("adm_chave_nova", None)
-                st.rerun()
-            if st.session_state.get("adm_chave_nova"):
-                st.warning("Copie agora: a chave não aparece de novo. Gerar outra invalida esta.")
-                st.code(st.session_state["adm_chave_nova"], language=None)
-        else:
-            st.caption("Só administradores do escritório geram ou revogam a chave.")
-        _adm_download_agente()
+
+
+def _ir_tela(tela: str) -> None:
+    st.session_state["tela"] = tela
+
+
+def _tela_integracoes() -> None:
+    """Administração › Integrações: acessos aos sistemas de fora (Acessórias,
+    ONVIO, WhatsApp, IA), por escritório, usados por todos os módulos do Hub
+    (Admissões, Obrigações, Societário...). Também a chave dos canais e o
+    programa do agente das Admissões. Só admin do escritório / super admin."""
+    _cabecalho_app("🔌", "Integrações",
+                   "Acessos ao Acessórias, ONVIO, WhatsApp e IA, usados por todos os módulos do Hub.")
+    st.divider()
+    usuario = st.session_state.get("usuario_logado")
+    escritorio_id = st.session_state.get("escritorio_id")
+    if st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL:
+        escritorios = auth.carregar_escritorios()
+        ids = list(escritorios.keys())
+        escritorio_id = st.selectbox(
+            "Escritório", ids, format_func=lambda eid: escritorios.get(eid, {}).get("nome", eid),
+            index=ids.index(escritorio_id) if escritorio_id in ids else 0, key="int_escritorio",
+        )
+    else:
+        st.caption(f"Escritório: **{st.session_state.get('escritorio_nome')}**")
+    st.caption("Uma integração configurada aqui vale para o Hub todo: o token do Acessórias é usado nas "
+               "Admissões, no Controle de Obrigações e na busca de empresas do Hub Societário; a chave da "
+               "Claude, na leitura das admissões e na revisão de minutas do Hub Societário.")
+    _adm_integracoes(escritorio_id, usuario, True)
+    st.divider()
+    st.markdown("#### Admissões: chave dos canais e programa do agente")
+    _adm_chave_canais(escritorio_id, usuario)
+    _adm_download_agente()
+
+
+def _adm_chave_canais(escritorio_id: str, usuario: str) -> None:
+    """Chave que os conectores usam para mandar solicitações de admissão
+    (só aparece na tela de Integrações, que é só de administrador)."""
+    st.markdown("**Chave dos canais**")
+    st.caption("Os conectores de Acessórias, ONVIO e WhatsApp enviam as solicitações para "
+               "`POST /api/admissoes/eventos` com o cabeçalho `X-API-Key`.")
+    info = admissoes.info_chave_canal(escritorio_id)
+    if info:
+        st.write(f"Chave ativa `{info['prefixo']}…`, gerada por {info['criada_por']} em {_adm_quando(info['criada_em'])}.")
+    else:
+        st.write("Nenhuma chave gerada - os canais ainda não conseguem enviar solicitações.")
+    c1, c2 = st.columns(2)
+    if c1.button("Gerar nova chave" if info else "Gerar chave", key="adm_gerar_chave"):
+        st.session_state["adm_chave_nova"] = admissoes.gerar_chave_canal(escritorio_id, usuario)
+        st.rerun()
+    if info and c2.button("Revogar chave", key="adm_revogar_chave"):
+        admissoes.revogar_chave_canal(escritorio_id)
+        st.session_state.pop("adm_chave_nova", None)
+        st.rerun()
+    if st.session_state.get("adm_chave_nova"):
+        st.warning("Copie agora: a chave não aparece de novo. Gerar outra invalida esta.")
+        st.code(st.session_state["adm_chave_nova"], language=None)
 
 
 def _adm_versao_agente() -> str:
@@ -1137,7 +1169,7 @@ def _adm_download_agente() -> None:
             "confira a pasta de trabalho (`C:\\Dominio`) e clique em **Iniciar**.\n"
             "5. Deixe o Domínio aberto no módulo Folha. Na RDS, não minimize nem desconecte a sessão; no "
             "computador local, não bloqueie a tela. O programa se atualiza sozinho quando sai versão nova.\n\n"
-            "A leitura dos documentos (formulário ou IA) é escolhida aqui no Hub, na aba **IA**."
+            "A leitura dos documentos (formulário ou IA) é escolhida aqui no Hub, em Integrações › **IA**."
         )
 
 
@@ -1298,7 +1330,7 @@ def _adm_empresas(escritorio_id: str, lista: list) -> None:
     """Empresas do escritório (o mesmo cadastro de Gerenciar Clientes), com
     busca e edição - para conferir código no Domínio e CNPJ."""
     st.caption("O mesmo cadastro de Gerenciar Clientes. Para trazer as empresas do Acessórias de uma vez, "
-               "use Canais e agente › Acessórias › Importar empresas.")
+               "use Administração › Integrações › Acessórias › Importar empresas.")
     with st.expander("Cadastrar empresa"):
         _adm_form_empresa(None, escritorio_id, "nova")
     busca = st.text_input("Buscar por nome, código ou CNPJ", key=f"adm_emp_busca_{escritorio_id}")
@@ -2954,6 +2986,9 @@ def _sidebar_hub(papel_usuario: str) -> None:
             if _nav("Permissões", "permissoes", ":material/verified_user:"):
                 st.session_state["tela"] = "gerenciar_usuarios"
                 st.rerun()
+            if _nav("Integrações", "integracoes", ":material/hub:", ativo=tela == "integracoes"):
+                st.session_state["tela"] = "integracoes"
+                st.rerun()
             if _nav("Logs de Acesso", "logs", ":material/list:", ativo=tela == "logs_acesso"):
                 st.session_state["tela"] = "logs_acesso"
                 st.rerun()
@@ -3963,7 +3998,7 @@ if st.session_state.get("mostrar_trocar_senha"):
 # tela atual também na URL (?tela=...): F5 ou uma sessão nova do Streamlit
 # (reconexão, Hub reiniciado no deploy) voltava sempre pra tela inicial
 _TELAS_URL = {"home", "obrigacoes", "societario", "rpa_fiscal", "rpa_hub", "rpa_nfgo", "calculadora_rtc", "calculadora_rtc_sn", "gerador_danfse", "rpa_folha", "admissoes", "conciliacao", "historico", "gerenciar_clientes",
-              "gerenciar_escritorios", "gerenciar_usuarios", "logs_acesso"}
+              "gerenciar_escritorios", "gerenciar_usuarios", "logs_acesso", "integracoes"}
 if "tela" not in st.session_state:
     _tela_url = st.query_params.get("tela", "home")
     st.session_state["tela"] = _tela_url if _tela_url in _TELAS_URL else "home"
@@ -4005,6 +4040,13 @@ if st.session_state.get("tela") == "gerenciar_usuarios":
         st.session_state["tela"] = "home"
     else:
         _tela_gerenciar_usuarios()
+        st.stop()
+
+if st.session_state.get("tela") == "integracoes":
+    if st.session_state.get("papel_usuario") not in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO):
+        st.session_state["tela"] = "home"
+    else:
+        _tela_integracoes()
         st.stop()
 
 if st.session_state.get("tela") == "logs_acesso":

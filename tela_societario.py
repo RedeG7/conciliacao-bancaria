@@ -444,7 +444,7 @@ def _botao_acessorias(esc: str, chave: str) -> None:
                        "Obrigações usa e atualiza sozinho).")
     else:
         st.caption("Para buscar as empresas do Acessórias, cadastre o API Token do Acessórias no Controle de "
-                   "Obrigações (Configurações) ou em Admissões › Canais.")
+                   "Obrigações (Configurações) ou em Administração › Integrações.")
     msg = st.session_state.pop("soc_acess_msg", None)
     if msg:
         (st.success if msg[0] == "ok" else st.error)(msg[1])
@@ -1196,7 +1196,7 @@ def _iniciar_revisao(esc: str, usuario: str, titulo: str, texto: str, processo_i
                      arquivo: bytes | None = None) -> None:
     chave = so.chave_claude(esc)
     if not chave:
-        st.error("Falta a chave da Claude do escritório. O administrador cadastra em Admissões › Canais › IA "
+        st.error("Falta a chave da Claude do escritório. O administrador cadastra em Administração › Integrações › IA "
                  "(API Key da Claude); a mesma chave vale para o Hub Societário.")
         return
     rid = so.criar_revisao(esc, usuario, titulo, texto, processo_id, titulo, arquivo)
@@ -1414,9 +1414,9 @@ def _configuracoes(esc: str, usuario: str) -> None:
                 st.success("Configuração salva.")
     st.markdown("**Assistente IA**")
     if so.chave_claude(esc):
-        st.success("Chave da Claude configurada (a mesma de Admissões › Canais › IA).")
+        st.success("Chave da Claude configurada (a mesma de Administração › Integrações › IA).")
     else:
-        st.warning("Sem chave da Claude. Cadastre em Admissões › Canais › IA (API Key da Claude): a mesma chave "
+        st.warning("Sem chave da Claude. Cadastre em Administração › Integrações › IA (API Key da Claude): a mesma chave "
                    "vale para o Hub Societário.")
     st.caption("Integrações com Acessórias, ONVIO, WhatsApp e órgãos públicos, e avisos por e-mail/WhatsApp, entram "
                "nas próximas versões.")

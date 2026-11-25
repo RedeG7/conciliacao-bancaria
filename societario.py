@@ -857,7 +857,7 @@ def revisar_minuta(texto: str, chave: str, tipo: str = "", contexto: str = "", c
     import anthropic
     if cliente is None:
         if not chave:
-            raise ErroIA("Falta a chave da Claude: cadastre em Admissões › Canais › IA (vale para o escritório todo).")
+            raise ErroIA("Falta a chave da Claude: cadastre em Administração › Integrações › IA (vale para o escritório todo).")
         cliente = anthropic.Anthropic(api_key=chave, timeout=600)
     try:
         with cliente.beta.messages.stream(
@@ -1809,7 +1809,7 @@ def revisoes_pendentes(escritorio_id: str) -> int:
 
 
 def chave_claude(escritorio_id: str) -> str:
-    """Chave da Claude do escritório (a mesma salva em Admissões › Canais ›
+    """Chave da Claude do escritório (a mesma salva em Administração › Integrações ›
     IA). Sem ela, a variável ANTHROPIC_API_KEY do servidor, se houver."""
     import os
     import admissoes_canais
