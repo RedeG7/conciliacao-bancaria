@@ -9,7 +9,7 @@ import html
 import json
 from pathlib import Path
 from datetime import date, datetime, time, timedelta
-from typing import Callable
+from typing import Callable, Optional
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -505,6 +505,30 @@ def _escolher_tipo(tipo: str) -> None:
     st.session_state["soc_n_tipo"] = tipo
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _modelos(esc: str, versao: int) -> list[dict]:
+    return so.listar_modelos(esc)
+
+
+def _escolher_modelo(esc: str, tipo: str, chave: str) -> Optional[int]:
+    """Modelo do contrato do tipo de processo (o padrão já vem marcado)."""
+    mods = [m for m in _modelos(esc, _versao()) if m["tipo"] == tipo]
+    if not mods:
+        st.caption(f"Nenhum modelo de contrato cadastrado para {so.TIPOS[tipo]['nome']}. Os modelos ficam em "
+                   "Hub Societário › Configurações (administrador do escritório).")
+        return None
+    por_id = {m["id"]: m for m in mods}
+    opcoes = [None] + list(por_id)
+    if st.session_state.get(chave) not in opcoes:
+        st.session_state.pop(chave, None)
+    return st.selectbox(
+        "Modelo do contrato", opcoes, key=chave, index=1,
+        format_func=lambda i: "Sem modelo" if i is None else
+        por_id[i]["nome"] + (" (padrão)" if por_id[i]["padrao"] else "") + f" · {por_id[i]['arquivo_nome']}",
+        help="O modelo vai para os Documentos do processo como minuta, com o nome da empresa, o CNPJ, o número do "
+             "processo e a data preenchidos onde o Word tiver {{EMPRESA}}, {{CNPJ}}, {{PROCESSO}} e {{DATA}}.")
+
+
 def _novo(esc: str, usuario: str) -> None:
     st.caption("O número do processo, quem abriu e a data e hora ficam registrados automaticamente. O checklist do "
                "tipo escolhido é carregado na abertura.")
@@ -528,6 +552,7 @@ def _novo(esc: str, usuario: str) -> None:
                 unsafe_allow_html=True)
     orgao = c2.selectbox("Órgão", so.ORGAOS, key="soc_n_orgao_" + tipo,
                          index=so.ORGAOS.index(so.TIPOS[tipo]["orgao"]))
+    modelo_id = _escolher_modelo(esc, tipo, "soc_n_modelo_" + tipo)
     emp = _empresa_campos(esc, "soc_n")
     c3, c4, c5 = st.columns(3)
     resp = c3.selectbox("Colaborador responsável", usuarios, key="soc_n_resp",
@@ -555,6 +580,8 @@ def _novo(esc: str, usuario: str) -> None:
                                                novo["email"])
                     empresa, cnpj = cad["nome"], cad.get("cnpj") or ""
             p = so.criar_processo(esc, usuario, tipo, empresa, cnpj, resp, prio, prev, desc, orgao, ia, lemb)
+            if modelo_id:
+                so.anexar_modelo(esc, p["id"], usuario, modelo_id)
             for a in arqs or []:
                 so.anexar(esc, p["id"], usuario, a.name, a.getvalue(), a.type or "",
                           categoria="minuta" if a.name.lower().endswith((".docx", ".doc")) else "documento")
@@ -718,6 +745,17 @@ def _aba_documentos(esc: str, usuario: str, p: dict) -> None:
                                      arq["conteudo"])
     if not p["anexos"]:
         st.caption("Nenhum documento anexado.")
+    if any(m["tipo"] == p["tipo"] for m in _modelos(esc, _versao())):
+        with st.expander("Criar minuta a partir de um modelo", icon=":material/description:"):
+            mid = _escolher_modelo(esc, p["tipo"], f"soc_mod_{p['id']}")
+            if st.button("Anexar modelo", key=f"soc_mod_b_{p['id']}", disabled=mid is None):
+                try:
+                    so.anexar_modelo(esc, p["id"], usuario, mid)
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    _recarregar()
+                    st.rerun()
     with st.form(f"soc_anx_{p['id']}", clear_on_submit=True):
         arqs = st.file_uploader("Anexar arquivos", accept_multiple_files=True)
         cat = st.selectbox("Tipo", ["documento", "minuta", "comprovante"], format_func=rot.get)
@@ -1439,6 +1477,64 @@ def _revisao(esc: str, usuario: str, rid: int) -> None:
 # ---------------------------------------------------------------- configurações
 
 
+def _config_modelos(esc: str, usuario: str) -> None:
+    st.markdown("**Modelos de contrato**")
+    st.caption("Um ou mais modelos por tipo de processo; o padrão já vem escolhido no Novo processo. No Word (.docx), "
+               "escreva os campos abaixo onde o dado do processo deve entrar: "
+               + ", ".join(f"`{c}` ({d})" for c, d in so.CAMPOS_MODELO.items()) + ".")
+    mods = _modelos(esc, _versao())
+    for t, info in so.TIPOS.items():
+        do_tipo = [m for m in mods if m["tipo"] == t]
+        if not do_tipo:
+            continue
+        st.markdown(f"<span class='soc-muted'>{_e(info['nome'])}</span>", unsafe_allow_html=True)
+        for m in do_tipo:
+            c1, c2, c3, c4 = st.columns([2.6, 1.3, 1.3, 1.4])
+            c1.markdown(f"**{_e(m['nome'])}**" + (" ⭐ padrão" if m["padrao"] else "")
+                        + f"  \n<span class='soc-muted'>{_e(m['arquivo_nome'])} · {m['tamanho'] / 1024:.0f} KB · "
+                        f"{_e(m.get('enviado_por'))} em {so.data_br(m['criado_em'])}</span>", unsafe_allow_html=True)
+            if c2.button("Download", key=f"soc_mdl_p_{m['id']}", icon=":material/download:",
+                         use_container_width=True):
+                st.session_state[f"soc_mdl_{m['id']}"] = True
+            if st.session_state.get(f"soc_mdl_{m['id']}"):
+                arq = so.obter_modelo(esc, m["id"])
+                if arq:
+                    c2.download_button("Baixar", arq["conteudo"], file_name=arq["arquivo_nome"],
+                                       key=f"soc_mdl_b_{m['id']}")
+            if not m["padrao"] and c3.button("Padrão", key=f"soc_mdl_pd_{m['id']}", icon=":material/star:",
+                                             use_container_width=True, help="Tornar este o modelo padrão do tipo"):
+                so.definir_modelo_padrao(esc, m["id"])
+                _recarregar()
+                st.rerun()
+            if c4.button("Remover", key=f"soc_mdl_rm_{m['id']}", icon=":material/delete:",
+                         use_container_width=True):
+                so.remover_modelo(esc, m["id"])
+                _recarregar()
+                st.rerun()
+    if not mods:
+        st.caption("Nenhum modelo cadastrado ainda.")
+    with st.form("soc_mdl_novo", clear_on_submit=True):
+        c1, c2 = st.columns([1, 2])
+        tipos = list(so.TIPOS)
+        tipo = c1.selectbox("Tipo de processo", tipos, format_func=lambda t: so.TIPOS[t]["nome"],
+                            index=tipos.index("alteracao"))
+        nome = c2.text_input("Nome do modelo", placeholder="Ex.: Alteração - saída e entrada de sócio")
+        arq = st.file_uploader("Arquivo do modelo (Word ou PDF)", type=["docx", "doc", "pdf"])
+        padrao = st.checkbox("Usar como padrão deste tipo")
+        if st.form_submit_button("Cadastrar modelo", type="primary"):
+            if not arq:
+                st.error("Escolha o arquivo do modelo.")
+            else:
+                try:
+                    so.salvar_modelo(esc, usuario, tipo, nome, arq.name, arq.getvalue(), padrao)
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    _recarregar()
+                    st.rerun()
+    st.divider()
+
+
 def _configuracoes(esc: str, usuario: str) -> None:
     rg = so.obter_regras(esc)
     st.caption("Intervalos dos alertas automáticos e dos avisos. Valem para todo o escritório.")
@@ -1458,6 +1554,7 @@ def _configuracoes(esc: str, usuario: str) -> None:
             else:
                 _recarregar()
                 st.success("Configuração salva.")
+    _config_modelos(esc, usuario)
     st.markdown("**Assistente IA**")
     if so.chave_claude(esc):
         st.success("Chave da Claude configurada (a mesma de Administração › Integrações › IA).")

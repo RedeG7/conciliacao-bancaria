@@ -579,3 +579,57 @@ def test_texto_aplicavel_separa_instrucao_do_texto():
            {**base, "id": 2, "trecho": "valor", "acao": "manual", "texto_novo": ""}]
     novo, manuais = so.aplicar_sugestoes("Remover esta linha. O valor fica.", aps)
     assert novo == " esta linha. O valor fica." and [a["id"] for a in manuais] == [2]
+
+
+def _docx_modelo() -> bytes:
+    import io
+    import zipfile
+    doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document '
+           'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+           '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>ALTERAÇÃO DE {{EMP</w:t></w:r><w:r><w:rPr><w:b/></w:rPr>'
+           '<w:t>RESA}}</w:t></w:r></w:p>'
+           '<w:p><w:r><w:t xml:space="preserve">CNPJ {{CNPJ}} · processo {{PROCESSO}} · {{EMPRESA}}</w:t></w:r></w:p>'
+           '<w:p><w:r><w:t>Goiânia, {{DATA_EXTENSO}}.</w:t></w:r></w:p></w:body></w:document>')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/document.xml", doc)
+        z.writestr("word/header1.xml", '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                                       '<w:p><w:r><w:t>{{EMPRESA}}</w:t></w:r></w:p></w:hdr>')
+    return buf.getvalue()
+
+
+def test_modelos_por_tipo_e_padrao(banco):
+    from conftest import ESC_A
+    m1 = so.salvar_modelo(ESC_A, "dp_admin", "alteracao", "Saída de sócio", "saida.docx", _docx_modelo())
+    m2 = so.salvar_modelo(ESC_A, "dp_admin", "alteracao", "", "Aumento de capital.docx", b"x" * 10)
+    m3 = so.salvar_modelo(ESC_A, "dp_admin", "baixa", "Distrato", "distrato.pdf", b"%PDF")
+    alt = so.listar_modelos(ESC_A, "alteracao")
+    assert [m["id"] for m in alt] == [m1, m2] and alt[0]["padrao"] and not alt[1]["padrao"]  # 1º do tipo é o padrão
+    assert alt[1]["nome"] == "Aumento de capital"
+    so.definir_modelo_padrao(ESC_A, m2)
+    assert [m["id"] for m in so.listar_modelos(ESC_A, "alteracao") if m["padrao"]] == [m2]
+    so.remover_modelo(ESC_A, m2)  # era o padrão: o que sobrou vira padrão
+    assert [(m["id"], m["padrao"]) for m in so.listar_modelos(ESC_A, "alteracao")] == [(m1, True)]
+    assert [m["id"] for m in so.listar_modelos(ESC_A)] == [m1, m3]
+    with pytest.raises(ValueError):
+        so.salvar_modelo(ESC_A, "dp_admin", "alteracao", "x", "planilha.xlsx", b"x")
+
+
+def test_modelo_anexado_ao_processo_com_campos_preenchidos(banco):
+    import io
+    import zipfile
+    from conftest import ESC_A
+    mid = so.salvar_modelo(ESC_A, "dp_admin", "alteracao", "Saída de sócio", "saida.docx", _docx_modelo())
+    p = so.criar_processo(ESC_A, "dp_admin", "alteracao", "Empresa Alfa LTDA", "59838249000113")
+    so.anexar_modelo(ESC_A, p["id"], "dp_admin", mid)
+    d = so.obter_processo(ESC_A, p["id"])
+    an = [a for a in d["anexos"] if a["categoria"] == "minuta"]
+    assert an and an[0]["nome"] == "Saída de sócio - Empresa Alfa LTDA.docx"
+    dados = so.baixar_anexo(ESC_A, an[0]["id"])["conteudo"]
+    texto = so.extrair_texto("m.docx", dados)
+    assert texto.startswith("ALTERAÇÃO DE Empresa Alfa LTDA\nCNPJ 59.838.249/0001-13 · processo " + p["numero"])
+    assert "{{" not in texto and " de 20" in texto
+    with zipfile.ZipFile(io.BytesIO(dados)) as z:
+        assert b"Empresa Alfa LTDA" in z.read("word/header1.xml")
+        assert b"<w:b/></w:rPr><w:t" in z.read("word/document.xml")  # negrito do título mantido
+    assert any(a["titulo"] == "Modelo do contrato anexado" for a in d["andamentos"])

@@ -41,6 +41,10 @@ import minuta_layout
 VERSAO = "1.8"
 NOVIDADES = [
     ("1.8", "25/11/2026", [
+        "Modelos de contrato: em Configurações, cada tipo de processo (constituição, alteração, baixa...) tem os "
+        "seus modelos em Word ou PDF, com um padrão. No Novo processo, o modelo do tipo escolhido já vem "
+        "selecionado e vai para os Documentos como minuta, com {{EMPRESA}}, {{CNPJ}}, {{PROCESSO}} e {{DATA}} "
+        "preenchidos. Processos já abertos usam um modelo pela aba Documentos.",
         "Revisão com IA: a IA passa a separar a explicação (Sugestão) do texto exato que entra no documento; "
         "instruções, alternativas e campos como \"[informar]\" não são mais colados no contrato, ficam para "
         "ajustar à mão. Cada apontamento mostra o que acontece se for aceito.",
@@ -1076,6 +1080,20 @@ def garantir_schema() -> None:
                 feito_em TIMESTAMPTZ
             )""")
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS soc_modelos (
+                id BIGSERIAL PRIMARY KEY,
+                escritorio_id TEXT NOT NULL REFERENCES escritorios(id),
+                tipo TEXT NOT NULL,
+                nome TEXT NOT NULL,
+                arquivo_nome TEXT NOT NULL,
+                tamanho INTEGER NOT NULL,
+                conteudo BYTEA NOT NULL,
+                padrao BOOLEAN NOT NULL DEFAULT false,
+                enviado_por TEXT,
+                criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+            )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS soc_modelos_tipo ON soc_modelos (escritorio_id, tipo)")
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS soc_anexos (
                 id BIGSERIAL PRIMARY KEY,
                 processo_id BIGINT NOT NULL REFERENCES soc_processos(id) ON DELETE CASCADE,
@@ -1591,6 +1609,123 @@ def anexar(escritorio_id: str, processo_id: int, usuario: str, nome: str, dados:
             conn.execute("UPDATE soc_processos SET ultima_movimentacao = now() WHERE id = %s", (processo_id,))
         conn.commit()
     return an["id"]
+
+
+# ---------------------------------------------------------------- modelos de contrato
+
+# campos que o modelo em Word pode ter; são trocados pelos dados do processo
+CAMPOS_MODELO = {
+    "{{EMPRESA}}": "nome da empresa",
+    "{{CNPJ}}": "CNPJ da empresa",
+    "{{PROCESSO}}": "número do processo",
+    "{{DATA}}": "data de hoje (dd/mm/aaaa)",
+    "{{DATA_EXTENSO}}": "data de hoje por extenso (25 de novembro de 2026)",
+}
+EXTENSOES_MODELO = (".docx", ".doc", ".pdf")
+_MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
+          "novembro", "dezembro"]
+
+
+def salvar_modelo(escritorio_id: str, usuario: str, tipo: str, nome: str, arquivo_nome: str, dados: bytes,
+                  padrao: bool = False) -> int:
+    """Guarda um modelo de contrato do tipo de processo. O padrão é o que já
+    vem escolhido ao abrir um processo daquele tipo (só um por tipo)."""
+    if tipo not in TIPOS:
+        raise ValueError("Tipo de processo inválido.")
+    if not (arquivo_nome or "").lower().endswith(EXTENSOES_MODELO):
+        raise ValueError("Envie o modelo em Word (.docx ou .doc) ou PDF.")
+    if not dados:
+        raise ValueError("Arquivo vazio.")
+    if len(dados) > MAX_ANEXO_MB * 1024 * 1024:
+        raise ValueError(f"Arquivo maior que {MAX_ANEXO_MB} MB.")
+    nome = (nome or "").strip() or re.sub(r"\.(docx|doc|pdf)$", "", arquivo_nome, flags=re.I)
+    with auth.conectar() as conn:
+        primeiro = not conn.execute("SELECT 1 FROM soc_modelos WHERE escritorio_id = %s AND tipo = %s",
+                                    (escritorio_id, tipo)).fetchone()
+        if padrao or primeiro:
+            conn.execute("UPDATE soc_modelos SET padrao = false WHERE escritorio_id = %s AND tipo = %s",
+                         (escritorio_id, tipo))
+        r = conn.execute("""
+            INSERT INTO soc_modelos (escritorio_id, tipo, nome, arquivo_nome, tamanho, conteudo, padrao, enviado_por)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        """, (escritorio_id, tipo, nome, arquivo_nome, len(dados), dados, bool(padrao or primeiro),
+              usuario)).fetchone()
+        conn.commit()
+    return r["id"]
+
+
+def listar_modelos(escritorio_id: str, tipo: Optional[str] = None) -> list[dict]:
+    """Modelos (sem o arquivo), o padrão primeiro."""
+    with auth.conectar() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT id, tipo, nome, arquivo_nome, tamanho, padrao, enviado_por, criado_em FROM soc_modelos "
+            "WHERE escritorio_id = %s AND (%s::text IS NULL OR tipo = %s) ORDER BY tipo, padrao DESC, nome",
+            (escritorio_id, tipo, tipo)).fetchall()]
+
+
+def obter_modelo(escritorio_id: str, modelo_id: int) -> Optional[dict]:
+    with auth.conectar() as conn:
+        r = conn.execute("SELECT * FROM soc_modelos WHERE id = %s AND escritorio_id = %s",
+                         (modelo_id, escritorio_id)).fetchone()
+    if r:
+        r = dict(r)
+        r["conteudo"] = bytes(r["conteudo"])
+    return r
+
+
+def definir_modelo_padrao(escritorio_id: str, modelo_id: int) -> None:
+    with auth.conectar() as conn:
+        m = conn.execute("SELECT tipo FROM soc_modelos WHERE id = %s AND escritorio_id = %s",
+                         (modelo_id, escritorio_id)).fetchone()
+        if m:
+            conn.execute("UPDATE soc_modelos SET padrao = (id = %s) WHERE escritorio_id = %s AND tipo = %s",
+                         (modelo_id, escritorio_id, m["tipo"]))
+            conn.commit()
+
+
+def remover_modelo(escritorio_id: str, modelo_id: int) -> None:
+    """Remove o modelo; se era o padrão, o mais antigo do tipo passa a ser."""
+    with auth.conectar() as conn:
+        m = conn.execute("DELETE FROM soc_modelos WHERE id = %s AND escritorio_id = %s RETURNING tipo, padrao",
+                         (modelo_id, escritorio_id)).fetchone()
+        if m and m["padrao"]:
+            conn.execute("""UPDATE soc_modelos SET padrao = true WHERE id = (
+                                SELECT id FROM soc_modelos WHERE escritorio_id = %s AND tipo = %s
+                                ORDER BY criado_em, id LIMIT 1)""", (escritorio_id, m["tipo"]))
+        conn.commit()
+
+
+def campos_do_processo(p: dict, hoje: Optional[date] = None) -> dict[str, str]:
+    hoje = hoje or date.today()
+    return {"{{EMPRESA}}": p.get("empresa_nome") or "", "{{CNPJ}}": formatar_cnpj(p.get("cnpj")) or "",
+            "{{PROCESSO}}": p.get("numero") or "", "{{DATA}}": hoje.strftime("%d/%m/%Y"),
+            "{{DATA_EXTENSO}}": f"{hoje.day} de {_MESES[hoje.month - 1]} de {hoje.year}"}
+
+
+def anexar_modelo(escritorio_id: str, processo_id: int, usuario: str, modelo_id: int) -> int:
+    """Anexa ao processo uma cópia do modelo, como minuta, com os campos
+    ({{EMPRESA}}, {{CNPJ}}...) preenchidos quando o modelo é Word (.docx)."""
+    m = obter_modelo(escritorio_id, modelo_id)
+    if not m:
+        raise ValueError("Modelo não encontrado.")
+    with auth.conectar() as conn:
+        p = conn.execute("SELECT numero, empresa_nome, cnpj FROM soc_processos WHERE id = %s AND escritorio_id = %s",
+                         (processo_id, escritorio_id)).fetchone()
+    if not p:
+        raise ValueError("Processo não encontrado.")
+    dados, ext = m["conteudo"], m["arquivo_nome"].rsplit(".", 1)[-1].lower()
+    if ext == "docx":
+        try:
+            dados = minuta_layout.preencher_docx(dados, campos_do_processo(dict(p)))
+        except Exception:  # noqa: BLE001 - Word estranho: vai o modelo como está
+            dados = m["conteudo"]
+    empresa = re.sub(r"[^\w\-. ]+", "", p["empresa_nome"] or "").strip()
+    nome = f"{m['nome']} - {empresa}.{ext}" if empresa else f"{m['nome']}.{ext}"
+    mime = {"docx": MIME_DOCX, "doc": "application/msword", "pdf": "application/pdf"}.get(ext, "")
+    anexo_id = anexar(escritorio_id, processo_id, usuario, nome, dados, mime, categoria="minuta", registrar=False)
+    registrar_andamento(escritorio_id, processo_id, usuario, "Modelo do contrato anexado",
+                        f"Minuta criada a partir do modelo \"{m['nome']}\": {nome}.", lembrar=False)
+    return anexo_id
 
 
 def baixar_anexo(escritorio_id: str, anexo_id: int) -> Optional[dict]:

@@ -197,6 +197,35 @@ def _trocar(xml: str, trecho: str, sugestao: str) -> Optional[str]:
     return xml
 
 
+def preencher_docx(dados: bytes, campos: dict[str, str]) -> bytes:
+    """Word com cada campo do modelo (ex.: {{EMPRESA}}) trocado pelo valor,
+    em todas as ocorrências, mantendo a formatação (o campo pode estar
+    quebrado em vários pedaços de texto pelo Word)."""
+    with zipfile.ZipFile(io.BytesIO(dados)) as z:
+        itens = [(i, z.read(i.filename)) for i in z.infolist()]
+    partes = {}
+    for info, conteudo in itens:
+        nome = info.filename
+        if not (nome == "word/document.xml" or re.match(r"word/(header|footer)\d*\.xml$", nome)):
+            continue
+        xml = conteudo.decode("utf-8")
+        for campo, valor in campos.items():
+            for _ in range(500):
+                pedacos = _pedacos(xml)
+                if campo not in "".join(p["texto"] for p in pedacos):
+                    break
+                novo = _trocar(xml, campo, valor)
+                if novo is None or novo == xml:
+                    break
+                xml = novo
+        partes[nome] = xml.encode("utf-8")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for info, conteudo in itens:
+            z.writestr(info, partes.get(info.filename, conteudo))
+    return buf.getvalue()
+
+
 def aplicar_no_docx(dados: bytes, apontamentos: list[dict]) -> tuple[bytes, list[dict]]:
     """Word original com as sugestões ACEITAS aplicadas no lugar. Devolve o
     arquivo e os aceitos que não deu para aplicar sozinho (trecho vazio ou
