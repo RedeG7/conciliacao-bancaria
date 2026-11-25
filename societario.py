@@ -38,8 +38,13 @@ import minuta_layout
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.4"
+VERSAO = "1.5"
 NOVIDADES = [
+    ("1.5", "25/11/2026", [
+        "Lembretes também como aviso do Windows: aparecem no canto da tela, com som, mesmo trabalhando em "
+        "outro programa (com o Hub aberto numa aba do navegador). Ative uma vez no botão \"Ativar avisos no "
+        "Windows\" do Hub Societário.",
+    ]),
     ("1.4", "25/11/2026", [
         "Minuta revisada no mesmo layout do arquivo original: no Word, só os trechos aceitos mudam (fontes, "
         "estilos, tabelas, cabeçalho e rodapé ficam iguais). Baixe em Word ou em PDF.",

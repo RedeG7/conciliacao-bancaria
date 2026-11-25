@@ -6,10 +6,12 @@ menu_lateral(pode_configurar) e popup_lembretes(...)."""
 from __future__ import annotations
 
 import html
+import json
 from datetime import date, datetime, time, timedelta
 from typing import Callable
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 import auth
 import clientes
@@ -211,6 +213,7 @@ def render(cabecalho: Callable, pode_configurar: bool, eh_global: bool = False) 
     if not (detalhe or revisao):
         c1.markdown(f"### {secao}")
     _sininho(c2, esc, usuario)
+    _ativar_avisos_windows()
     if detalhe:
         _detalhe(esc, usuario, st.session_state["soc_proc"])
         return
@@ -1448,6 +1451,88 @@ def _dialogo(esc: str, usuario: str) -> None:
         st.rerun()
 
 
+# ---------------------------------------------------------------- aviso do Windows
+# O aviso usa as notificações do navegador: aparece no canto da tela, com som,
+# mesmo com a pessoa em outro programa, enquanto o Hub estiver aberto numa aba.
+# O navegador pede permissão uma vez (botão abaixo). O código roda na página do
+# Hub (window.parent, mesma origem), para o clique no aviso continuar valendo
+# depois que a tela do Streamlit se refaz.
+
+_JS_ESCONDER = """
+const f = window.frameElement;
+function esconder() { if (f) { f.style.height = '0px'; if (f.parentElement) f.parentElement.style.display = 'none'; } }
+"""
+
+
+def _ativar_avisos_windows() -> None:
+    """Faixa que pede a permissão dos avisos do Windows; some quando já foi dada."""
+    components.html("""
+<style>
+  body { margin: 0; font-family: "Source Sans Pro", system-ui, sans-serif; background: transparent; color: #e6edf3; }
+  .faixa { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-radius: 10px;
+           border: 1px solid rgba(250, 204, 21, .45); background: rgba(250, 204, 21, .08); font-size: 14px; }
+  .faixa b { color: #facc15; }
+  button { margin-left: auto; padding: 6px 14px; border-radius: 8px; border: 0; cursor: pointer;
+           background: #22c55e; color: #052e16; font-weight: 600; white-space: nowrap; }
+</style>
+<div class="faixa" id="faixa" style="display:none">
+  <span id="msg"></span><button id="bt" style="display:none">Ativar avisos no Windows</button>
+</div>
+<script>
+""" + _JS_ESCONDER + """
+const W = window.parent, N = W.Notification;
+const faixa = document.getElementById('faixa'), msg = document.getElementById('msg'), bt = document.getElementById('bt');
+if (!N || N.permission === 'granted') { esconder(); }
+else if (N.permission === 'denied') {
+  faixa.style.display = 'flex';
+  msg.innerHTML = '<b>Avisos do Windows bloqueados.</b> Para receber os lembretes mesmo em outro programa: '
+    + 'clique no cadeado ao lado do endereço do Hub › Notificações › Permitir, e recarregue a página.';
+} else {
+  faixa.style.display = 'flex';
+  bt.style.display = 'block';
+  msg.innerHTML = '<b>Lembretes no canto da tela:</b> ative os avisos do Windows para ver os lembretes '
+    + 'mesmo trabalhando em outro programa.';
+  bt.onclick = async () => {
+    const r = await N.requestPermission();
+    if (r === 'granted') {
+      new N('Hub Societário', {body: 'Avisos ativados: os lembretes vão aparecer aqui no canto da tela.'});
+      esconder();
+    } else { location.reload(); }
+  };
+}
+</script>""", height=48)
+
+
+def _aviso_windows(lembs: list[dict]) -> None:
+    """Mostra cada lembrete vencido como aviso do Windows (se a permissão
+    já foi dada). A etiqueta por lembrete evita aviso repetido."""
+    avisos = []
+    for l in lembs[:5]:
+        corpo = l["texto"]
+        if l.get("numero"):
+            corpo = f"{l.get('empresa_nome') or ''} · {l['numero']}\n{corpo}"
+        avisos.append({"tag": f"soc-lembrete-{l['id']}", "titulo": "🔔 Lembrete do Hub Societário", "corpo": corpo})
+    if len(lembs) > 5:
+        avisos.append({"tag": "soc-lembrete-mais", "titulo": "Hub Societário",
+                       "corpo": f"+ {len(lembs) - 5} lembrete(s) na Agenda."})
+    codigo = """
+(function () {
+  const N = window.Notification;
+  if (!N || N.permission !== 'granted') return;
+  for (const a of AVISOS) {
+    try {
+      const n = new N(a.titulo, {body: a.corpo, tag: a.tag, renotify: true, requireInteraction: true});
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch (e) {}
+  }
+})();""".replace("AVISOS", json.dumps(avisos, ensure_ascii=False))
+    components.html("<script>" + _JS_ESCONDER + "esconder();\n"
+                    "const s = window.parent.document.createElement('script');\n"
+                    # "<\/" para um texto do lembrete com </script> não fechar a tag
+                    "s.textContent = " + json.dumps(codigo).replace("</", "<\\/") + ";\n"
+                    "window.parent.document.head.appendChild(s); s.remove();</script>", height=0)
+
+
 def _adiar(esc: str, lembrete_id: int, horas: int) -> None:
     so.adiar_lembrete(esc, lembrete_id, datetime.now(so.FUSO) + timedelta(hours=horas))
 
@@ -1505,4 +1590,5 @@ def _checar_popup(esc: str, usuario: str) -> None:
     if novos or not visto or agora - visto >= timedelta(minutes=30):
         mostrados.update(l["id"] for l in lembs)
         st.session_state["soc_pp_visto"] = agora
+        _aviso_windows(lembs)
         _dialogo(esc, usuario)
