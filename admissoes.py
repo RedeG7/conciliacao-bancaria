@@ -51,8 +51,12 @@ CANAIS = ("acessorias", "onvio", "whatsapp")
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
 # O programa do agente tem versão própria em attended_worker/VERSION_ADMISSOES
 # (é ela que dispara a atualização automática do .exe).
-VERSAO = "1.6"
+VERSAO = "1.7"
 NOVIDADES = [
+    ("1.7", "25/11/2026", [
+        "Usuário comum também aprova, rejeita, conclui e volta solicitações para a fila (quem preparou a "
+        "prévia continua sem poder aprovar). A aba Canais e agente fica só com o administrador.",
+    ]),
     ("1.6", "15/11/2026", [
         "Agente 1.5: para ver se o empregado já existe, pesquisa com F2 no campo Código (não usa mais o "
         "\"Listagem >>\", que travava o Domínio); depois clica em Novo e para se o Domínio avisar CPF já "
@@ -142,7 +146,10 @@ _DEVOLVIVEIS = {AWAITING_DOCUMENTS, BLOCKED, FAILED, CLAIMED}
 PRESA_PREPARO_MIN = 20
 PRESA_GRAVACAO_MIN = 90
 
-PAPEIS_APROVADORES = (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO)
+# aprovar/rejeitar/concluir é atividade do dia a dia: qualquer pessoa do
+# escritório pode (só não aprova quem preparou a prévia). Configurar os
+# canais e gerar a chave continua com o administrador.
+PAPEIS_APROVADORES = (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO, auth.PAPEL_USUARIO)
 
 MAX_DOCUMENTOS = 50
 MAX_TEXTO = 1000

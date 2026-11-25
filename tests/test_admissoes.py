@@ -147,10 +147,16 @@ def test_hash_da_previa_nao_depende_da_ordem_das_chaves(db):
     assert adm.hash_previa({"a": 1, "b": 2}) == adm.hash_previa({"b": 2, "a": 1})
 
 
-def test_so_admin_aprova(db):
+def test_usuario_comum_aprova(db):
+    a = _ate_aprovacao()
+    adm.aprovar(a["id"], ESC_A, "dp_user", auth.PAPEL_USUARIO, a["previa_hash"])
+    assert _status(a["id"]) == adm.APPROVED
+
+
+def test_papel_desconhecido_nao_aprova(db):
     a = _ate_aprovacao()
     with pytest.raises(adm.SemPermissao):
-        adm.aprovar(a["id"], ESC_A, "dp_user", auth.PAPEL_USUARIO, a["previa_hash"])
+        adm.aprovar(a["id"], ESC_A, "dp_user", "visitante", a["previa_hash"])
     assert _status(a["id"]) == adm.AWAITING_APPROVAL
 
 
@@ -345,9 +351,7 @@ def _ate_conferencia():
 
 def test_dp_conclui_depois_da_conferencia(db):
     a = _ate_conferencia()
-    with pytest.raises(adm.SemPermissao):
-        adm.concluir(a["id"], ESC_A, "func", auth.PAPEL_USUARIO)
-    b = adm.concluir(a["id"], ESC_A, "dp_admin", ADMIN, "matrícula 123")
+    b = adm.concluir(a["id"], ESC_A, "func", auth.PAPEL_USUARIO, "matrícula 123")
     assert b["status"] == adm.COMPLETED and b["protocolo"] == "matrícula 123" and b["motivo"] is None
 
 

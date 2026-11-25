@@ -61,8 +61,12 @@ log = logging.getLogger(__name__)
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.11"
+VERSAO = "1.12"
 NOVIDADES = [
+    ("1.12", "25/11/2026", [
+        "Permissões do Hub em três níveis: Usuário faz todas as atividades, sem ver a Administração; "
+        "Admin do escritório faz as atividades e gerencia o escritório; Super admin tem acesso a tudo.",
+    ]),
     ("1.11", "24/11/2026", [
         "Correção: em tela cheia, o botão de sair da tela cheia das tabelas não respondia (a barra invisível "
         "do topo cobria o botão). Vale para todas as tabelas do Hub.",

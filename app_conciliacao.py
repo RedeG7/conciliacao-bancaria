@@ -650,6 +650,13 @@ _ROTULO_PAPEL = {
     auth.PAPEL_SUPER_GLOBAL: "Super admin (RedeG7)",
 }
 
+_AJUDA_PAPEL = (
+    "**Usuário**: faz todas as atividades dos aplicativos liberados, sem ver a área de Administração.  \n"
+    "**Admin do escritório**: faz as atividades e gerencia o escritório (usuários, permissões, logs e "
+    "configurações/integrações dos aplicativos).  \n"
+    "**Super admin (RedeG7)**: acesso a tudo, em todos os escritórios."
+)
+
 
 def _manter_aberto(uname: str) -> None:
     st.session_state[f"aberto_{uname}"] = True
@@ -693,7 +700,8 @@ def _tela_gerenciar_usuarios() -> None:
     with st.form("gerenciar_usuario_form", clear_on_submit=True):
         alvo = st.text_input("Usuário (novo ou existente)")
         nome_completo = st.text_input("Nome completo (opcional)")
-        papel = st.selectbox("Permissão", papeis_disponiveis, format_func=lambda p: _ROTULO_PAPEL.get(p, p))
+        papel = st.selectbox("Permissão", papeis_disponiveis, format_func=lambda p: _ROTULO_PAPEL.get(p, p),
+                             help=_AJUDA_PAPEL)
         nova_senha = st.text_input("Senha (mín. 6 caracteres)", type="password")
         salvar = st.form_submit_button("Salvar", type="primary")
     if salvar:
@@ -749,7 +757,7 @@ def _tela_gerenciar_usuarios() -> None:
                     _opcoes_papel.append(_papel_atual)
                 _papel_novo = st.selectbox(
                     "Permissão do usuário", _opcoes_papel, index=_opcoes_papel.index(_papel_atual),
-                    format_func=lambda p: _ROTULO_PAPEL.get(p, p), key=f"papel_usuario_{uname}",
+                    format_func=lambda p: _ROTULO_PAPEL.get(p, p), key=f"papel_usuario_{uname}", help=_AJUDA_PAPEL,
                     on_change=_manter_aberto, args=(uname,),
                 )
                 if st.button("Salvar permissão", key=f"salvar_papel_{uname}", disabled=_papel_novo == _papel_atual):
@@ -975,6 +983,7 @@ def _tela_admissoes() -> None:
             index=ids.index(escritorio_id) if escritorio_id in ids else 0, key="adm_escritorio",
         )
     pode_aprovar = admissoes.pode_aprovar(papel)
+    pode_configurar = papel in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO)
     _adm_vigiar(escritorio_id, pode_aprovar)
 
     contagem = admissoes.contagem_por_status(escritorio_id)
@@ -983,8 +992,11 @@ def _tela_admissoes() -> None:
                                   admissoes.BLOCKED, admissoes.FAILED, admissoes.QUEUED, admissoes.CLAIMED]):
         col.metric(admissoes.STATUS_ROTULO[status], contagem.get(status, 0))
 
-    aba_lista, aba_nova, aba_empresas, aba_canais = st.tabs(
-        ["Solicitações", "Registrar solicitação", "Empresas", "Canais e agente"])
+    # "Canais e agente" é configuração do escritório: só o administrador vê
+    _abas = st.tabs(["Solicitações", "Registrar solicitação", "Empresas"]
+                    + (["Canais e agente"] if pode_configurar else []))
+    aba_lista, aba_nova, aba_empresas = _abas[:3]
+    aba_canais = _abas[3] if pode_configurar else None
     lista_clientes = clientes.listar_clientes(escritorio_id)
 
     with aba_lista:
@@ -1066,8 +1078,10 @@ def _tela_admissoes() -> None:
     with aba_empresas:
         _adm_empresas(escritorio_id, lista_clientes)
 
+    if aba_canais is None:
+        return
     with aba_canais:
-        _adm_integracoes(escritorio_id, usuario, pode_aprovar)
+        _adm_integracoes(escritorio_id, usuario, pode_configurar)
         st.divider()
         st.markdown("**Chave dos canais**")
         st.caption("Os conectores de Acessórias, ONVIO e WhatsApp enviam as solicitações para "
@@ -1077,7 +1091,7 @@ def _tela_admissoes() -> None:
             st.write(f"Chave ativa `{info['prefixo']}…`, gerada por {info['criada_por']} em {_adm_quando(info['criada_em'])}.")
         else:
             st.write("Nenhuma chave gerada - os canais ainda não conseguem enviar solicitações.")
-        if pode_aprovar:
+        if pode_configurar:
             c1, c2 = st.columns(2)
             if c1.button("Gerar nova chave" if info else "Gerar chave", key="adm_gerar_chave"):
                 st.session_state["adm_chave_nova"] = admissoes.gerar_chave_canal(escritorio_id, usuario)
@@ -1385,7 +1399,7 @@ def _detalhe_admissao(admissao_id: int, escritorio_id: str, usuario: str, papel:
 
         if a["status"] == admissoes.AWAITING_APPROVAL:
             if not pode_aprovar:
-                st.info("Aguardando um administrador do escritório aprovar ou rejeitar.")
+                st.info("Aguardando alguém do escritório aprovar ou rejeitar.")
             elif usuario == a["reservado_por"]:
                 st.info("Foi esta conta que preparou a prévia - outra pessoa precisa aprovar.")
             else:
@@ -1460,7 +1474,7 @@ def _tela_gerenciar_clientes() -> None:
     st.divider()
 
     eh_global = st.session_state.get("papel_usuario") == auth.PAPEL_SUPER_GLOBAL
-    pode_remover = st.session_state.get("papel_usuario") in (auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO)
+    pode_remover = True  # remover cliente é atividade: qualquer pessoa do escritório
 
     if eh_global:
         escritorios = auth.carregar_escritorios()
@@ -4255,9 +4269,7 @@ with st.sidebar:
                 else:
                     st.error(_msg)
 
-        if _lista_clientes and st.session_state.get("papel_usuario") in (
-            auth.PAPEL_SUPER_GLOBAL, auth.PAPEL_ADMIN_ESCRITORIO,
-        ):
+        if _lista_clientes:
             st.caption("Remover cliente cadastrado:")
             for _c in _lista_clientes:
                 _cc1, _cc2 = st.columns([4, 1])
