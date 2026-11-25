@@ -536,3 +536,31 @@ def test_anexos_para_revisao():
     assert [a["id"] for a in so.anexos_para_revisao(anexos, 7)] == [2, 1, 4]
     assert [a["id"] for a in so.anexos_para_revisao(anexos, 7, incluir_revisadas=True)] == [2, 1, 4, 5]
     assert so.anexos_para_revisao(anexos, 99) == []
+
+
+def test_revisao_do_word_sai_no_layout_original(banco, monkeypatch):
+    from conftest import ESC_A
+    import minuta_layout
+    from test_minuta_layout import HEADER, _docx, _ler
+    monkeypatch.setattr(minuta_layout, "docx_para_pdf", lambda dados: b"%PDF-fake")
+    p = so.criar_processo(ESC_A, "dp_admin", "alteracao", "Empresa Alfa LTDA")
+    original = _docx()
+    texto = so.extrair_texto("Alteração.docx", original)
+    rid = so.criar_revisao(ESC_A, "dp_admin", "Alteração.docx", texto, p["id"], "Alteração.docx", original)
+    so.gravar_resultado(ESC_A, rid, so.normalizar_revisao({"resumo": "x", "apontamentos": [
+        {"categoria": "capital", "gravidade": "alta", "titulo": "Quotas", "trecho": "R$ 30.000,00",
+         "problema": "p", "sugestao": "R$ 40.000,00", "fundamento": "f"}]}))
+    so.decidir_apontamento(ESC_A, rid, 1, "aceito")
+    out = so.finalizar_revisao(ESC_A, rid, "dp_admin")
+    assert out["layout_original"] and not out["manuais"] and out["pdf"] == b"%PDF-fake"
+    assert out["nome"] == "Alteração - revisada.docx" and out["nome_pdf"] == "Alteração - revisada.pdf"
+    assert _ler(out["docx"], "word/header1.xml") == HEADER  # cabeçalho do original
+    assert "R$ 40.000,00" in so.extrair_texto(out["nome"], out["docx"])
+    nomes = sorted(a["nome"] for a in so.obter_processo(ESC_A, p["id"])["anexos"] if a["categoria"] == "minuta_revisada")
+    assert nomes == ["Alteração - revisada.docx", "Alteração - revisada.pdf"]
+
+
+def test_texto_colado_nao_guarda_arquivo(banco):
+    from conftest import ESC_A
+    rid = so.criar_revisao(ESC_A, "dp_admin", "Texto colado", "abc", None, "nota.txt", b"abc")
+    assert so.obter_revisao(ESC_A, rid)["arquivo"] is None

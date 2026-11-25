@@ -29,17 +29,22 @@ import unicodedata
 import zipfile
 from datetime import date, datetime, time, timedelta
 from typing import Iterable, Optional
-from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
 from psycopg.types.json import Jsonb
 
 import auth
+import minuta_layout
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.3"
+VERSAO = "1.4"
 NOVIDADES = [
+    ("1.4", "25/11/2026", [
+        "Minuta revisada no mesmo layout do arquivo original: no Word, só os trechos aceitos mudam (fontes, "
+        "estilos, tabelas, cabeçalho e rodapé ficam iguais). Baixe em Word ou em PDF.",
+        "Minuta enviada em PDF: as correções aceitas entram no próprio PDF, no mesmo lugar.",
+    ]),
     ("1.3", "25/11/2026", [
         "Atualizar andamento: a próxima verificação agora tem dia e hora, e o lembrete em pop-up aparece "
         "nessa hora (antes era sempre às 8h).",
@@ -689,22 +694,8 @@ def extrair_texto(nome: str, dados: bytes) -> str:
     """Texto de uma minuta em .docx, .pdf ou .txt (o que a IA vai revisar)."""
     ext = nome.lower().rsplit(".", 1)[-1] if "." in nome else ""
     if ext == "docx":
-        with zipfile.ZipFile(io.BytesIO(dados)) as z:
-            xml = z.read("word/document.xml")
-        ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
-        raiz = ElementTree.fromstring(xml)
-        paragrafos = []
-        for p in raiz.iter(f"{ns}p"):
-            partes = []
-            for el in p.iter():
-                if el.tag == f"{ns}t":
-                    partes.append(el.text or "")
-                elif el.tag == f"{ns}tab":
-                    partes.append("\t")
-                elif el.tag in (f"{ns}br", f"{ns}cr"):
-                    partes.append("\n")
-            paragrafos.append("".join(partes))
-        return "\n".join(paragrafos).strip()
+        # mesma leitura usada para aplicar as correções no Word original
+        return minuta_layout.texto_docx(dados)
     if ext == "pdf":
         import pdfplumber
         with pdfplumber.open(io.BytesIO(dados)) as pdf:
@@ -1064,6 +1055,9 @@ def garantir_schema() -> None:
                 decidido_por TEXT,
                 decidido_em TIMESTAMPTZ
             )""")
+        # arquivo original da minuta (Word/PDF): a versão revisada sai no mesmo layout
+        conn.execute("ALTER TABLE soc_revisoes ADD COLUMN IF NOT EXISTS arquivo_nome TEXT")
+        conn.execute("ALTER TABLE soc_revisoes ADD COLUMN IF NOT EXISTS arquivo BYTEA")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS soc_empresas (
                 id BIGSERIAL PRIMARY KEY,
@@ -1655,15 +1649,21 @@ def abrir_renovacao(escritorio_id: str, licenca_id: int, usuario: str) -> dict:
 
 
 def criar_revisao(escritorio_id: str, usuario: str, titulo: str, texto: str,
-                  processo_id: Optional[int] = None) -> int:
+                  processo_id: Optional[int] = None, arquivo_nome: str = "", arquivo: Optional[bytes] = None) -> int:
+    """Guarda o arquivo original só quando é Word ou PDF (dá para devolver
+    a minuta revisada no mesmo layout)."""
+    if not (arquivo and (arquivo_nome or "").lower().endswith((".docx", ".pdf"))):
+        arquivo_nome, arquivo = "", None
     with auth.conectar() as conn:
         if processo_id and not conn.execute("SELECT 1 FROM soc_processos WHERE id = %s AND escritorio_id = %s",
                                             (processo_id, escritorio_id)).fetchone():
             raise ValueError("Processo não encontrado.")
         r = conn.execute("""
-            INSERT INTO soc_revisoes (escritorio_id, processo_id, titulo, texto_original, criado_por)
-            VALUES (%s, %s, %s, %s, %s) RETURNING id
-        """, (escritorio_id, processo_id, titulo.strip() or "Minuta", texto, usuario)).fetchone()
+            INSERT INTO soc_revisoes (escritorio_id, processo_id, titulo, texto_original, criado_por,
+                arquivo_nome, arquivo)
+            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
+        """, (escritorio_id, processo_id, titulo.strip() or "Minuta", texto, usuario, arquivo_nome or None,
+              arquivo)).fetchone()
         conn.commit()
     return r["id"]
 
@@ -1721,35 +1721,76 @@ def decidir_apontamento(escritorio_id: str, revisao_id: int, apontamento_id: int
         conn.commit()
 
 
+MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def gerar_versoes(r: dict) -> dict:
+    """Word e PDF da versão revisada. Com o Word original, as correções
+    entram no próprio arquivo (mesmo layout) e o PDF sai dele; com o PDF
+    original, as correções entram no próprio PDF e o Word é o texto simples.
+    Sem arquivo (texto colado), Word simples e PDF convertido dele."""
+    aps = r["resultado"].get("apontamentos") or []
+    novo, manuais = aplicar_sugestoes(r["texto_original"], aps)
+    original, nome_arq = r.get("arquivo"), (r.get("arquivo_nome") or "").lower()
+    original = bytes(original) if original is not None else None
+    pdf, aviso_pdf, layout = None, "", False
+    if original and nome_arq.endswith(".docx"):
+        docx, manuais = minuta_layout.aplicar_no_docx(original, aps)
+        layout = True
+    elif original and nome_arq.endswith(".pdf"):
+        docx = gerar_docx(novo)
+        try:
+            pdf, manuais = minuta_layout.aplicar_no_pdf(original, aps)
+            layout = True
+        except Exception as exc:  # noqa: BLE001 - PDF protegido ou estranho: fica o Word simples
+            aviso_pdf = f"Não consegui aplicar as correções no PDF original ({exc})."
+    else:
+        docx = gerar_docx(novo)
+    if pdf is None and not aviso_pdf:
+        try:
+            pdf = minuta_layout.docx_para_pdf(docx)
+        except minuta_layout.ErroConversao as exc:
+            aviso_pdf = str(exc)
+    return {"texto": novo, "docx": docx, "pdf": pdf, "aviso_pdf": aviso_pdf, "manuais": manuais,
+            "layout_original": layout}
+
+
 def finalizar_revisao(escritorio_id: str, revisao_id: int, usuario: str) -> dict:
-    """Gera a versão revisada (Word) com os apontamentos aceitos. Se a
-    revisão é de um processo, o Word vai para os anexos dele e a
-    decisão entra na linha do tempo. O texto original não muda."""
+    """Gera a versão revisada (Word e PDF) com os apontamentos aceitos, no
+    layout do arquivo original quando ele é Word ou PDF. Se a revisão é de
+    um processo, os arquivos vão para os anexos dele e a decisão entra na
+    linha do tempo. O original não muda."""
     r = obter_revisao(escritorio_id, revisao_id)
     if not r or not r.get("resultado"):
         raise ValueError("Revisão não encontrada.")
     aps = r["resultado"].get("apontamentos") or []
-    novo, manuais = aplicar_sugestoes(r["texto_original"], aps)
     aceitos = sum(1 for a in aps if a.get("status") == "aceito")
     recusados = sum(1 for a in aps if a.get("status") == "recusado")
-    docx = gerar_docx(novo)
-    nome = re.sub(r"[^\w\-. ]+", "", r["titulo"]).strip() or "minuta"
-    nome = f"{nome} - revisada.docx"
+    v = gerar_versoes(r)
+    novo, docx, pdf, manuais = v["texto"], v["docx"], v["pdf"], v["manuais"]
+    base = re.sub(r"\.(docx|pdf|txt)$", "", r["titulo"], flags=re.I)
+    base = re.sub(r"[^\w\-. ]+", "", base).strip() or "minuta"
+    nome = f"{base} - revisada.docx"
+    nome_pdf = f"{base} - revisada.pdf"
     anexo_id = None
     with auth.conectar() as conn:
         conn.execute("UPDATE soc_revisoes SET status = 'concluida', decidido_por = %s, decidido_em = now() "
                      "WHERE id = %s", (usuario, revisao_id))
         conn.commit()
     if r.get("processo_id"):
-        anexo_id = anexar(escritorio_id, r["processo_id"], usuario, nome, docx,
-                          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        anexo_id = anexar(escritorio_id, r["processo_id"], usuario, nome, docx, MIME_DOCX,
                           categoria="minuta_revisada", revisao_id=revisao_id, registrar=False)
+        if pdf:
+            anexar(escritorio_id, r["processo_id"], usuario, nome_pdf, pdf, "application/pdf",
+                   categoria="minuta_revisada", revisao_id=revisao_id, registrar=False)
         registrar_andamento(escritorio_id, r["processo_id"], usuario, "Revisão validada pelo responsável",
                             f"{aceitos} sugestão(ões) aceita(s), {recusados} recusada(s)"
                             + (f", {len(manuais)} para ajustar à mão" if manuais else "")
-                            + f". Versão revisada anexada: {nome}.", lembrar=False)
-    return {"texto": novo, "docx": docx, "nome": nome, "manuais": manuais, "aceitos": aceitos,
-            "recusados": recusados, "anexo_id": anexo_id}
+                            + f". Versão revisada anexada: {nome}" + (f" e {nome_pdf}" if pdf else "") + ".",
+                            lembrar=False)
+    return {"texto": novo, "docx": docx, "nome": nome, "pdf": pdf, "nome_pdf": nome_pdf,
+            "aviso_pdf": v["aviso_pdf"], "layout_original": v["layout_original"], "manuais": manuais,
+            "aceitos": aceitos, "recusados": recusados, "anexo_id": anexo_id}
 
 
 def revisoes_pendentes(escritorio_id: str) -> int:

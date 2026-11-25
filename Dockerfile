@@ -8,8 +8,14 @@ WORKDIR /app
 # fallback de OCR para PDFs sem texto embutido (ex.: extrato "impresso em
 # PDF" pelo navegador, onde o texto vira desenho em vez de caracteres) -
 # ver _ocr_linhas_por_pagina() em conciliacao_bancaria.py.
+# libreoffice-writer-nogui converte a minuta revisada do Hub Societario de
+# Word para PDF mantendo o layout (minuta_layout.docx_para_pdf); as fontes
+# Liberation/Carlito/Caladea tem as mesmas medidas de Times New Roman,
+# Arial, Calibri e Cambria, para o PDF nao mudar a paginacao do Word.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl tesseract-ocr tesseract-ocr-por \
+       libreoffice-writer-nogui fonts-liberationfonts-crosextra-carlito fonts-crosextra-caladea \
+       fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

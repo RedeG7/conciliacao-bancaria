@@ -693,7 +693,8 @@ def _aba_documentos(esc: str, usuario: str, p: dict) -> None:
                 except Exception as exc:  # noqa: BLE001 - arquivo corrompido ou formato estranho
                     st.error(f"Não consegui ler o texto do arquivo: {exc}")
                 else:
-                    _iniciar_revisao(esc, usuario, arq["nome"], texto, p["id"], p["tipo"], p.get("descricao") or "")
+                    _iniciar_revisao(esc, usuario, arq["nome"], texto, p["id"], p["tipo"], p.get("descricao") or "",
+                                     arq["conteudo"])
     if not p["anexos"]:
         st.caption("Nenhum documento anexado.")
     with st.form(f"soc_anx_{p['id']}", clear_on_submit=True):
@@ -1183,13 +1184,14 @@ def _abrir_revisao(revisao_id: int) -> None:
     st.session_state["soc_rev"] = revisao_id
 
 
-def _iniciar_revisao(esc: str, usuario: str, titulo: str, texto: str, processo_id, tipo: str, contexto: str) -> None:
+def _iniciar_revisao(esc: str, usuario: str, titulo: str, texto: str, processo_id, tipo: str, contexto: str,
+                     arquivo: bytes | None = None) -> None:
     chave = so.chave_claude(esc)
     if not chave:
         st.error("Falta a chave da Claude do escritório. O administrador cadastra em Admissões › Canais › IA "
                  "(API Key da Claude); a mesma chave vale para o Hub Societário.")
         return
-    rid = so.criar_revisao(esc, usuario, titulo, texto, processo_id)
+    rid = so.criar_revisao(esc, usuario, titulo, texto, processo_id, titulo, arquivo)
     with st.spinner("A IA está revisando a minuta… (pode levar alguns minutos)"):
         try:
             res = so.revisar_minuta(texto, chave, tipo, contexto)
@@ -1243,10 +1245,10 @@ def _assistente(esc: str, usuario: str) -> None:
                                 value=(por_id[pid].get("descricao") or "") if pid else "",
                                 placeholder="Ex.: exigência da Junta, o que a alteração deve fazer, capital correto…")
         if st.button("Revisar com IA", type="primary", icon=":material/auto_awesome:"):
-            texto, titulo = colado.strip(), "Texto colado"
+            texto, titulo, original = colado.strip(), "Texto colado", None
             if arq is not None:
                 try:
-                    texto, titulo = so.extrair_texto(arq.name, arq.getvalue()), arq.name
+                    texto, titulo, original = so.extrair_texto(arq.name, arq.getvalue()), arq.name, arq.getvalue()
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Não consegui ler o texto do arquivo: {exc}")
                     return
@@ -1257,13 +1259,14 @@ def _assistente(esc: str, usuario: str) -> None:
                 anexo = so.baixar_anexo(esc, anexo_id)
                 try:
                     texto, titulo = so.extrair_texto(anexo["nome"], anexo["conteudo"]), anexo["nome"]
+                    original = anexo["conteudo"]
                 except Exception as exc:  # noqa: BLE001 - arquivo corrompido ou formato estranho
                     st.error(f"Não consegui ler o texto do anexo: {exc}")
                     return
             if not texto:
                 st.error("Envie o arquivo ou cole o texto da minuta.")
                 return
-            _iniciar_revisao(esc, usuario, titulo, texto, pid, tipo, contexto)
+            _iniciar_revisao(esc, usuario, titulo, texto, pid, tipo, contexto, original)
 
     revs = so.listar_revisoes(esc)
     st.markdown("**Revisões**")
@@ -1351,9 +1354,11 @@ def _revisao(esc: str, usuario: str, rid: int) -> None:
                       on_click=_decidir, args=(esc, rid, a["id"], "pendente" if st_atual == "recusado" else "recusado"))
             b3.caption({"aceito": "✅ Aceito", "recusado": "❌ Recusado"}.get(st_atual, "Pendente"))
     st.divider()
-    if st.button("Gerar versão revisada (Word)", type="primary", icon=":material/description:",
-                 disabled=dec["aceito"] == 0, help="Aplica só as sugestões aceitas. O original fica guardado."):
-        out = so.finalizar_revisao(esc, rid, usuario)
+    if st.button("Gerar versão revisada (Word e PDF)", type="primary", icon=":material/description:",
+                 disabled=dec["aceito"] == 0,
+                 help="Aplica só as sugestões aceitas, no mesmo layout do arquivo original. O original fica guardado."):
+        with st.spinner("Gerando o Word e o PDF…"):
+            out = so.finalizar_revisao(esc, rid, usuario)
         st.session_state[f"soc_rev_out_{rid}"] = out
         _recarregar()
     out = st.session_state.get(f"soc_rev_out_{rid}")
@@ -1364,8 +1369,17 @@ def _revisao(esc: str, usuario: str, rid: int) -> None:
             st.warning("Estas sugestões aceitas não puderam ser aplicadas sozinhas (trecho não encontrado ou cláusula "
                        "a acrescentar) — ajuste à mão no Word:\n\n"
                        + "\n".join(f"- **{a['titulo']}**: {a['sugestao']}" for a in out["manuais"]))
-        st.download_button("Baixar Word", out["docx"], file_name=out["nome"],
-                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        if not out.get("layout_original"):
+            st.caption("A minuta foi colada como texto (ou não veio em Word): o Word sai com o texto corrigido, "
+                       "sem a formatação original. Para manter o layout, revise a partir do arquivo Word.")
+        d1, d2, _ = st.columns([1, 1, 2])
+        d1.download_button("Baixar Word", out["docx"], file_name=out["nome"], icon=":material/description:",
+                           mime=so.MIME_DOCX, use_container_width=True)
+        if out.get("pdf"):
+            d2.download_button("Baixar PDF", out["pdf"], file_name=out["nome_pdf"], icon=":material/picture_as_pdf:",
+                               mime="application/pdf", use_container_width=True)
+        elif out.get("aviso_pdf"):
+            st.caption(out["aviso_pdf"])
 
 
 # ---------------------------------------------------------------- configurações
