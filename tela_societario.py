@@ -1218,7 +1218,26 @@ def _assistente(esc: str, usuario: str) -> None:
                            f"{por_id[i]['numero']} · {por_id[i]['empresa_nome']} · {so.TIPOS[por_id[i]['tipo']]['nome']}")
         tipo = por_id[pid]["tipo"] if pid else st.selectbox(
             "Tipo de documento", list(so.TIPOS), index=1, format_func=lambda t: so.TIPOS[t]["nome"], key="soc_ia_tipo")
-        arq = st.file_uploader("Minuta em Word (.docx), PDF ou texto", type=["docx", "pdf", "txt"], key="soc_ia_arq")
+        anexo_id = None
+        if pid:
+            todos = _anexos(esc, _versao())
+            com_rev = st.checkbox("Mostrar também as minutas já revisadas pela IA", key=f"soc_ia_rev_{pid}",
+                                  value=False) if any(a["processo_id"] == pid and a["categoria"] == "minuta_revisada"
+                                                      for a in todos) else False
+            legiveis = so.anexos_para_revisao(todos, pid, com_rev)
+            if legiveis:
+                por_anexo = {a["id"]: a for a in legiveis}
+                anexo_id = st.selectbox(
+                    "Anexo do processo para revisar", list(por_anexo) + [None], key=f"soc_ia_anx_{pid}_{com_rev}",
+                    format_func=lambda i: "— enviar ou colar uma minuta nova —" if i is None else
+                    f"{por_anexo[i]['nome']} · {_ROT_ANEXO.get(por_anexo[i]['categoria'], por_anexo[i]['categoria'])}"
+                    f" · {so.data_br(por_anexo[i]['criado_em'])}",
+                    help="A minuta mais recente do processo já vem escolhida. Se enviar um arquivo ou colar um texto "
+                         "abaixo, a IA revisa esse no lugar do anexo.")
+            else:
+                st.info("Este processo não tem minuta anexada em Word, PDF ou texto. Envie o arquivo ou cole o texto abaixo.")
+        arq = st.file_uploader("Minuta em Word (.docx), PDF ou texto" + (" (outra minuta)" if anexo_id else ""),
+                               type=["docx", "pdf", "txt"], key="soc_ia_arq")
         colado = st.text_area("…ou cole o texto da minuta", height=160, key="soc_ia_txt")
         contexto = st.text_area("Contexto (opcional)", height=80, key="soc_ia_ctx",
                                 value=(por_id[pid].get("descricao") or "") if pid else "",
@@ -1233,6 +1252,14 @@ def _assistente(esc: str, usuario: str) -> None:
                     return
                 if pid:
                     so.anexar(esc, pid, usuario, arq.name, arq.getvalue(), arq.type or "", "minuta")
+                    _recarregar()
+            elif not texto and anexo_id:
+                anexo = so.baixar_anexo(esc, anexo_id)
+                try:
+                    texto, titulo = so.extrair_texto(anexo["nome"], anexo["conteudo"]), anexo["nome"]
+                except Exception as exc:  # noqa: BLE001 - arquivo corrompido ou formato estranho
+                    st.error(f"Não consegui ler o texto do anexo: {exc}")
+                    return
             if not texto:
                 st.error("Envie o arquivo ou cole o texto da minuta.")
                 return

@@ -519,3 +519,20 @@ def test_proxima_verificacao_com_hora(banco):
     so.registrar_andamento(ESC_A, p["id"], "dp_user", "Outro", proxima_verificacao=dia)
     horas = sorted(l["quando"].astimezone(so.FUSO).time() for l in so.obter_processo(ESC_A, p["id"])["lembretes"])
     assert horas == [time(8, 0), time(14, 30)]
+
+
+def test_anexos_para_revisao():
+    t = lambda d: datetime(2026, 11, d, 10, 0, tzinfo=so.FUSO)  # noqa: E731
+    anexos = [
+        {"id": 1, "processo_id": 7, "nome": "minuta_v1.docx", "categoria": "minuta", "criado_em": t(1)},
+        {"id": 2, "processo_id": 7, "nome": "minuta_v2.DOCX", "categoria": "minuta", "criado_em": t(5)},
+        {"id": 3, "processo_id": 7, "nome": "rg_socio.jpg", "categoria": "documento", "criado_em": t(6)},
+        {"id": 4, "processo_id": 7, "nome": "requerimento.pdf", "categoria": "documento", "criado_em": t(7)},
+        {"id": 5, "processo_id": 7, "nome": "minuta_v2_revisada.docx", "categoria": "minuta_revisada",
+         "criado_em": t(8)},
+        {"id": 6, "processo_id": 9, "nome": "outro.docx", "categoria": "minuta", "criado_em": t(9)},
+    ]
+    # minuta mais nova primeiro; imagem, revisada e outro processo ficam de fora
+    assert [a["id"] for a in so.anexos_para_revisao(anexos, 7)] == [2, 1, 4]
+    assert [a["id"] for a in so.anexos_para_revisao(anexos, 7, incluir_revisadas=True)] == [2, 1, 4, 5]
+    assert so.anexos_para_revisao(anexos, 99) == []

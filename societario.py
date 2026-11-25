@@ -45,6 +45,8 @@ NOVIDADES = [
         "nessa hora (antes era sempre às 8h).",
         "O pop-up de lembretes aparece sozinho quando chega a hora, mesmo com a tela do Hub parada: o Hub "
         "confere a cada minuto.",
+        "Assistente IA: ao escolher o processo, a minuta anexada a ele já aparece para revisar, sem enviar o "
+        "arquivo de novo (dá para escolher outro anexo, enviar ou colar uma minuta nova).",
     ]),
     ("1.2", "25/11/2026", [
         "Novo processo: a empresa é buscada pelo nome ou CNPJ numa lista só, com as empresas cadastradas no "
@@ -1346,6 +1348,23 @@ def listar_anexos(escritorio_id: str) -> list[dict]:
             FROM soc_anexos a JOIN soc_processos p ON p.id = a.processo_id
             WHERE a.escritorio_id = %s ORDER BY a.criado_em DESC, a.id DESC
         """, (escritorio_id,)).fetchall()]
+
+
+EXTENSOES_LEGIVEIS = (".docx", ".pdf", ".txt")
+
+
+def anexos_para_revisao(anexos: list[dict], processo_id: int, incluir_revisadas: bool = False) -> list[dict]:
+    """Anexos do processo que a IA consegue ler (Word, PDF, texto), na ordem
+    de escolha: minutas primeiro, depois os demais documentos, cada grupo do
+    mais novo ao mais antigo. As minutas já revisadas pela IA ficam de fora,
+    salvo `incluir_revisadas` (para não revisar a revisão por engano)."""
+    ordem = {"minuta": 0, "documento": 1, "comprovante": 2, "minuta_revisada": 3}
+    escolhidos = [a for a in anexos if a.get("processo_id") == processo_id
+                  and (a.get("nome") or "").lower().endswith(EXTENSOES_LEGIVEIS)
+                  and (incluir_revisadas or a.get("categoria") != "minuta_revisada")]
+    escolhidos.sort(key=lambda a: (-a["criado_em"].timestamp() if a.get("criado_em") else 0, -a["id"]))
+    escolhidos.sort(key=lambda a: ordem.get(a.get("categoria"), 9))  # estável: mantém o mais novo primeiro
+    return escolhidos
 
 
 def obter_processo(escritorio_id: str, processo_id: int) -> Optional[dict]:
