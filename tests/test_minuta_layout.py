@@ -199,3 +199,32 @@ def test_pdf_nota_com_espaco_inventado_e_pedacos_fora_de_ordem():
     assert not manuais
     texto = " ".join(fitz.open(stream=novo, filetype="pdf")[0].get_text(sort=True).split())
     assert texto == "Texto do contrato. Fim."
+
+
+def _modelo_docx():
+    doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+           'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p/>'
+           '<w:sectPr><w:headerReference w:type="default" r:id="rId8"/><w:pgMar w:top="1814"/></w:sectPr>'
+           '</w:body></w:document>')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/document.xml", doc)
+        z.writestr("word/header1.xml", "<w:hdr>TIMBRE</w:hdr>")
+    return buf.getvalue()
+
+
+def test_montar_docx_modelo_troca_o_corpo_e_mantem_o_timbre():
+    blocos = [{"tipo": "titulo", "texto": "ALTERAÇÃO – EMPRESA & CIA", "linhas": []},
+              {"tipo": "paragrafo", "texto": "**FULANO**, RG [informar: RG], sócio.", "linhas": []},
+              {"tipo": "tabela", "texto": "", "linhas": [["SÓCIO", "QUOTAS"], ["FULANO", "10"], ["TOTAL", "10"]]},
+              {"tipo": "assinatura", "texto": "FULANO\nSócio", "linhas": []}]
+    novo = ml.montar_docx_modelo(_modelo_docx(), blocos)
+    with zipfile.ZipFile(io.BytesIO(novo)) as z:
+        doc = z.read("word/document.xml").decode()
+        assert z.read("word/header1.xml") == b"<w:hdr>TIMBRE</w:hdr>"
+    assert 'r:id="rId8"' in doc and 'w:top="1814"' in doc  # timbre e margens do modelo
+    assert "EMPRESA &amp; CIA" in doc and "<w:tbl>" in doc
+    assert '<w:highlight w:val="yellow"/>' in doc and "[informar: RG]" in doc
+    assert "<w:b/>" in doc and "**" not in doc
+    assert ml.texto_docx(novo).startswith("ALTERAÇÃO – EMPRESA & CIA\nFULANO, RG [informar: RG], sócio.")

@@ -756,6 +756,8 @@ def _aba_documentos(esc: str, usuario: str, p: dict) -> None:
                 else:
                     _recarregar()
                     st.rerun()
+    if p.get("ia_habilitada"):
+        _gerar_contrato(esc, usuario, p)
     with st.form(f"soc_anx_{p['id']}", clear_on_submit=True):
         arqs = st.file_uploader("Anexar arquivos", accept_multiple_files=True)
         cat = st.selectbox("Tipo", ["documento", "minuta", "comprovante"], format_func=rot.get)
@@ -774,6 +776,100 @@ def _aba_documentos(esc: str, usuario: str, p: dict) -> None:
             c1, c2 = st.columns([4, 1])
             c1.markdown(f"{_e(r['titulo'])} · {_ROT_REV.get(r['status'], r['status'])} · {so.data_br(r['criado_em'])}")
             c2.button("Abrir", key=f"soc_rv_ab_{r['id']}", on_click=_abrir_revisao, args=(r["id"],))
+
+
+def _contrato_padrao(anexos: list[dict]) -> Optional[int]:
+    """Anexo mais provável de ser o contrato registrado: o mais antigo que
+    não é saída da IA (revisada ou gerada), preferindo os enviados como
+    Documento (as minutas costumam ser rascunho ou cópia do modelo)."""
+    bons = [a for a in anexos if a["nome"].lower().endswith((".pdf", ".docx", ".txt"))
+            and a["categoria"] != "minuta_revisada" and "revisada" not in a["nome"].lower()
+            and "gerado pela ia" not in a["nome"].lower()]
+    docs = [a for a in bons if a["categoria"] == "documento"] or bons
+    return docs[-1]["id"] if docs else None
+
+
+def _gerar_contrato(esc: str, usuario: str, p: dict) -> None:
+    pid = p["id"]
+    with st.expander("Gerar contrato com IA no modelo do escritório", icon=":material/auto_awesome:",
+                     expanded=bool(st.session_state.get(f"soc_gc_res_{pid}"))):
+        st.caption("A IA escreve o instrumento completo (alteração e consolidação) no Word do modelo do escritório, "
+                   "com o timbre e a formatação dele, usando os dados do contrato atual e aplicando o que você pedir. "
+                   "Dado que não estiver nos documentos sai marcado em amarelo para completar. Confira tudo antes "
+                   "de protocolar.")
+        mods = [m for m in _modelos(esc, _versao()) if m["tipo"] == p["tipo"]
+                and m["arquivo_nome"].lower().endswith(".docx")]
+        if not mods:
+            st.info(f"Cadastre o modelo do escritório em Word (.docx) para {so.TIPOS[p['tipo']]['nome']} em "
+                    "Hub Societário › Configurações › Modelos de contrato.")
+            return
+        por_id = {m["id"]: m for m in mods}
+        ordem = sorted(por_id, key=lambda i: not por_id[i]["padrao"])
+        mid = st.selectbox("Modelo do escritório (layout)", ordem, key=f"soc_gc_mod_{pid}",
+                           format_func=lambda i: por_id[i]["nome"] + (" (padrão)" if por_id[i]["padrao"] else "")
+                           + f" · {por_id[i]['arquivo_nome']}")
+        anexos = {a["id"]: a for a in p["anexos"] if a["nome"].lower().endswith((".pdf", ".docx", ".txt"))}
+        opcoes = list(anexos) + [None]
+        padrao = _contrato_padrao(p["anexos"])
+        aid = st.selectbox("Contrato atual da empresa (de onde saem os dados)", opcoes,
+                           index=opcoes.index(padrao) if padrao in opcoes else len(opcoes) - 1,
+                           key=f"soc_gc_anx_{pid}",
+                           format_func=lambda i: "Enviar outro arquivo…" if i is None else
+                           f"{anexos[i]['nome']} · {so.data_br(anexos[i]['criado_em'])}",
+                           help="Use o último contrato ou alteração registrada na Junta. Evite arquivos "
+                                "\"revisada\": eles podem ter notas de revisão coladas no texto.")
+        enviado = None
+        if aid is None:
+            enviado = st.file_uploader("Contrato atual (PDF com texto, Word ou .txt)", type=["pdf", "docx", "txt"],
+                                       key=f"soc_gc_up_{pid}")
+        pedido = st.text_area("O que deve mudar", value=p.get("descricao") or "", key=f"soc_gc_ped_{pid}",
+                              height=110, placeholder="Ex.: Sai a sócia JESSIKA AMORIM DE PAULA, que cede todas as "
+                              "suas quotas ao THIAGO ANTONIO DE MELO MORAIS; Thiago passa a ser o único sócio e "
+                              "administrador.")
+        if st.button("Gerar contrato", key=f"soc_gc_b_{pid}", type="primary",
+                     disabled=not pedido.strip() or (aid is None and enviado is None)):
+            chave = so.chave_claude(esc)
+            if not chave:
+                st.error("Falta a chave da Claude do escritório. O administrador cadastra em Administração › "
+                         "Integrações › IA (API Key da Claude).")
+                return
+            if aid is not None:
+                arq = so.baixar_anexo(esc, aid)
+                nome_c, dados_c = arq["nome"], arq["conteudo"]
+            else:
+                nome_c, dados_c = enviado.name, enviado.getvalue()
+            with st.spinner("A IA está redigindo o contrato… (pode levar alguns minutos)"):
+                try:
+                    res = so.gerar_contrato(esc, pid, usuario, mid, pedido, nome_c, bytes(dados_c), chave)
+                except (ValueError, so.ErroIA) as exc:
+                    st.error(str(exc))
+                    return
+            st.session_state[f"soc_gc_res_{pid}"] = res
+            _recarregar()
+            st.rerun()
+        res = st.session_state.get(f"soc_gc_res_{pid}")
+        if res:
+            st.success(f"Contrato gerado e anexado em Documentos: {res['nome']}"
+                       + (f" e {res['nome_pdf']}" if res.get("pdf") else "") + ".")
+            if res.get("resumo"):
+                st.markdown(_e(res["resumo"]))
+            if res.get("pendencias"):
+                st.warning("Complete no Word (marcado em amarelo):\n\n"
+                           + "\n".join(f"- {_e(x)}" for x in res["pendencias"]))
+            if res.get("aviso_pdf"):
+                st.info(res["aviso_pdf"])
+            c1, c2, c3 = st.columns([1, 1, 1])
+            c1.download_button("Baixar Word", res["docx"], file_name=res["nome"], mime=so.MIME_DOCX,
+                               key=f"soc_gc_dw_{pid}")
+            if res.get("pdf"):
+                c2.download_button("Baixar PDF", res["pdf"], file_name=res["nome_pdf"], mime="application/pdf",
+                                   key=f"soc_gc_dp_{pid}")
+            if c3.button("Fechar", key=f"soc_gc_x_{pid}"):
+                st.session_state.pop(f"soc_gc_res_{pid}", None)
+                st.rerun()
+            if st.toggle("Ver o texto gerado", key=f"soc_gc_tx_{pid}"):
+                st.text_area("Texto gerado", res["texto"], height=320, disabled=True, label_visibility="collapsed",
+                             key=f"soc_gc_txa_{pid}")
 
 
 def _aba_lembretes(esc: str, usuario: str, p: dict) -> None:

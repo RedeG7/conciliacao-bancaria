@@ -647,3 +647,39 @@ def test_extrair_texto_pdf_le_como_o_pymupdf():
     doc = fitz.open()
     doc.new_page().insert_text((72, 100), "cinquenta mil quotas", fontsize=12)
     assert so.extrair_texto("minuta.pdf", doc.tobytes()) == "cinquenta mil quotas"
+
+
+def test_gerar_contrato_no_modelo_com_cliente_falso(banco, monkeypatch):
+    pytest.importorskip("anthropic")
+    from conftest import ESC_A
+    from test_minuta_layout import _modelo_docx
+    p = so.criar_processo(ESC_A, "dp_admin", "alteracao", "Dominio LTDA", "59838249000113")
+    so.salvar_modelo(ESC_A, "dp_admin", "alteracao", "Modelo CWD", "modelo.docx", _modelo_docx())
+    mid = so.listar_modelos(ESC_A)[0]["id"]
+    saida = {"resumo": "Jessika sai e Thiago entra.", "pendencias": ["RG do Thiago"], "blocos": [
+        {"tipo": "titulo", "texto": "ALTERAÇÃO – DOMINIO LTDA", "linhas": []},
+        {"tipo": "paragrafo", "texto": "THIAGO, RG [informar: RG], ingressa.", "linhas": []},
+        {"tipo": "tabela", "texto": "", "linhas": [["SÓCIO", "QUOTAS"], ["THIAGO", "50.000"]]},
+        {"tipo": "inventado", "texto": "vira parágrafo", "linhas": [["x"]]}]}
+    resp = SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=json.dumps(saida))])
+    cliente, pedidos = _cliente_falso(resp)
+    monkeypatch.setattr(so.minuta_layout, "docx_para_pdf", lambda d: b"%PDF-falso")
+    res = so.gerar_contrato(ESC_A, p["id"], "dp_admin", mid, "Sai a Jessika, entra o Thiago", "contrato.txt",
+                            "Contrato social: JESSIKA sócia única.".encode(), "", cliente=cliente,
+                            hoje=date(2026, 11, 26))
+    kw = pedidos[0]
+    assert kw["output_config"]["format"]["schema"] == so.SCHEMA_CONTRATO and kw["system"] == so.SISTEMA_CONTRATO
+    msg = kw["messages"][0]["content"]
+    assert "<pedido>\nSai a Jessika, entra o Thiago" in msg and "JESSIKA sócia única" in msg
+    assert "26 de novembro de 2026" in msg and "59.838.249/0001-13" in msg
+    assert res["pendencias"] == ["RG do Thiago"] and res["blocos"][-1]["tipo"] == "paragrafo"
+    assert res["blocos"][-1]["linhas"] == [] and res["pdf"] == b"%PDF-falso"
+    assert "THIAGO | 50.000" in res["texto"]
+    nomes = {a["nome"] for a in so.listar_anexos(ESC_A)}
+    assert {"Modelo CWD - Dominio LTDA - gerado pela IA.docx", "Modelo CWD - Dominio LTDA - gerado pela IA.pdf"} <= nomes
+    with pytest.raises(ValueError):
+        so.gerar_contrato(ESC_A, p["id"], "dp_admin", mid, "  ", "c.txt", b"x", "", cliente=cliente)
+    so.salvar_modelo(ESC_A, "dp_admin", "alteracao", "Modelo PDF", "modelo.pdf", b"%PDF")
+    mid_pdf = next(m["id"] for m in so.listar_modelos(ESC_A) if m["arquivo_nome"] == "modelo.pdf")
+    with pytest.raises(ValueError, match="Word"):
+        so.gerar_contrato(ESC_A, p["id"], "dp_admin", mid_pdf, "pedido", "c.txt", b"x", "", cliente=cliente)

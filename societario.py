@@ -38,8 +38,16 @@ import minuta_layout
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.9"
+VERSAO = "2.0"
 NOVIDADES = [
+    ("2.0", "26/11/2026", [
+        "Gerar contrato com IA: em Documentos do processo, escolha o modelo do escritório (Word), o contrato atual "
+        "da empresa e escreva o que muda (ex.: \"sai a sócia X, entra o sócio Y com todas as quotas\"). A IA "
+        "redige a alteração completa com a consolidação, no timbre e na formatação do modelo, e anexa o Word e o "
+        "PDF ao processo.",
+        "Dados que não estão nos documentos (RG, órgão emissor...) não são inventados: saem marcados em amarelo "
+        "como [informar: ...] e listados para completar.",
+    ]),
     ("1.9", "26/11/2026", [
         "Versão revisada em PDF: notas e trechos que a leitura do PDF tinha quebrado com espaços no meio "
         "da palavra (\"Civi l\", \"Cláus ula\") agora são achados e corrigidos no documento.",
@@ -906,6 +914,14 @@ def revisar_minuta(texto: str, chave: str, tipo: str = "", contexto: str = "", c
         raise ErroIA("A minuta está vazia.")
     if len(texto) > MAX_CARACTERES_MINUTA:
         raise ErroIA("A minuta é grande demais para uma revisão só; divida o documento.")
+    dados = _chamar_claude(SISTEMA_REVISAO, _pedido_revisao(texto, tipo, contexto), SCHEMA_REVISAO, chave, cliente,
+                           "a revisão deste documento", "A revisão ficou longa demais e foi interrompida; divida o "
+                           "documento.")
+    return normalizar_revisao(dados)
+
+
+def _chamar_claude(sistema: str, conteudo: str, schema: dict, chave: str, cliente, oque: str, longo: str) -> dict:
+    """Uma chamada à Claude com saída em JSON no formato `schema`."""
     import anthropic
     if cliente is None:
         if not chave:
@@ -915,11 +931,11 @@ def revisar_minuta(texto: str, chave: str, tipo: str = "", contexto: str = "", c
         with cliente.beta.messages.stream(
             model=MODELO_IA,
             max_tokens=64000,
-            system=SISTEMA_REVISAO,
-            output_config={"effort": "high", "format": {"type": "json_schema", "schema": SCHEMA_REVISAO}},
+            system=sistema,
+            output_config={"effort": "high", "format": {"type": "json_schema", "schema": schema}},
             betas=[BETA_FALLBACK],
             fallbacks="default",
-            messages=[{"role": "user", "content": _pedido_revisao(texto, tipo, contexto)}],
+            messages=[{"role": "user", "content": conteudo}],
         ) as stream:
             resp = stream.get_final_message()
     except anthropic.AuthenticationError:
@@ -931,15 +947,14 @@ def revisar_minuta(texto: str, chave: str, tipo: str = "", contexto: str = "", c
     except anthropic.APIConnectionError:
         raise ErroIA("Sem conexão com a API da Claude.") from None
     if resp.stop_reason == "refusal":
-        raise ErroIA("A IA recusou a revisão deste documento.")
+        raise ErroIA(f"A IA recusou {oque}.")
     if resp.stop_reason == "max_tokens":
-        raise ErroIA("A revisão ficou longa demais e foi interrompida; divida o documento.")
+        raise ErroIA(longo)
     bruto = next((b.text for b in resp.content if getattr(b, "type", "") == "text"), "")
     try:
-        dados = json.loads(bruto)
+        return json.loads(bruto)
     except ValueError:
         raise ErroIA("A resposta da IA veio fora do formato esperado; tente de novo.") from None
-    return normalizar_revisao(dados)
 
 
 def normalizar_revisao(dados: dict) -> dict:
@@ -2022,6 +2037,177 @@ def finalizar_revisao(escritorio_id: str, revisao_id: int, usuario: str) -> dict
     return {"texto": novo, "docx": docx, "nome": nome, "pdf": pdf, "nome_pdf": nome_pdf,
             "aviso_pdf": v["aviso_pdf"], "layout_original": v["layout_original"], "manuais": manuais,
             "aceitos": aceitos, "recusados": recusados, "anexo_id": anexo_id}
+
+
+# ---------------------------------------------------------------- contrato gerado pela IA no modelo
+
+TIPOS_BLOCO = ["titulo", "subtitulo", "secao", "clausula", "paragrafo", "item", "tabela", "local_data",
+               "assinatura"]
+
+SCHEMA_CONTRATO = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["resumo", "pendencias", "blocos"],
+    "properties": {
+        "resumo": {"type": "string"},
+        "pendencias": {"type": "array", "items": {"type": "string"}},
+        "blocos": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["tipo", "texto", "linhas"],
+                "properties": {
+                    "tipo": {"type": "string", "enum": TIPOS_BLOCO},
+                    "texto": {"type": "string"},
+                    "linhas": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+                },
+            },
+        },
+    },
+}
+
+SISTEMA_CONTRATO = """Você é o assistente do departamento societário de um escritório de contabilidade em Goiás \
+(Junta Comercial: JUCEG). Sua tarefa é redigir o instrumento completo pedido pelo colaborador (alteração contratual \
+com consolidação, constituição, distrato etc.), pronto para conferência e registro, seguindo o Código Civil \
+(arts. 997 e 1.052 a 1.087) e a IN DREI 81/2020.
+
+Você recebe:
+- <contrato_atual>: o último contrato (ou alteração consolidada) da empresa. É a fonte dos dados que continuam \
+valendo: nome empresarial, CNPJ, NIRE, endereço, objeto e CNAEs, capital, qualificação dos sócios, cláusulas. \
+Ele pode conter notas de revisão, comentários ou trechos de rascunho colados no meio (ex.: "Remover...", \
+"Substituir por...", "[...]", textos em duplicidade ou contraditórios): ignore esse lixo, não copie.
+- <pedido>: o que deve mudar. O pedido manda: aplique exatamente o que ele diz.
+- <processo>: dados do processo (empresa, CNPJ, tipo, data de hoje).
+- <estrutura_do_modelo>, quando houver: o texto do modelo do escritório; siga a estrutura e a redação dele.
+
+Regras:
+- Nunca invente dados (RG, órgão emissor, CPF, endereço, estado civil, data de nascimento, valores, número da \
+alteração). O que não estiver nos documentos fica como [informar: o que falta] no texto e vai também em \
+"pendencias", uma frase por item.
+- Mantenha tudo o que o pedido não muda, como está no contrato atual (mas com ortografia e numeração corretas).
+- Confira as contas: soma das quotas = capital; percentuais somam 100%.
+- Na saída e entrada de sócio: preâmbulo qualificando quem já é sócio e quem ingressa; cláusula da cessão e \
+transferência de quotas (quem cede, quem recebe, quantidade, valor, quitação); quem deixa a administração e quem \
+assume; e a consolidação só com os sócios que ficam.
+- Sociedade com um só sócio: redação de sócio único (sem "outro sócio", "os sócios deliberam").
+- Assinam o instrumento todos os que participam do ato (inclusive quem sai e quem entra).
+
+Estrutura (padrão do escritório):
+1. "titulo": "Nª ALTERAÇÃO DE CONTRATO DE SOCIEDADE EMPRESÁRIA LIMITADA – NOME DA EMPRESA" (número da \
+alteração: [informar] se não der para saber pelo contrato atual).
+2. "subtitulo": uma linha por motivo ("Motivo: a) Cessão e transferência de quotas", "b) Consolidação Contratual").
+3. "paragrafo": preâmbulo com a qualificação completa de cada sócio e da sociedade (NIRE, CNPJ, sede) e \
+"resolvem/resolve ajustar a presente alteração contratual, mediante as condições a seguir:".
+4. "secao": "DAS ALTERAÇÕES"; para cada mudança, "clausula" ("CLÁUSULA 1ª – DA CESSÃO E TRANSFERÊNCIA DE QUOTAS") \
+seguida de "paragrafo".
+5. "secao": "CONSOLIDAÇÃO CONTRATUAL"; "subtitulo": "Empresa: NOME"; "paragrafo" com a qualificação dos sócios \
+que ficam; depois cada cláusula ("clausula" "Cláusula 1ª DA DENOMINAÇÃO" + "paragrafo"): denominação, endereço, \
+objeto (CNAEs em blocos "item", um por linha), início e prazo, capital (com "tabela"), responsabilidade, \
+administração, pró-labore, enquadramento (se houver), desimpedimento, exercício social, cessão de quotas, \
+falecimento, foro — na ordem e com o conteúdo do contrato atual, só mudando o que o pedido manda.
+6. "paragrafo" de encerramento; "local_data" ("Goiânia - GO, 26 de novembro de 2026."); um "assinatura" por \
+pessoa, com "texto" = "NOME COMPLETO\nSócio/Administrador" (ou "Sócia retirante", "Sócio ingressante" etc.).
+
+Formato de cada bloco: "tipo"; "texto" (o texto do bloco; use **negrito** só para nomes de sócios e da empresa \
+no preâmbulo, se quiser); "linhas" só na "tabela" (primeira linha: ["SÓCIO", "QUOTAS", "%", "CAPITAL"]; última: \
+["TOTAL", ...]); nos outros blocos, "linhas" = []. "resumo": 2 a 4 frases dizendo o que o instrumento faz e o que \
+foi tirado do contrato atual."""
+
+
+def _pedido_contrato(contrato: str, pedido: str, processo: dict, modelo: str, hoje: date) -> str:
+    campos = campos_do_processo(processo, hoje)
+    partes = [
+        "<processo>\n"
+        f"Empresa: {campos['{{EMPRESA}}']}\nCNPJ: {campos['{{CNPJ}}']}\nProcesso: {campos['{{PROCESSO}}']}\n"
+        f"Tipo: {TIPOS.get(processo.get('tipo'), {}).get('nome', '')}\nData de hoje: {campos['{{DATA_EXTENSO}}']}\n"
+        "</processo>",
+        f"<pedido>\n{pedido.strip()}\n</pedido>",
+    ]
+    if modelo.strip():
+        partes.append(f"<estrutura_do_modelo>\n{modelo.strip()}\n</estrutura_do_modelo>")
+    partes.append(f"<contrato_atual>\n{contrato.strip()}\n</contrato_atual>")
+    return "\n\n".join(partes)
+
+
+def normalizar_contrato(dados: dict) -> dict:
+    blocos = []
+    for b in dados.get("blocos") or []:
+        tipo = b.get("tipo") if b.get("tipo") in TIPOS_BLOCO else "paragrafo"
+        linhas = [[str(c) for c in l] for l in (b.get("linhas") or []) if isinstance(l, list)]
+        texto = str(b.get("texto") or "").strip()
+        if texto or (tipo == "tabela" and linhas):
+            blocos.append({"tipo": tipo, "texto": texto, "linhas": linhas if tipo == "tabela" else []})
+    if not blocos:
+        raise ErroIA("A IA não devolveu o texto do contrato; tente de novo.")
+    return {"resumo": str(dados.get("resumo") or "").strip(),
+            "pendencias": [str(p).strip() for p in dados.get("pendencias") or [] if str(p).strip()],
+            "blocos": blocos}
+
+
+def texto_dos_blocos(blocos: list[dict]) -> str:
+    linhas = []
+    for b in blocos:
+        if b["tipo"] == "tabela":
+            linhas += [" | ".join(l) for l in b["linhas"]]
+        else:
+            linhas.append(b["texto"].replace("**", ""))
+    return "\n".join(linhas)
+
+
+def gerar_contrato(escritorio_id: str, processo_id: int, usuario: str, modelo_id: int, pedido: str,
+                   contrato_nome: str, contrato: bytes, chave: str, cliente=None,
+                   hoje: Optional[date] = None) -> dict:
+    """Escreve o instrumento pedido (ex.: saída e entrada de sócio) no Word
+    do modelo do escritório, com os dados do contrato atual, e anexa o
+    Word e o PDF ao processo. O que faltar sai marcado [informar: ...]."""
+    if not (pedido or "").strip():
+        raise ValueError("Escreva o que deve ser alterado no contrato.")
+    m = obter_modelo(escritorio_id, modelo_id)
+    if not m:
+        raise ValueError("Modelo não encontrado.")
+    if not m["arquivo_nome"].lower().endswith(".docx"):
+        raise ValueError("Para gerar o contrato, o modelo precisa estar em Word (.docx). Cadastre o modelo do "
+                         "escritório em Word em Hub Societário › Configurações.")
+    with auth.conectar() as conn:
+        p = conn.execute("SELECT numero, empresa_nome, cnpj, tipo FROM soc_processos WHERE id = %s "
+                         "AND escritorio_id = %s", (processo_id, escritorio_id)).fetchone()
+    if not p:
+        raise ValueError("Processo não encontrado.")
+    texto = extrair_texto(contrato_nome, contrato).strip()
+    if not texto:
+        raise ValueError("Não consegui ler o texto do contrato atual (PDF escaneado?). Envie o PDF com texto ou o Word.")
+    if len(texto) > MAX_CARACTERES_MINUTA:
+        raise ErroIA("O contrato atual é grande demais para gerar de uma vez.")
+    hoje = hoje or datetime.now(FUSO).date()
+    try:
+        estrutura = minuta_layout.texto_docx(m["conteudo"])
+    except Exception:  # noqa: BLE001 - Word estranho: segue só com o padrão do escritório
+        estrutura = ""
+    dados = _chamar_claude(SISTEMA_CONTRATO, _pedido_contrato(texto, pedido, dict(p), estrutura, hoje),
+                           SCHEMA_CONTRATO, chave, cliente, "redigir este contrato",
+                           "O contrato ficou longo demais e foi interrompido; tente de novo.")
+    res = normalizar_contrato(dados)
+    docx = minuta_layout.montar_docx_modelo(m["conteudo"], res["blocos"])
+    pdf, aviso_pdf = None, ""
+    try:
+        pdf = minuta_layout.docx_para_pdf(docx)
+    except minuta_layout.ErroConversao as exc:
+        aviso_pdf = str(exc)
+    empresa = re.sub(r"[^\w\-. ]+", "", p["empresa_nome"] or "").strip()
+    base = f"{m['nome']} - {empresa} - gerado pela IA" if empresa else f"{m['nome']} - gerado pela IA"
+    nome, nome_pdf = f"{base}.docx", f"{base}.pdf"
+    anexar(escritorio_id, processo_id, usuario, nome, docx, MIME_DOCX, categoria="minuta", registrar=False)
+    if pdf:
+        anexar(escritorio_id, processo_id, usuario, nome_pdf, pdf, "application/pdf", categoria="minuta",
+               registrar=False)
+    pend = res["pendencias"]
+    registrar_andamento(escritorio_id, processo_id, usuario, "Contrato gerado pela IA no modelo do escritório",
+                        f"Pedido: {pedido.strip()}\nModelo: {m['nome']}. Dados tirados de: {contrato_nome}.\n"
+                        + (f"{len(pend)} dado(s) a completar (marcados em amarelo no Word). " if pend else "")
+                        + f"Anexado: {nome}" + (f" e {nome_pdf}" if pdf else "") + ".", lembrar=False)
+    return {**res, "texto": texto_dos_blocos(res["blocos"]), "docx": docx, "nome": nome, "pdf": pdf,
+            "nome_pdf": nome_pdf, "aviso_pdf": aviso_pdf}
 
 
 def revisoes_pendentes(escritorio_id: str) -> int:

@@ -647,3 +647,110 @@ def docx_para_pdf(dados: bytes, timeout: int = 120) -> bytes:
             raise ErroConversao("Não consegui converter para PDF.")
         with open(saida, "rb") as f:
             return f.read()
+
+
+# ------------------------------------------------------------------ contrato gerado no modelo
+
+# formatação de cada tipo de bloco (espaço antes/depois em twips, alinhamento,
+# negrito), no padrão das minutas do escritório
+BLOCOS_CONTRATO = {
+    "titulo": (0, 240, "center", True),
+    "subtitulo": (0, 240, "center", False),
+    "secao": (360, 240, "center", True),
+    "clausula": (160, 80, "left", True),
+    "paragrafo": (0, 120, "both", False),
+    "item": (0, 0, "left", False),
+    "local_data": (240, 600, "right", False),
+}
+_PENDENTE = re.compile(r"(\[[^\]]*\])")
+
+
+def _runs(texto: str, negrito: bool, tam: Optional[int] = None) -> str:
+    """Runs do parágrafo: **trecho** sai em negrito e [informar ...] sai
+    marcado em amarelo, para o colaborador completar."""
+    saida = []
+    for i, parte in enumerate(re.split(r"\*\*", texto or "")):
+        neg = negrito or i % 2 == 1
+        for pedaco in _PENDENTE.split(parte):
+            if not pedaco:
+                continue
+            rpr = ("<w:b/>" if neg else '<w:b w:val="0"/>') + (
+                '<w:highlight w:val="yellow"/>' if _PENDENTE.fullmatch(pedaco) else "") + (
+                f'<w:sz w:val="{tam}"/><w:szCs w:val="{tam}"/>' if tam else "")
+            saida.append(f'<w:r><w:rPr>{rpr}</w:rPr><w:t xml:space="preserve">{html.escape(pedaco, quote=False)}</w:t></w:r>')
+    return "".join(saida)
+
+
+def _par(texto: str, antes: int, depois: int, alinha: str, negrito: bool, extra: str = "") -> str:
+    return (f'<w:p><w:pPr>{extra}<w:spacing w:before="{antes}" w:after="{depois}"/><w:jc w:val="{alinha}"/>'
+            f'</w:pPr>{_runs(texto, negrito)}</w:p>')
+
+
+def _tabela(linhas: list[list[str]]) -> str:
+    linhas = [l for l in linhas if any(str(c).strip() for c in l)]
+    if not linhas:
+        return ""
+    ncol = max(len(l) for l in linhas)
+    larg = [4252, 1701, 1134, 2268] if ncol == 4 else [9355 // ncol] * ncol
+    grade = "".join(f'<w:gridCol w:w="{w}"/>' for w in larg)
+    corpo = []
+    for n, linha in enumerate(linhas):
+        neg = n == 0 or str(linha[0]).strip().upper().startswith("TOTAL")
+        cels = []
+        for c in range(ncol):
+            txt = str(linha[c]) if c < len(linha) else ""
+            cels.append(f'<w:tc><w:tcPr><w:tcW w:w="{larg[c]}" w:type="dxa"/></w:tcPr><w:p><w:pPr>'
+                        f'<w:spacing w:before="0" w:after="0"/><w:jc w:val="{"left" if c == 0 else "center"}"/>'
+                        f'</w:pPr>{_runs(txt, neg, 20)}</w:p></w:tc>')
+        corpo.append("<w:tr>" + "".join(cels) + "</w:tr>")
+    borda = "".join(f'<w:{b} w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+                    for b in ("top", "left", "bottom", "right", "insideH", "insideV"))
+    return (f'<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:jc w:val="center"/><w:tblBorders>{borda}'
+            f'</w:tblBorders><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>{grade}</w:tblGrid>'
+            + "".join(corpo) + "</w:tbl>" + _par("", 0, 120, "left", False))
+
+
+def _assinatura(texto: str) -> str:
+    nome, _, papel = (texto or "").strip().partition("\n")
+    return (_par("", 480, 0, "center", False, "<w:keepNext/><w:keepLines/>")
+            + _par("_____________________________________", 0, 0, "center", False, "<w:keepNext/>")
+            + _par(nome.strip(), 0, 0, "center", True, "<w:keepNext/>")
+            + (_par(papel.strip(), 0, 0, "center", False) if papel.strip() else ""))
+
+
+def corpo_contrato(blocos: list[dict]) -> str:
+    """XML do corpo do Word a partir dos blocos do contrato (título,
+    cláusulas, parágrafos, tabela do capital, local e data, assinaturas)."""
+    partes = []
+    for b in blocos:
+        tipo, texto = b.get("tipo"), b.get("texto") or ""
+        if tipo == "tabela":
+            partes.append(_tabela(b.get("linhas") or []))
+        elif tipo == "assinatura":
+            partes.append(_assinatura(texto))
+        elif tipo in BLOCOS_CONTRATO:
+            antes, depois, alinha, neg = BLOCOS_CONTRATO[tipo]
+            linhas = texto.split("\n")
+            junto = tipo in ("subtitulo", "item")  # linhas coladas; o espaço vem depois da última
+            for i, linha in enumerate(linhas):
+                fim = depois if not junto or i == len(linhas) - 1 else 0
+                partes.append(_par(linha, antes if i == 0 else 0, fim, alinha, neg))
+    return "".join(partes)
+
+
+def montar_docx_modelo(modelo: bytes, blocos: list[dict]) -> bytes:
+    """O Word do modelo do escritório (timbre no cabeçalho, rodapé, margens,
+    fontes e estilos) com o corpo trocado pelo contrato gerado."""
+    with zipfile.ZipFile(io.BytesIO(modelo)) as z:
+        itens = [(i, z.read(i.filename)) for i in z.infolist()]
+    doc = next(c for i, c in itens if i.filename == "word/document.xml").decode("utf-8")
+    ini = doc.index(">", doc.index("<w:body")) + 1
+    fim = doc.rfind("<w:sectPr")
+    if fim < ini or doc.find("</w:body>", fim) < 0:
+        fim = doc.rindex("</w:body>")
+    doc = doc[:ini] + corpo_contrato(blocos) + doc[fim:]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for info, conteudo in itens:
+            z.writestr(info, doc.encode("utf-8") if info.filename == "word/document.xml" else conteudo)
+    return buf.getvalue()
