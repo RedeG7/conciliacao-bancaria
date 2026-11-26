@@ -174,3 +174,28 @@ def test_pdf_correcao_que_nao_cabe_fica_a_mao():
     novo, manuais = ml.aplicar_no_pdf(original, [_ap("foro de Goiania", "foro " + "muito longo " * 60)])
     assert [a["id"] for a in manuais] == [1]
     assert "foro de Goiania" in fitz.open(stream=novo, filetype="pdf")[0].get_text()  # página intacta
+
+
+def test_achar_tolera_espaco_inventado_no_meio_da_palavra():
+    texto = "corrigir para 'de acordo com o art. 997, I, do Código Civil'.\nA administração"
+    assert ml.achar(texto, "do Código Civi l'.") is not None
+    assert texto[slice(*ml.achar(texto, "administraç ão"))] == "administração"
+
+
+def test_pdf_nota_com_espaco_inventado_e_pedacos_fora_de_ordem():
+    fitz = pytest.importorskip("pymupdf")
+    doc = fitz.open()
+    pg = doc.new_page()
+    pg.insert_text((72, 100), "Texto do contrato. Remover a nota da Clausula Nona.", fontname="tiro", fontsize=12)
+    # mesma linha gravada em dois pedaços, o segundo antes do primeiro
+    pg.insert_text((150, 130), "Setor Estrela Dalva", fontname="tiro", fontsize=12)
+    pg.insert_text((72, 130), "- 01,", fontname="tiro", fontsize=12)
+    pg.insert_text((72, 160), "Fim.", fontname="tiro", fontsize=12)
+    original = doc.tobytes()
+    novo, manuais = ml.aplicar_no_pdf(original, [
+        _ap("Remover a nota da Claus ula Nona.", "", i=1),
+        _ap("- 01, Setor Estrela Dalva", "", i=2),
+        _ap("cin quenta", "cinquenta", i=3)])  # erro que só existia na leitura: nada a fazer
+    assert not manuais
+    texto = " ".join(fitz.open(stream=novo, filetype="pdf")[0].get_text(sort=True).split())
+    assert texto == "Texto do contrato. Fim."

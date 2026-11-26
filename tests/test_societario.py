@@ -633,3 +633,17 @@ def test_modelo_anexado_ao_processo_com_campos_preenchidos(banco):
         assert b"Empresa Alfa LTDA" in z.read("word/header1.xml")
         assert b"<w:b/></w:rPr><w:t" in z.read("word/document.xml")  # negrito do título mantido
     assert any(a["titulo"] == "Modelo do contrato anexado" for a in d["andamentos"])
+
+
+def test_marcar_trechos_erro_repetido_marca_as_duas_ocorrencias():
+    texto = "sem autorização do outro sócio. Depois: sem autorização do outro sócio."
+    aps = [{"trecho": "do outro sócio"}, {"trecho": "do outro sócio"}]
+    marcados = [(t, i) for t, i in so.marcar_trechos(texto, aps) if i is not None]
+    assert marcados == [("do outro sócio", 0), ("do outro sócio", 1)]
+
+
+def test_extrair_texto_pdf_le_como_o_pymupdf():
+    fitz = pytest.importorskip("pymupdf")
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 100), "cinquenta mil quotas", fontsize=12)
+    assert so.extrair_texto("minuta.pdf", doc.tobytes()) == "cinquenta mil quotas"

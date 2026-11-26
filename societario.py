@@ -38,8 +38,15 @@ import minuta_layout
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "1.8"
+VERSAO = "1.9"
 NOVIDADES = [
+    ("1.9", "26/11/2026", [
+        "Versão revisada em PDF: notas e trechos que a leitura do PDF tinha quebrado com espaços no meio "
+        "da palavra (\"Civi l\", \"Cláus ula\") agora são achados e corrigidos no documento.",
+        "Revisão com IA: o PDF é lido do mesmo jeito que é corrigido, então a IA não aponta mais erros de "
+        "digitação que não existem no contrato (\"cin quenta\", \"GER AL\").",
+        "Erro repetido (o mesmo trecho em dois lugares) aparece marcado nas duas ocorrências da minuta.",
+    ]),
     ("1.8", "25/11/2026", [
         "Modelos de contrato: em Configurações, cada tipo de processo (constituição, alteração, baixa...) tem os "
         "seus modelos em Word ou PDF, com um padrão. No Novo processo, o modelo do tipo escolhido já vem "
@@ -699,17 +706,17 @@ def relatorio_produtividade(processos: list[dict], andamentos: list[dict], ini: 
 def marcar_trechos(texto: str, apontamentos: list[dict]) -> list[tuple[str, Optional[int]]]:
     """Divide a minuta em pedaços para destacar o que a IA apontou: cada
     pedaço vem com o índice do apontamento cujo "trecho" ele é (ou None).
-    Vale a primeira ocorrência de cada trecho, sem sobreposição."""
+    Trecho repetido (o mesmo erro em dois lugares) marca a ocorrência
+    seguinte; sem sobreposição."""
     marcas: list[tuple[int, int, int]] = []
     for i, a in enumerate(apontamentos):
         t = (a.get("trecho") or "").strip()
         pos = texto.find(t) if t else -1
+        while pos >= 0 and any(pos < f and s < pos + len(t) for s, f, _ in marcas):
+            pos = texto.find(t, pos + 1)
         if pos < 0:
             continue
-        fim = pos + len(t)
-        if any(pos < f and s < fim for s, f, _ in marcas):
-            continue
-        marcas.append((pos, fim, i))
+        marcas.append((pos, pos + len(t), i))
     saida: list[tuple[str, Optional[int]]] = []
     atual = 0
     for s, f, i in sorted(marcas):
@@ -732,9 +739,12 @@ def extrair_texto(nome: str, dados: bytes) -> str:
         # mesma leitura usada para aplicar as correções no Word original
         return minuta_layout.texto_docx(dados)
     if ext == "pdf":
-        import pdfplumber
-        with pdfplumber.open(io.BytesIO(dados)) as pdf:
-            return "\n".join((pg.extract_text() or "") for pg in pdf.pages).strip()
+        # mesma leitura usada para aplicar as correções no PDF original (a do
+        # pdfplumber partia palavras justificadas, "cin quenta", e a IA
+        # apontava erros que não existem no documento)
+        import pymupdf as fitz
+        with fitz.open(stream=dados, filetype="pdf") as pdf:
+            return "\n".join(pg.get_text().rstrip() for pg in pdf).strip()
     if ext in ("txt", "md", ""):
         for cod in ("utf-8", "cp1252", "latin-1"):
             try:

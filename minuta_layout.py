@@ -55,6 +55,11 @@ def achar(texto: str, trecho: str) -> Optional[tuple[int, int]]:
     padrao = "".join(r"\s+" if p.isspace() else "".join(_EQUIV.get(c, re.escape(c)) for c in p)
                      for p in re.split(r"(\s+)", t) if p)
     m = re.search(padrao, texto)
+    if not m:
+        # a leitura do PDF às vezes põe espaço no meio da palavra ("Civi l",
+        # "cin quenta") ou some com ele; compara ignorando os espaços
+        letras = [c for c in t if not c.isspace()]
+        m = re.search(r"\s*".join(_EQUIV.get(c, re.escape(c)) for c in letras), texto)
     return (m.start(), m.end()) if m else None
 
 
@@ -367,6 +372,10 @@ def _achar_no_pdf(pg, trecho: str, letras: list) -> Optional[list]:
     texto = pg.get_text()
     achado = achar(texto, trecho)
     if not achado:
+        # pedaços da mesma linha gravados fora de ordem no PDF: lê pela posição
+        texto = pg.get_text(sort=True)
+        achado = achar(texto, trecho)
+    if not achado:
         return None
     real = _normal(texto[achado[0]:achado[1]])
     alvo = _sem_espaco(real)
@@ -379,7 +388,33 @@ def _achar_no_pdf(pg, trecho: str, letras: list) -> Optional[list]:
                 return rects[i:j + 1]
             if not alvo.startswith(junto):
                 break
-    return None
+    return _achar_por_letras(letras, alvo)
+
+
+def _achar_por_letras(letras: list, alvo: str) -> Optional[list]:
+    """Quando a busca do PyMuPDF não acha (pedaços da linha gravados fora
+    de ordem ou com espaço largo no meio), procura o texto nas letras
+    ordenadas pela posição e devolve um retângulo por linha."""
+    import pymupdf as fitz
+    vis = sorted((l for l in letras if not l[2].isspace()), key=lambda l: (l[1], l[0]))
+    linhas: list[list] = []
+    for l in vis:
+        if linhas and abs(l[1] - linhas[-1][0][1]) < (l[6] - l[4]) * 0.5:
+            linhas[-1].append(l)
+        else:
+            linhas.append([l])
+    seq = [l for ln in linhas for l in sorted(ln, key=lambda l: l[0])]
+    i = "".join(l[2] for l in seq).find(alvo) if alvo else -1
+    if i < 0 or "".join(l[2] for l in seq).find(alvo, i + 1) >= 0:
+        return None
+    rects: list = []
+    for l in seq[i:i + len(alvo)]:
+        r = fitz.Rect(l[3], l[4], l[5], l[6])
+        if rects and abs((rects[-1].y0 + rects[-1].y1) / 2 - l[1]) < r.height * 0.5:
+            rects[-1] |= r
+        else:
+            rects.append(r)
+    return rects
 
 
 def _miolo(r):
@@ -552,6 +587,9 @@ def aplicar_no_pdf(dados: bytes, apontamentos: list[dict]) -> tuple[bytes, list[
             continue
         trecho, sug = _normal(a.get("trecho")), _normal(_novo_texto(a))
         feito = False
+        if trecho and _sem_espaco(trecho) == _sem_espaco(sug):
+            # o "erro" era só um espaço que a leitura inventou; no PDF já está certo
+            continue
         if trecho:
             for pg in pdf:
                 letras = _letras(pg)
