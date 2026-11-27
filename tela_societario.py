@@ -20,7 +20,8 @@ import societario as so
 
 _COR_NIVEL = {so.CRITICO: "#ef4444", so.ATENCAO: "#f59e0b", so.INFO: "#3b82f6"}
 _ROT_NIVEL = {so.CRITICO: "Urgente", so.ATENCAO: "Atenção", so.INFO: "Acompanhar"}
-_COR_ETAPA = {so.A_INICIAR: "#64748b", so.EM_ELABORACAO: "#3b82f6", so.EM_ANALISE: "#a855f7",
+_COR_ETAPA = {so.A_INICIAR: "#64748b", so.EM_ELABORACAO: "#3b82f6", so.PRONTO_PROTOCOLAR: "#f59e0b",
+              so.EM_ANALISE: "#a855f7",
               so.PROTOCOLADO: "#14b8a6", so.EM_EXIGENCIA: "#ef4444", so.CONCLUIDO: "#22e08a",
               so.CANCELADO: "#475569"}
 # Kanban com arrastar e soltar (componente em componentes/soc_kanban/index.html)
@@ -628,7 +629,14 @@ def _detalhe(esc: str, usuario: str, processo_id: int) -> None:
 
     # nomes fixos: se a contagem entrasse no nome, cada clique no checklist
     # trocaria a aba e a tela voltaria para "Andamento"
-    abas = st.tabs(["Andamento", "Checklist", "Documentos", "Lembretes", "Dados do processo"])
+    nomes = ["Andamento", "Checklist", "Documentos", "Lembretes", "Dados do processo"]
+    portal = so.PORTAL_DO_TIPO.get(p["tipo"])
+    if portal:
+        nomes.append("Protocolo no portal")
+    abas = st.tabs(nomes)
+    if portal:
+        with abas[5]:
+            _aba_portal(esc, usuario, p, portal)
     with abas[0]:
         _aba_andamento(esc, usuario, p)
     with abas[1]:
@@ -639,6 +647,109 @@ def _detalhe(esc: str, usuario: str, processo_id: int) -> None:
         _aba_lembretes(esc, usuario, p)
     with abas[4]:
         _aba_dados(esc, usuario, p)
+
+
+def _minuta_padrao(anexos: list[dict]) -> Optional[int]:
+    """A minuta mais recente (gerada, revisada ou anexada), Word antes de PDF."""
+    mins = [a for a in anexos if a["categoria"] in ("minuta", "minuta_revisada")
+            and a["nome"].lower().endswith((".docx", ".pdf", ".txt"))]
+    if not mins:
+        return None
+    mais_nova = mins[0]["criado_em"]
+    juntas = [a for a in mins if abs((a["criado_em"] - mais_nova).total_seconds()) < 120]
+    return next((a["id"] for a in juntas if a["nome"].lower().endswith(".docx")), mins[0]["id"])
+
+
+def _aba_portal(esc: str, usuario: str, p: dict, portal: str) -> None:
+    pid, info = p["id"], so.PORTAIS[portal]
+    c1, c2 = st.columns([3, 1.2])
+    c1.markdown(f"**{_e(info['nome'])}** · "
+                + ("abertura da empresa" if p["tipo"] == "constituicao" else "alteração e coleta da Receita/JUCEG"))
+    c2.link_button("Abrir o portal", info["url"], icon=":material/open_in_new:", use_container_width=True)
+    if p["etapa"] in (so.A_INICIAR, so.EM_ELABORACAO):
+        st.info("Quando a minuta estiver pronta e revisada, passe o processo para **Pronto para protocolar** e gere "
+                "a ficha com os dados para o portal.")
+        if st.button("Mover para Pronto para protocolar", key=f"soc_pp_{pid}"):
+            so.registrar_andamento(esc, pid, usuario, "Minuta pronta para protocolar", etapa=so.PRONTO_PROTOCOLAR,
+                                   lembrar=False)
+            _recarregar()
+            st.rerun()
+
+    anexos = {a["id"]: a for a in p["anexos"] if a["categoria"] in ("minuta", "minuta_revisada")
+              and a["nome"].lower().endswith((".docx", ".pdf", ".txt"))}
+    with st.container(border=True):
+        st.markdown("**Ficha para o portal**")
+        st.caption("A IA lê a minuta final e monta tudo o que se digita no portal (eventos, viabilidade, empresa, "
+                   "sócios, contato), com o botão de copiar em cada campo, a lista do que anexar e o roteiro. Nada é "
+                   "enviado ao portal: o login gov.br, a conferência e o envio são de vocês.")
+        if not anexos:
+            st.caption("Anexe a minuta final em Documentos (ou gere pelo modelo) para montar a ficha.")
+        else:
+            opcoes = list(anexos)
+            padrao = _minuta_padrao(p["anexos"])
+            mid = st.selectbox("Minuta final", opcoes, index=opcoes.index(padrao) if padrao in opcoes else 0,
+                               key=f"soc_fi_min_{pid}",
+                               format_func=lambda i: f"{anexos[i]['nome']} · {so.data_br(anexos[i]['criado_em'])}")
+            if st.button("Gerar ficha", key=f"soc_fi_b_{pid}", type="primary"):
+                chave = so.chave_claude(esc)
+                if not chave:
+                    st.error("Falta a chave da Claude do escritório. O administrador cadastra em Administração › "
+                             "Integrações › IA (API Key da Claude).")
+                else:
+                    arq = so.baixar_anexo(esc, mid)
+                    with st.spinner("A IA está montando a ficha… (pode levar alguns minutos)"):
+                        try:
+                            so.gerar_ficha(esc, pid, usuario, arq["nome"], bytes(arq["conteudo"]), chave)
+                        except (ValueError, so.ErroIA) as exc:
+                            st.error(str(exc))
+                        else:
+                            _recarregar()
+                            st.rerun()
+
+    ficha = so.ultima_ficha(esc, pid)
+    if ficha:
+        _mostrar_ficha(p, ficha)
+
+    if p["etapa"] in (so.A_INICIAR, so.EM_ELABORACAO, so.PRONTO_PROTOCOLAR):
+        with st.form(f"soc_prot_{pid}", border=True):
+            st.markdown("**Protocolou?**")
+            num = st.text_input("Número do protocolo", placeholder="Ex.: GOP2610849746")
+            if st.form_submit_button("Registrar protocolo e passar para Protocolado"):
+                try:
+                    so.registrar_protocolo(esc, pid, usuario, num)
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    _recarregar()
+                    st.rerun()
+
+
+def _mostrar_ficha(p: dict, ficha: dict) -> None:
+    st.markdown(f"<div class='soc-muted'>Ficha de {so.data_br(ficha['criado_em'])} por {_e(ficha.get('criado_por'))}"
+                f" · dados de {_e(ficha.get('minuta_nome'))}</div>", unsafe_allow_html=True)
+    if ficha.get("resumo"):
+        st.markdown(_e(ficha["resumo"]))
+    if ficha.get("pendencias"):
+        st.warning("Complete antes de protocolar:\n\n" + "\n".join(f"- {_e(x)}" for x in ficha["pendencias"]))
+    if ficha.get("eventos"):
+        st.markdown("**Eventos a marcar no portal:** " + " ".join(_chip(e, "#14b8a6") for e in ficha["eventos"]),
+                    unsafe_allow_html=True)
+    for s in ficha["secoes"]:
+        st.markdown(f"**{_e(s['titulo'])}**")
+        for c in s["campos"]:
+            c1, c2 = st.columns([1.2, 3])
+            c1.markdown(f"<div class='soc-muted' style='padding-top:10px'>{_e(c['campo'])}</div>",
+                        unsafe_allow_html=True)
+            with c2:
+                st.code(c["valor"] or "—", language=None, wrap_lines=True)
+    c1, c2 = st.columns(2)
+    if ficha.get("anexos"):
+        c1.markdown("**Anexar / ter em mãos**\n\n" + "\n".join(f"- {_e(a)}" for a in ficha["anexos"]))
+    if ficha.get("passos"):
+        c2.markdown("**Roteiro**\n\n" + "\n".join(f"{i}. {_e(x)}" for i, x in enumerate(ficha["passos"], 1)))
+    st.download_button("Baixar a ficha (Word)", so.gerar_docx(so.ficha_texto(ficha, p), "Ficha para o portal"),
+                       file_name=f"Ficha do portal - {p['numero']}.docx", mime=so.MIME_DOCX,
+                       key=f"soc_fi_dw_{p['id']}")
 
 
 def _aba_andamento(esc: str, usuario: str, p: dict) -> None:

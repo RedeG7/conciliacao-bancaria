@@ -683,3 +683,45 @@ def test_gerar_contrato_no_modelo_com_cliente_falso(banco, monkeypatch):
     mid_pdf = next(m["id"] for m in so.listar_modelos(ESC_A) if m["arquivo_nome"] == "modelo.pdf")
     with pytest.raises(ValueError, match="Word"):
         so.gerar_contrato(ESC_A, p["id"], "dp_admin", mid_pdf, "pedido", "c.txt", b"x", "", cliente=cliente)
+
+
+def test_etapa_pronto_para_protocolar_no_fluxo():
+    k = so.ETAPAS_KANBAN
+    assert k.index(so.EM_ELABORACAO) < k.index(so.PRONTO_PROTOCOLAR) < k.index(so.PROTOCOLADO)
+    assert so.ETAPAS[so.PRONTO_PROTOCOLAR] == "Pronto para protocolar"
+
+
+def test_ficha_do_portal_com_cliente_falso(banco):
+    pytest.importorskip("anthropic")
+    from conftest import ESC_A
+    p = so.criar_processo(ESC_A, "dp_admin", "alteracao", "Dominio LTDA", "59838249000113",
+                          descricao="Sai a Jessika, entra o Thiago")
+    so.cadastrar_empresa(ESC_A, "dp_admin", "Dominio LTDA", "59838249000113", contato="Wellington",
+                         telefone="(62) 99999-0000")
+    saida = {"resumo": "Saída e entrada de sócio.", "eventos": ["Entrada de sócio", "Saída de sócio"],
+             "secoes": [{"titulo": "Sócio que entra: THIAGO", "campos": [
+                 {"campo": "CPF", "valor": "715.907.141-72"}, {"campo": "RG", "valor": "[informar: RG]"},
+                 {"campo": "  ", "valor": "descartado"}]}, {"titulo": "Vazia", "campos": []}],
+             "anexos": ["Minuta assinada"], "passos": ["Entrar com a conta gov.br"], "pendencias": ["RG do Thiago"]}
+    resp = SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=json.dumps(saida))])
+    cliente, pedidos = _cliente_falso(resp)
+    f = so.gerar_ficha(ESC_A, p["id"], "dp_admin", "minuta.txt", "THIAGO entra na sociedade.".encode(), "",
+                       cliente=cliente)
+    kw = pedidos[0]
+    assert kw["output_config"]["format"]["schema"] == so.SCHEMA_FICHA and kw["system"] == so.SISTEMA_FICHA
+    msg = kw["messages"][0]["content"]
+    assert "Portal: REDESIM" in msg and "Sai a Jessika" in msg and "THIAGO entra" in msg
+    assert "Telefone: (62) 99999-0000" in msg and "Contato: Wellington" in msg
+    assert f["portal"] == "redesim" and len(f["secoes"]) == 1 and len(f["secoes"][0]["campos"]) == 2
+    guardada = so.ultima_ficha(ESC_A, p["id"])
+    assert guardada["id"] == f["id"] and guardada["eventos"] == ["Entrada de sócio", "Saída de sócio"]
+    texto = so.ficha_texto(guardada, p)
+    assert "EVENTOS A MARCAR" in texto and "CPF: 715.907.141-72" in texto and "1. Entrar com a conta gov.br" in texto
+    so.registrar_protocolo(ESC_A, p["id"], "dp_admin", "GOP2610849746")
+    q = so.obter_processo(ESC_A, p["id"])
+    assert q["etapa"] == so.PROTOCOLADO and q["protocolo"] == "GOP2610849746"
+    with pytest.raises(ValueError):
+        so.registrar_protocolo(ESC_A, p["id"], "dp_admin", " ")
+    lic = so.criar_processo(ESC_A, "dp_admin", "alvara", "Dominio LTDA")
+    with pytest.raises(ValueError):
+        so.gerar_ficha(ESC_A, lic["id"], "dp_admin", "m.txt", b"x", "", cliente=cliente)

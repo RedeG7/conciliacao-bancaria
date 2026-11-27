@@ -11,7 +11,9 @@
   * { box-sizing: border-box; }
   body { margin: 0; font-family: "Source Sans Pro", system-ui, -apple-system, sans-serif; color: #e6edf3;
          background: transparent; font-size: 14px; }
-  .quadro { display: grid; gap: 14px; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
+  /* colunas com largura mínima: em tela estreita o quadro rola para o lado em vez de espremer os cartões */
+  .quadro { display: grid; gap: 14px; grid-template-columns: repeat(var(--n), minmax(150px, 1fr));
+            overflow-x: auto; padding-bottom: 6px; }
   .col { min-height: 140px; border-radius: 12px; padding: 0 0 10px; transition: background .12s, outline-color .12s;
          outline: 2px dashed transparent; outline-offset: -2px; }
   .col.alvo { background: rgba(34, 224, 138, .06); outline-color: rgba(34, 224, 138, .55); }

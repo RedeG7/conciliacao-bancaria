@@ -38,8 +38,17 @@ import minuta_layout
 
 # Versão do app, mostrada na tela. A cada atualização: suba VERSAO e
 # acrescente a entrada no topo de NOVIDADES (o teste confere que batem).
-VERSAO = "2.0"
+VERSAO = "2.1"
 NOVIDADES = [
+    ("2.1", "27/11/2026", [
+        "Nova etapa \"Pronto para protocolar\", entre Em elaboração e Protocolado: a minuta está pronta e falta "
+        "lançar no portal.",
+        "Aba \"Protocolo no portal\" (constituição, alteração e baixa): a IA lê a minuta final e monta a ficha com "
+        "tudo o que se digita no Portal do Empreendedor Goiano (abertura) ou na REDESIM (alteração e baixa) - "
+        "eventos, viabilidade, empresa, sócios, contato, anexos e o roteiro -, com botão de copiar em cada campo. "
+        "O que faltar sai como [informar: ...].",
+        "Na mesma aba, o número do protocolo é registrado e o processo passa para Protocolado.",
+    ]),
     ("2.0", "26/11/2026", [
         "Gerar contrato com IA: em Documentos do processo, escolha o modelo do escritório (Word), o contrato atual "
         "da empresa e escreva o que muda (ex.: \"sai a sócia X, entra o sócio Y com todas as quotas\"). A IA "
@@ -144,6 +153,7 @@ FUSO = ZoneInfo("America/Sao_Paulo")
 # etapas do Kanban, na ordem
 A_INICIAR = "a_iniciar"
 EM_ELABORACAO = "em_elaboracao"
+PRONTO_PROTOCOLAR = "pronto_protocolar"
 EM_ANALISE = "em_analise"
 PROTOCOLADO = "protocolado"
 EM_EXIGENCIA = "em_exigencia"
@@ -152,14 +162,17 @@ CANCELADO = "cancelado"
 ETAPAS = {
     A_INICIAR: "A iniciar",
     EM_ELABORACAO: "Em elaboração",
+    PRONTO_PROTOCOLAR: "Pronto para protocolar",
     PROTOCOLADO: "Protocolado",
     EM_ANALISE: "Em análise",
     EM_EXIGENCIA: "Em exigência",
     CONCLUIDO: "Concluído",
     CANCELADO: "Cancelado",
 }
-# ordem do fluxo: depois de protocolado, o órgão analisa e pode fazer exigência
-ETAPAS_KANBAN = [A_INICIAR, EM_ELABORACAO, PROTOCOLADO, EM_ANALISE, EM_EXIGENCIA, CONCLUIDO]
+# ordem do fluxo: com a minuta pronta, o processo vai para "pronto para
+# protocolar" (ficha do portal); depois de protocolado, o órgão analisa e
+# pode fazer exigência
+ETAPAS_KANBAN = [A_INICIAR, EM_ELABORACAO, PRONTO_PROTOCOLAR, PROTOCOLADO, EM_ANALISE, EM_EXIGENCIA, CONCLUIDO]
 ENCERRADAS = (CONCLUIDO, CANCELADO)
 
 PRIORIDADES = {"baixa": "Baixa", "normal": "Normal", "alta": "Alta", "urgente": "Urgente"}
@@ -1185,6 +1198,18 @@ def garantir_schema() -> None:
         conn.execute("ALTER TABLE soc_revisoes ADD COLUMN IF NOT EXISTS arquivo_nome TEXT")
         conn.execute("ALTER TABLE soc_revisoes ADD COLUMN IF NOT EXISTS arquivo BYTEA")
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS soc_fichas (
+                id BIGSERIAL PRIMARY KEY,
+                escritorio_id TEXT NOT NULL REFERENCES escritorios(id),
+                processo_id BIGINT NOT NULL REFERENCES soc_processos(id) ON DELETE CASCADE,
+                portal TEXT NOT NULL,
+                minuta_nome TEXT,
+                dados JSONB NOT NULL,
+                criado_por TEXT,
+                criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+            )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS soc_fichas_proc ON soc_fichas (processo_id, criado_em)")
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS soc_empresas (
                 id BIGSERIAL PRIMARY KEY,
                 escritorio_id TEXT NOT NULL REFERENCES escritorios(id),
@@ -2208,6 +2233,188 @@ def gerar_contrato(escritorio_id: str, processo_id: int, usuario: str, modelo_id
                         + f"Anexado: {nome}" + (f" e {nome_pdf}" if pdf else "") + ".", lembrar=False)
     return {**res, "texto": texto_dos_blocos(res["blocos"]), "docx": docx, "nome": nome, "pdf": pdf,
             "nome_pdf": nome_pdf, "aviso_pdf": aviso_pdf}
+
+
+# ---------------------------------------------------------------- ficha para o portal (protocolo)
+
+PORTAIS = {
+    "goiano": {"nome": "Portal do Empreendedor Goiano", "url": "https://www.portaldoempreendedorgoiano.go.gov.br/"},
+    "redesim": {"nome": "REDESIM", "url": "https://www.gov.br/empresas-e-negocios/pt-br/redesim"},
+}
+# abertura vai pelo Portal do Empreendedor Goiano; alteração e baixa, pela REDESIM
+PORTAL_DO_TIPO = {"constituicao": "goiano", "alteracao": "redesim", "baixa": "redesim"}
+
+SCHEMA_FICHA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["resumo", "eventos", "secoes", "anexos", "passos", "pendencias"],
+    "properties": {
+        "resumo": {"type": "string"},
+        "eventos": {"type": "array", "items": {"type": "string"}},
+        "secoes": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False, "required": ["titulo", "campos"],
+            "properties": {
+                "titulo": {"type": "string"},
+                "campos": {"type": "array", "items": {
+                    "type": "object", "additionalProperties": False, "required": ["campo", "valor"],
+                    "properties": {"campo": {"type": "string"}, "valor": {"type": "string"}}}},
+            }}},
+        "anexos": {"type": "array", "items": {"type": "string"}},
+        "passos": {"type": "array", "items": {"type": "string"}},
+        "pendencias": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+SISTEMA_FICHA = """Você é o assistente do departamento societário de um escritório de contabilidade em Goiás. \
+A minuta do processo já está pronta e revisada; agora o colaborador vai protocolar no portal do governo \
+(abertura: Portal do Empreendedor Goiano; alteração e baixa: REDESIM, com a coleta da Receita Federal - DBE - e o \
+registro na JUCEG). Monte a FICHA com tudo o que ele vai digitar no portal, tirado da minuta e dos dados do \
+processo, na ordem em que o portal costuma pedir, para copiar e colar.
+
+Regras:
+- Use só o que está na minuta, nos dados do processo e no cadastro da empresa. Nunca invente (RG, inscrição \
+imobiliária/IPTU, área do imóvel, e-mail, telefone, CRC do contador). O que faltar fica com valor \
+"[informar: o que falta]" e entra também em "pendencias".
+- Cada "valor" é exatamente o que se digita no campo: CPF 000.000.000-00, CNPJ 00.000.000/0000-00, \
+CEP 00000-000, CNAE 0000-0/00, valores R$ 0,00, datas dd/mm/aaaa; sem explicações dentro do valor.
+- "secoes" (títulos curtos), conforme o caso:
+  - Abertura: "Consulta de viabilidade" (nome empresarial pretendido e alternativas, se houver; natureza \
+jurídica; endereço completo com CEP; inscrição imobiliária [informar]; área utilizada [informar]; CNAE principal e \
+secundários com a descrição; forma de atuação), "Dados da empresa" (nome, nome fantasia, capital, \
+porte/enquadramento, início das atividades, objeto social), um título por sócio ("Sócio: NOME", com CPF, RG e \
+órgão, nascimento, estado civil e regime de bens, profissão, endereço, quotas, valor, %, se é administrador), \
+"Contato da empresa".
+  - Alteração: "Empresa" (nome, CNPJ, NIRE), uma seção por mudança mostrando o que fica (ex.: "Sócio que entra: \
+NOME" com a qualificação completa; "Sócio que sai: NOME" com CPF; "Capital e quotas após a alteração"; \
+"Administração"; "Endereço" ou "Atividades", se mudarem), e "Contato da empresa". A viabilidade só é necessária se \
+mudar nome, endereço ou atividade: diga isso em "passos".
+- "eventos": os eventos que o colaborador vai marcar no portal, pelo nome (ex.: "Entrada de sócio", "Saída de \
+sócio", "Alteração de capital social", "Alteração de administrador", "Consolidação do contrato"). Não escreva \
+códigos de evento.
+- "anexos": o que anexar ou ter em mãos (minuta assinada, documentos dos sócios, comprovante de endereço etc.).
+- "passos": o roteiro, em frases curtas, do login gov.br até o protocolo na Junta (viabilidade quando couber, \
+coleta/DBE, documento básico de entrada, assinatura, taxa/DARE, envio à JUCEG).
+- "resumo": 1 a 3 frases do que vai ser protocolado."""
+
+
+def _pedido_ficha(minuta: str, processo: dict, empresa: Optional[dict], portal: str) -> str:
+    linhas = [f"Portal: {PORTAIS[portal]['nome']}",
+              f"Tipo de processo: {TIPOS.get(processo.get('tipo'), {}).get('nome', '')}",
+              f"Empresa: {processo.get('empresa_nome') or ''}",
+              f"CNPJ: {formatar_cnpj(processo.get('cnpj')) or 'ainda não tem'}",
+              f"Processo: {processo.get('numero') or ''}"]
+    if processo.get("descricao"):
+        linhas.append(f"Pedido do cliente: {processo['descricao']}")
+    if empresa:
+        for rot, k in (("Contato", "contato"), ("Telefone", "telefone"), ("E-mail", "email"),
+                       ("Observação do cadastro", "observacao")):
+            if empresa.get(k):
+                linhas.append(f"{rot}: {empresa[k]}")
+    return ("<processo>\n" + "\n".join(linhas) + "\n</processo>\n\n"
+            f"<minuta>\n{minuta.strip()}\n</minuta>")
+
+
+def normalizar_ficha(dados: dict) -> dict:
+    def lista(chave):
+        return [str(x).strip() for x in dados.get(chave) or [] if str(x).strip()]
+
+    secoes = []
+    for s in dados.get("secoes") or []:
+        campos = [{"campo": str(c.get("campo") or "").strip(), "valor": str(c.get("valor") or "").strip()}
+                  for c in s.get("campos") or [] if str(c.get("campo") or "").strip()]
+        if campos:
+            secoes.append({"titulo": str(s.get("titulo") or "").strip() or "Dados", "campos": campos})
+    if not secoes:
+        raise ErroIA("A IA não devolveu os dados da ficha; tente de novo.")
+    return {"resumo": str(dados.get("resumo") or "").strip(), "eventos": lista("eventos"), "secoes": secoes,
+            "anexos": lista("anexos"), "passos": lista("passos"), "pendencias": lista("pendencias")}
+
+
+def _empresa_do_processo(escritorio_id: str, processo: dict) -> Optional[dict]:
+    doc = so_digitos(processo.get("cnpj"))
+    with auth.conectar() as conn:
+        if doc:
+            e = conn.execute("SELECT * FROM soc_empresas WHERE escritorio_id = %s AND cnpj = %s",
+                             (escritorio_id, doc)).fetchone()
+            if e:
+                return dict(e)
+        e = conn.execute("SELECT * FROM soc_empresas WHERE escritorio_id = %s AND lower(nome) = lower(%s)",
+                         (escritorio_id, processo.get("empresa_nome") or "")).fetchone()
+    return dict(e) if e else None
+
+
+def gerar_ficha(escritorio_id: str, processo_id: int, usuario: str, minuta_nome: str, minuta: bytes, chave: str,
+                cliente=None) -> dict:
+    """Ficha com os campos do portal (viabilidade, DBE/REDESIM, sócios,
+    eventos, anexos e roteiro), tirada da minuta final e do cadastro da
+    empresa. Fica guardada no processo."""
+    with auth.conectar() as conn:
+        p = conn.execute("SELECT * FROM soc_processos WHERE id = %s AND escritorio_id = %s",
+                         (processo_id, escritorio_id)).fetchone()
+    if not p:
+        raise ValueError("Processo não encontrado.")
+    p = dict(p)
+    portal = PORTAL_DO_TIPO.get(p["tipo"])
+    if not portal:
+        raise ValueError("A ficha do portal é para constituição, alteração contratual e baixa.")
+    texto = extrair_texto(minuta_nome, minuta).strip()
+    if not texto:
+        raise ValueError("Não consegui ler o texto da minuta (PDF escaneado?). Use o Word ou um PDF com texto.")
+    if len(texto) > MAX_CARACTERES_MINUTA:
+        raise ErroIA("A minuta é grande demais para gerar a ficha de uma vez.")
+    dados = _chamar_claude(SISTEMA_FICHA, _pedido_ficha(texto, p, _empresa_do_processo(escritorio_id, p), portal),
+                           SCHEMA_FICHA, chave, cliente, "montar esta ficha",
+                           "A ficha ficou longa demais e foi interrompida; tente de novo.")
+    ficha = normalizar_ficha(dados)
+    with auth.conectar() as conn:
+        f = conn.execute("""INSERT INTO soc_fichas (escritorio_id, processo_id, portal, minuta_nome, dados, criado_por)
+                            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id, criado_em""",
+                         (escritorio_id, processo_id, portal, minuta_nome, Jsonb(ficha), usuario)).fetchone()
+        conn.commit()
+    pend = ficha["pendencias"]
+    registrar_andamento(escritorio_id, processo_id, usuario, f"Ficha para o {PORTAIS[portal]['nome']} gerada",
+                        f"Dados tirados de: {minuta_nome}."
+                        + (f" {len(pend)} dado(s) a completar antes de protocolar." if pend else ""), lembrar=False)
+    return {**ficha, "id": f["id"], "portal": portal, "minuta_nome": minuta_nome, "criado_por": usuario,
+            "criado_em": f["criado_em"]}
+
+
+def ultima_ficha(escritorio_id: str, processo_id: int) -> Optional[dict]:
+    with auth.conectar() as conn:
+        f = conn.execute("""SELECT * FROM soc_fichas WHERE escritorio_id = %s AND processo_id = %s
+                            ORDER BY criado_em DESC, id DESC LIMIT 1""", (escritorio_id, processo_id)).fetchone()
+    if not f:
+        return None
+    return {**f["dados"], "id": f["id"], "portal": f["portal"], "minuta_nome": f["minuta_nome"],
+            "criado_por": f["criado_por"], "criado_em": f["criado_em"]}
+
+
+def ficha_texto(ficha: dict, processo: dict) -> str:
+    """A ficha em texto corrido, para o Word de download."""
+    ls = [f"Portal: {PORTAIS[ficha['portal']]['nome']} - {PORTAIS[ficha['portal']]['url']}",
+          f"Processo {processo.get('numero') or ''} - {processo.get('empresa_nome') or ''}", ""]
+    if ficha.get("resumo"):
+        ls += [ficha["resumo"], ""]
+    if ficha.get("eventos"):
+        ls += ["EVENTOS A MARCAR"] + [f"- {e}" for e in ficha["eventos"]] + [""]
+    for s in ficha["secoes"]:
+        ls += [s["titulo"].upper()] + [f"{c['campo']}: {c['valor']}" for c in s["campos"]] + [""]
+    if ficha.get("anexos"):
+        ls += ["ANEXAR / TER EM MÃOS"] + [f"- {a}" for a in ficha["anexos"]] + [""]
+    if ficha.get("passos"):
+        ls += ["ROTEIRO"] + [f"{i}. {x}" for i, x in enumerate(ficha["passos"], 1)] + [""]
+    if ficha.get("pendencias"):
+        ls += ["A COMPLETAR"] + [f"- {x}" for x in ficha["pendencias"]]
+    return "\n".join(ls).strip()
+
+
+def registrar_protocolo(escritorio_id: str, processo_id: int, usuario: str, protocolo: str) -> None:
+    """Número do protocolo do portal: o processo passa para Protocolado."""
+    protocolo = (protocolo or "").strip()
+    if not protocolo:
+        raise ValueError("Informe o número do protocolo.")
+    registrar_andamento(escritorio_id, processo_id, usuario, "Processo protocolado no portal",
+                        etapa=PROTOCOLADO, protocolo=protocolo)
 
 
 def revisoes_pendentes(escritorio_id: str) -> int:
